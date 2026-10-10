@@ -10,6 +10,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -312,6 +313,7 @@ class MainWindow(QMainWindow):
         self.build_monitor = BuildMonitor()
         self.test_monitor = TestMonitor()
         self.test_monitor.test_selected.connect(self.show_test_output)
+        self.test_monitor.build_percent = lambda: self.build_monitor._percent
         self.build_monitor.details_requested.connect(self.show_build_details)
         self.build_monitor.open_file_requested.connect(self.open_file)
         self.monitor_tabs = QTabWidget()
@@ -558,7 +560,7 @@ class MainWindow(QMainWindow):
             if answer != QMessageBox.Yes:
                 event.ignore()
                 return
-            self.process.kill()
+            kill_process_tree(self.process)
             self.process.waitForFinished(2000)
         self._shutdown_ai()
         s = self.settings
@@ -597,7 +599,7 @@ class MainWindow(QMainWindow):
                     "An fpm command is still running for the current project. Stop it and open the new one?")
                 if answer != QMessageBox.Yes:
                     return
-                self.process.kill()
+                kill_process_tree(self.process)
                 self.process.waitForFinished(3000)
             self._clear_run_panels()
         self.manifest_path = path
@@ -1069,7 +1071,9 @@ class MainWindow(QMainWindow):
             self.build_monitor.start(self.graph, self.manifest_path.parent, self._build_description())
             if phase is None:
                 self.show_all_output()  # any file shown on its own is gone
-                self.monitor_tabs.setCurrentWidget(self.build_monitor)
+            # Show the build's progress (Test switches to its tab once the
+            # tests themselves start).
+            self.monitor_tabs.setCurrentWidget(self.build_monitor)
 
         self._append(f"\n$ cd {shlex.quote(str(self.manifest_path.parent))}\n"
                      f"$ {shlex.join([program] + args)}\n", bold=True)
@@ -1080,7 +1084,7 @@ class MainWindow(QMainWindow):
 
     def stop(self):
         if self.process is not None:
-            self.process.kill()
+            kill_process_tree(self.process)
 
     def _append(self, text: str, bold: bool = False):
         cursor = self.console.textCursor()
@@ -1538,6 +1542,42 @@ class MainWindow(QMainWindow):
         if self._ollama_process is not None:  # only a server we started ourselves
             self._ollama_process.terminate()
             self._ollama_process.waitForFinished(3000)
+
+
+def kill_process_tree(process: QProcess):
+    """Kill a QProcess *and everything it started* (fpm's compilers, the test
+    runner and the test program): killing only fpm would leave them running."""
+    pid = int(process.processId() or 0)
+    if pid > 0:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
+        else:
+            for child in reversed(_descendants(pid)):  # deepest first
+                try:
+                    os.kill(child, signal.SIGKILL)
+                except OSError:
+                    pass  # already gone
+    process.kill()
+
+
+def _descendants(pid: int) -> list[int]:
+    """All processes below ``pid``, parents before children (POSIX)."""
+    try:
+        out = subprocess.run(["ps", "-A", "-o", "pid=", "-o", "ppid="],
+                             capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    children: dict[int, list[int]] = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            children.setdefault(int(parts[1]), []).append(int(parts[0]))
+    found, queue = [], [pid]
+    while queue:
+        for child in children.get(queue.pop(0), []):
+            found.append(child)
+            queue.append(child)
+    return found
 
 
 def make_settings() -> QSettings:

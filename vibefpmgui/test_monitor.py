@@ -220,6 +220,7 @@ class TestMonitor(SortableTable, QWidget):
         self.spinner_angle = 0.0
         self.filter_status: str | None = None
         self.description = ""
+        self.build_percent = None  # callable giving the build's % (set by the main window)
         self._started = 0.0
         self._finished_at: float | None = None
         self._result = ""  # "", "listing", "ok", "failed", "stopped", "none"
@@ -352,8 +353,9 @@ class TestMonitor(SortableTable, QWidget):
         self._finished_at = None
         self._active = True
         self.set_filter(None)
-        self.progress.set(0, "running")
-        self._show_empty("Building and collecting tests…")
+        self.progress.set_busy(True)  # the build's length is unknown here
+        self._show_empty("Building and collecting tests… (per-file progress is in the Build tab)")
+        self._timer.start()
         self._update_header()
 
     def start(self, names: list[str], history: dict[str, float]):
@@ -365,6 +367,7 @@ class TestMonitor(SortableTable, QWidget):
         self._result = ""
         self._started = time.monotonic()
         self._active = True
+        self.progress.set(0, "running")  # ends the busy bar of the build phase
         self._show_empty(None if names else "This project has no tests.")
         self._timer.start()
         self._update_header()
@@ -477,13 +480,22 @@ class TestMonitor(SortableTable, QWidget):
         pass
 
     def _expected(self) -> dict[str, float]:
-        """Expected duration for every test (unknown ones get the median of
-        the known ones), or {} when nothing is known."""
+        """Expected duration for every test, or {} when nothing is known.
+
+        Tests without a recorded time get the median of the known ones, and a
+        running test that has already taken longer than expected is assumed
+        to need a bit longer still, so the bar never sits at ~100%."""
         known = [t.expected for t in self.tests if t.expected is not None]
         if not known:
             return {}
         guess = statistics.median(known)
-        return {t.name: (t.expected if t.expected is not None else guess) for t in self.tests}
+        expected = {}
+        for t in self.tests:
+            e = t.expected if t.expected is not None else guess
+            if t.status == RUNNING:
+                e = max(e, t.elapsed() * 1.25)
+            expected[t.name] = e
+        return expected
 
     def fraction(self) -> float:
         if not self.tests:
@@ -503,6 +515,9 @@ class TestMonitor(SortableTable, QWidget):
         return progress / total
 
     def remaining(self) -> float | None:
+        """Estimated time left, only when every test has a recorded time."""
+        if any(t.expected is None for t in self.tests):
+            return None
         expected = self._expected()
         if not expected:
             return None
@@ -554,7 +569,9 @@ class TestMonitor(SortableTable, QWidget):
         finished = counts[PASSED] + counts[FAILED_T]
         failed = f" · {counts[FAILED_T]} failed" if counts[FAILED_T] else ""
         if self._result == "listing":
-            text = f"<b>Building…</b> {muted}· collecting tests</span>"
+            pct = self.build_percent() if self.build_percent else None
+            done = f" {pct}%" if pct else ""
+            text = f"<b>Building…{done}</b> {muted}· collecting tests · {seconds}</span>"
         elif self._result == "none":
             text = "<b>No tests</b>"
         elif self._result == "ok" and counts[NOT_RUN]:
