@@ -29,6 +29,7 @@ PATH_ROLE = Qt.UserRole + 1
 KIND_ROLE = Qt.UserRole + 2    # "package", "group", "dir", "file", "placeholder"
 LOADED_ROLE = Qt.UserRole + 3  # folder contents have been read
 HIDDEN_ROLE = Qt.UserRole + 4  # why an entry is greyed out (empty: it isn't)
+IGNORED_ROLE = Qt.UserRole + 6 # the .gitignore that ignores this entry (if any)
 LINK_ROLE = Qt.UserRole + 5    # a folder that is listed as a package elsewhere
 
 SKIP_DIRS = {"build", "__pycache__", "node_modules"}
@@ -79,6 +80,75 @@ def fpm_folders(manifest_path: Path) -> dict[str, str]:
     return roles
 
 
+class GitIgnore:
+    """git's ignore rules for one package: the .gitignore files from the root
+    of its git repository (or the package folder, if it isn't in one) down to
+    each folder, combined the way git does (deeper files win, "!" re-includes,
+    and everything inside an ignored folder is ignored)."""
+
+    def __init__(self, package_dir: Path):
+        self.package_dir = package_dir.resolve()
+        self.root = self._repo_root(self.package_dir)
+        self._specs: dict[Path, object] = {}
+
+    @staticmethod
+    def _repo_root(start: Path) -> Path:
+        home = Path.home().resolve()
+        for folder in (start, *start.parents):
+            if (folder / ".git").exists():
+                return folder
+            if folder == home or folder.parent == folder:
+                break
+        return start
+
+    def _spec(self, folder: Path):
+        """(spec, line number of each pattern) for folder/.gitignore, or None."""
+        if folder not in self._specs:
+            entry = None
+            ignore_file = folder / ".gitignore"
+            if ignore_file.is_file():
+                try:
+                    import pathspec
+                    lines = ignore_file.read_text(errors="replace").splitlines()
+                    spec = pathspec.GitIgnoreSpec.from_lines(lines)
+                    # pathspec skips blank lines; map each pattern back to its line.
+                    line_of, k = [], 0
+                    for number, line in enumerate(lines, 1):
+                        if k < len(spec.patterns) and spec.patterns[k].pattern == line:
+                            line_of.append(number)
+                            k += 1
+                    entry = (spec, line_of)
+                except (ImportError, OSError, ValueError):
+                    entry = None
+            self._specs[folder] = entry
+        return self._specs[folder]
+
+    def check(self, path: Path, is_dir: bool) -> str | None:
+        """Where ``path`` is ignored ("…/.gitignore:LINE"), or None if it isn't."""
+        path = path.resolve()
+        try:
+            path.relative_to(self.root)
+        except ValueError:
+            return None
+        # Folders from the repository root down to the entry's parent; the
+        # deepest .gitignore with a matching rule decides.
+        chain = [path.parent, *path.parent.parents]
+        chain = [f for f in chain if f == self.root or self.root in f.parents]
+        for folder in chain:  # deepest first
+            entry = self._spec(folder)
+            if entry is None:
+                continue
+            spec, line_of = entry
+            rel = path.relative_to(folder).as_posix() + ("/" if is_dir else "")
+            result = spec.check_file(rel)
+            if result.include is not None:
+                if not result.include:
+                    return None  # re-included by a "!" rule
+                line = line_of[result.index] if result.index is not None and result.index < len(line_of) else None
+                return f"{folder / '.gitignore'}:{line}" if line else str(folder / ".gitignore")
+        return None
+
+
 def reveal_in_file_manager(path: str):
     """Show a file (selected) or folder in Finder / Explorer / the file manager."""
     if sys.platform == "darwin":
@@ -125,6 +195,7 @@ class ProjectTree(QWidget):
         self._icon_cache: dict = {}
         self._skip_dirs: set[Path] = set()
         self._roles: dict[str, str] = {}  # folder -> fpm role
+        self._ignores: dict[str, GitIgnore] = {}  # package folder -> its rules
         self._role_icons: dict = {}
         self._all_loaded = False
 
@@ -181,6 +252,7 @@ class ProjectTree(QWidget):
         # A folder that is another package (e.g. a path dependency inside the
         # project) is listed under that package, not inside this one.
         self._skip_dirs = package_dirs
+        self._ignores = {str(d.resolve()): GitIgnore(d) for _, d, _ in packages}
         self._roles = {}
         for _, directory, _ in packages:
             manifest = directory / "fpm.toml"
@@ -263,6 +335,8 @@ class ProjectTree(QWidget):
             entries = sorted(os.scandir(folder), key=lambda e: (not e.is_dir(), e.name.lower()))
         except OSError:
             return
+        rules = self._rules_for(folder)
+        parent_ignored = item.data(IGNORED_ROLE)  # inside an ignored folder
         for entry in entries:
             name = entry.name
             path = Path(entry.path)
@@ -275,11 +349,13 @@ class ProjectTree(QWidget):
                 if name.startswith(".") or name in SKIP_DIRS:
                     why = ("fpm's build output — see the Build outputs tab" if name == "build"
                            else "Hidden folder" if name.startswith(".") else "Generated folder")
-                    self._add_hidden(item, path, "dir", why)
+                    self._add_hidden(item, path, "dir", why,
+                                     ignored=parent_ignored or (rules.check(path, True) if rules else None))
                     continue
                 child = QStandardItem(name)
                 child.setData(str(path), PATH_ROLE)
                 child.setData("dir", KIND_ROLE)
+                self._set_ignored(child, path, True, rules, parent_ignored)
                 role = self._roles.get(str(path.resolve()))
                 if role:
                     child.setIcon(self._role_icon(role))
@@ -293,21 +369,51 @@ class ProjectTree(QWidget):
                 item.appendRow(child)
                 self._items[str(path)] = child
             elif entry.is_file():
-                if name.startswith("."):
-                    self._add_hidden(item, path, "file", "Hidden file")
-                    continue
-                if path.suffix in SKIP_SUFFIXES or path.suffix.lower() in SKIP_SUFFIXES:
-                    self._add_hidden(item, path, "file", "Compiled / generated file")
+                hidden = ("Hidden file" if name.startswith(".") else
+                          "Compiled / generated file"
+                          if path.suffix in SKIP_SUFFIXES or path.suffix.lower() in SKIP_SUFFIXES else "")
+                if hidden:
+                    self._add_hidden(item, path, "file", hidden,
+                                     ignored=parent_ignored or (rules.check(path, False) if rules else None))
                     continue
                 child = QStandardItem(name)
                 child.setData(str(path), PATH_ROLE)
                 child.setData("file", KIND_ROLE)
+                self._set_ignored(child, path, False, rules, parent_ignored)
                 child.setIcon(self._manifest_icon() if name == "fpm.toml" else self._file_icon(path))
                 item.appendRow(child)
                 self._items[str(path)] = child
                 self._mark_item(str(path), child)
 
-    def _add_hidden(self, parent: QStandardItem, path: Path, kind: str, why: str, link: bool = False):
+    def _rules_for(self, folder: Path) -> GitIgnore | None:
+        """The ignore rules of the package a folder belongs to."""
+        resolved = folder.resolve()
+        best = None
+        for pkg, rules in self._ignores.items():
+            pkg_path = Path(pkg)
+            if (resolved == pkg_path or pkg_path in resolved.parents) and \
+                    (best is None or len(pkg) > len(str(best.package_dir))):
+                best = rules
+        return best
+
+    def _set_ignored(self, item: QStandardItem, path: Path, is_dir: bool, rules, parent_ignored):
+        source = parent_ignored or (rules.check(path, is_dir) if rules else None)
+        if source:
+            item.setData(str(source), IGNORED_ROLE)
+            item.setForeground(self._ignored_grey())
+            item.setToolTip(f"Ignored by git: {source}\n{path}")
+
+    def _ignored_grey(self) -> QColor:
+        """Between normal text and the hidden-entry grey. The alpha is mixed
+        too: macOS's dark palette uses white at different opacities for
+        normal (~85%) and disabled (~25%) text, so mixing only RGB gave white."""
+        pal = QApplication.palette()
+        a, b = pal.color(QPalette.Text), pal.color(QPalette.Disabled, QPalette.Text)
+        return QColor((a.red() + b.red()) // 2, (a.green() + b.green()) // 2,
+                      (a.blue() + b.blue()) // 2, (a.alpha() + b.alpha()) // 2)
+
+    def _add_hidden(self, parent: QStandardItem, path: Path, kind: str, why: str, link: bool = False,
+                    ignored: str | None = None):
         """A greyed-out entry: listed, but folders can't be opened in the tree
         (double-click shows them in the file manager; files still open)."""
         child = QStandardItem(path.name)
@@ -316,15 +422,18 @@ class ProjectTree(QWidget):
         child.setData(why, HIDDEN_ROLE)
         if link:
             child.setData(str(path.resolve()), LINK_ROLE)
+        also = f"\nAlso ignored by git: {ignored}" if ignored else ""
+        if ignored:
+            child.setData(ignored, IGNORED_ROLE)
         if kind == "dir":
             child.setData(True, LOADED_ROLE)  # never filled, so no expand arrow
             child.setIcon(self._folder_icon)
             action = ("double-click to go there" if link
                       else f"double-click to show it in {file_manager_name()}")
-            child.setToolTip(f"{why}\n{path}" if link else f"{why} ({action})\n{path}")
+            child.setToolTip(f"{why}{also}\n{path}" if link else f"{why} ({action}){also}\n{path}")
         else:
             child.setIcon(self._file_icon(path))
-            child.setToolTip(f"{why}\n{path}")
+            child.setToolTip(f"{why}{also}\n{path}")
         child.setForeground(self._grey())
         parent.appendRow(child)
         self._items[str(path)] = child
@@ -383,7 +492,7 @@ class ProjectTree(QWidget):
 
     def _apply_marks(self):
         for path, item in self._items.items():
-            if item.data(KIND_ROLE) == "file" or item.data(HIDDEN_ROLE):
+            if item.data(KIND_ROLE) == "file" or item.data(HIDDEN_ROLE) or item.data(IGNORED_ROLE):
                 self._mark_item(path, item)
 
     def _mark_item(self, path: str, item: QStandardItem):
@@ -391,12 +500,16 @@ class ProjectTree(QWidget):
             item.setForeground(self._grey())  # greyed entries stay grey
             return
         mark = self._marks.get(str(Path(path).resolve())) if self._marks else None
+        ignored = item.data(IGNORED_ROLE)
         if mark:
             item.setForeground(QColor(FILE_COLORS[mark]))
+        elif ignored:
+            item.setForeground(self._ignored_grey())
         else:
             item.setData(None, Qt.ForegroundRole)  # the normal text colour
-        tip = path + {"error": "\n(errors in the last build)",
-                      "warning": "\n(warnings in the last build)"}.get(mark, "")
+        tip = (f"Ignored by git: {ignored}\n" if ignored else "") + path + {
+            "error": "\n(errors in the last build)",
+            "warning": "\n(warnings in the last build)"}.get(mark, "")
         item.setToolTip(tip)
 
     # -------------------------------------------------------------- filter

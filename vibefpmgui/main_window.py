@@ -33,6 +33,7 @@ from . import ai_review as ai
 from .compat import join_args, quote_arg, set_windows_app_id, split_args
 from .editor import EditorTab, monospace_font
 from . import build_outputs as bo
+from .about import FPM_DOCS_URL, AboutDialog
 from . import dep_updates
 from .project_tree import ProjectTree, reveal_in_file_manager
 from .review_monitor import ReviewMonitor
@@ -165,7 +166,8 @@ class MainWindow(QMainWindow):
         self.features_label.setWordWrap(True)
         form.addRow("Features:", self.features_label)
         self.compiler_edit = QLineEdit()
-        self.compiler_edit.setPlaceholderText("gfortran (default)")
+        env_fc = os.environ.get("FPM_FC", "").strip()
+        self.compiler_edit.setPlaceholderText(f"{env_fc} (from FPM_FC)" if env_fc else "gfortran (default)")
         form.addRow("Compiler:", self.compiler_edit)
         self.flag_edit = QLineEdit()
         self.flag_edit.setPlaceholderText("e.g. -O3 -fcheck=all")
@@ -375,6 +377,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.main_split)
         self.statusBar().showMessage("Ready")
         self._set_project_enabled(False)
+        self._build_help_menu()
 
     def _apply_highlight_style(self):
         """Pick a light or dark Pygments style to match the system palette."""
@@ -451,6 +454,32 @@ class MainWindow(QMainWindow):
         self.graph_view.set_edge_style(value)
         self._check_style_action("edges", value)
         self.settings.setValue("graph_edges", value)
+
+    def _build_help_menu(self):
+        """Help menu (added last, so it is the rightmost menu)."""
+        menu = self.menuBar().addMenu("&Help")
+        docs = menu.addAction("fpm Documentation")
+        docs.setStatusTip(FPM_DOCS_URL)
+        docs.triggered.connect(lambda: QDesktopServices.openUrl(QUrl(FPM_DOCS_URL)))
+        menu.addSeparator()
+        about = menu.addAction("About VibeFPMGUI")
+        about.setMenuRole(QAction.AboutRole)  # macOS: moved to the application menu
+        about.triggered.connect(self.show_about)
+
+    def effective_compiler(self) -> tuple[str, str]:
+        """(compiler, where the choice comes from), the way fpm picks it:
+        --compiler (the Compiler field), else $FPM_FC, else gfortran."""
+        typed = self.compiler_edit.text().strip()
+        if typed:
+            return typed, "Compiler field in Build options"
+        env = os.environ.get("FPM_FC", "").strip()
+        if env:
+            return env, "FPM_FC environment variable"
+        return "gfortran", "fpm's default"
+
+    def show_about(self):
+        compiler, source = self.effective_compiler()
+        AboutDialog(self._fpm_executable(), compiler, source, self).exec()
 
     def _update_legend(self):
         self.legend.setText(self.graph_view.legend_html())
@@ -1300,7 +1329,7 @@ class MainWindow(QMainWindow):
                if using else "Build profile: debug, release, or a feature profile from fpm.toml."))
 
     def _build_description(self) -> str:
-        compiler = self.compiler_edit.text().strip() or "gfortran"
+        compiler, _source = self.effective_compiler()
         if self.selected_features:
             return f"features: {', '.join(self.selected_features)} · {compiler}"
         profile = self.profile_combo.currentText() if self.profile_combo.currentIndex() > 0 else "debug"

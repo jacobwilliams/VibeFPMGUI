@@ -34,6 +34,7 @@ dependencies = [
     "pyqtgraph>=0.14.0", # dependency graph drawing
     "numpy",             # force-directed layout (also required by pyqtgraph)
     "pygments>=2.21.0",  # syntax highlighting
+    "pathspec>=1.1.1",   # .gitignore matching in the file tree
 ]
 
 [project.optional-dependencies]

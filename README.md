@@ -39,7 +39,10 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   `source-dir`/`include-dir` set in `fpm.toml`), and `fpm.toml` gets its own
   icon. Hidden files and folders, `build/`, compiled files and nested
   packages are shown greyed out (greyed folders don't expand; double-click
-  shows them in Finder). Double-click a file to open it in the editor; right-click for Open
+  shows them in Finder). Files ignored by git (the project's `.gitignore`
+  files, or each dependency's own) are shown in a medium grey, with the
+  responsible `.gitignore` in the tooltip. Double-click a file to open it in
+  the editor; right-click for Open
   in Default App, Show in Finder and Copy Path. Files with errors or warnings
   in the last build are shown in red / orange.
 * *Run* tab: **Run** (toolbar) and the **Run** buttons in the *Build outputs*
