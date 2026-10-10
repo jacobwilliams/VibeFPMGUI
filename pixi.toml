@@ -1,0 +1,16 @@
+[workspace]
+authors = ["Jacob Williams <jacobwilliams@users.noreply.github.com>"]
+channels = ["conda-forge"]
+name = "VibeFPMGUI"
+platforms = ["osx-arm64", "linux-64", "win-64"]
+version = "0.1.0"
+
+[tasks]
+start = "python -m vibefpmgui"
+
+[dependencies]
+gfortran = "15.*"
+fpm = ">=0.13.0,<0.14"
+python = ">=3.14.8,<3.15"
+pyside6 = ">=6.11.1,<7"
+qtpy = ">=2.4.3,<3"
