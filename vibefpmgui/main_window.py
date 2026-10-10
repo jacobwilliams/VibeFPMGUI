@@ -66,7 +66,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from . import __version__, dep_updates
+from . import __version__, ansi, dep_updates, lint
 from . import ai_review as ai
 from . import build_outputs as bo
 from . import manifest as m
@@ -87,8 +87,6 @@ from .project_tree import ProjectTree, reveal_in_file_manager
 from .review_monitor import ReviewMonitor
 from .run_monitor import RunMonitor
 from .test_monitor import MARKER_RE, TestMonitor, parse_test_list
-
-ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
 
 # (label, fpm sub-command, uses build options, refresh graph afterwards, icon, shortcut, description)
 COMMANDS = [
@@ -122,6 +120,7 @@ class MainWindow(QMainWindow):
         self._refresh_after = False
         self._monitoring = False
         self._partial = ""  # output text after the last newline
+        self._esc_tail = ""  # colour code cut off at the end of the last output chunk
         # None, or while running Test/Run: "list" (fpm ... --list), "marked"
         # (fpm ... --runner <wrapper>) or "direct" (a built program, via the wrapper)
         self._phase: str | None = None
@@ -199,6 +198,16 @@ class MainWindow(QMainWindow):
         self.use_editor_action.setStatusTip(
             "Double-clicked files open in a tab here; turn off to use your default application")
         view_menu.addAction(self.use_editor_action)
+        self.lint_action = QAction("Lint Fortran Files (fortitude)", self, checkable=True)
+        EditorTab.lint_enabled = self.settings.value("lint", True, type=bool)
+        self.lint_action.setChecked(EditorTab.lint_enabled)
+        self.lint_action.toggled.connect(self.set_lint_enabled)
+        if lint.executable() is None:
+            self.lint_action.setEnabled(False)
+            self.lint_action.setText("Lint Fortran Files (fortitude not found)")
+        self.lint_action.setStatusTip("Check free-form Fortran files in the editor with fortitude "
+                                      "as you type; findings are underlined and marked in the gutter")
+        view_menu.addAction(self.lint_action)
 
         # --- left: build options + commands
         options = QGroupBox("Build options")
@@ -348,6 +357,9 @@ class MainWindow(QMainWindow):
         self.test_output = QPlainTextEdit()
         self.test_output.setReadOnly(True)
         self.test_output.setFont(mono)
+        # Compiler messages may be coloured (lfortran always colours them).
+        self.console_writer = ansi.AnsiWriter(self.console)
+        self.single_writer = ansi.AnsiWriter(self.test_output)
         self.output_stack = QStackedWidget()
         self.output_stack.addWidget(self.console)
         self.output_stack.addWidget(self.test_output)
@@ -670,6 +682,8 @@ class MainWindow(QMainWindow):
             if not editor.maybe_save():
                 event.ignore()
                 return
+        for editor in self.editors():
+            editor.stop_lint()
         if self.process is not None:
             answer = QMessageBox.question(self, "fpm is running",
                                           "An fpm command is still running. Stop it and quit?")
@@ -843,6 +857,8 @@ class MainWindow(QMainWindow):
         self.process.errorOccurred.connect(self._process_error)
         self._refresh_after = False
         self._partial = ""
+        self._esc_tail = ""
+        self.console_writer.reset()
         self._held_blank = False
         # Through the same marker wrapper as Test, so the Run tab can follow it.
         self._phase = "direct"
@@ -1106,6 +1122,12 @@ class MainWindow(QMainWindow):
         if filename:
             self.open_file(filename, force_editor=True)
 
+    def set_lint_enabled(self, on: bool):
+        EditorTab.lint_enabled = on
+        self.settings.setValue("lint", on)
+        for editor in self.editors():
+            editor.set_lint_enabled(on)
+
     def open_file(self, path: str, diagnostics: list | None = None, force_editor: bool = False):
         """Open a file in the built-in editor (or the default application),
         marking any compiler diagnostics and jumping to the first one."""
@@ -1160,6 +1182,7 @@ class MainWindow(QMainWindow):
                 if not editor.maybe_save():
                     return False
         for editor in editors:
+            editor.stop_lint()
             self.tabs.removeTab(self.tabs.indexOf(editor))
             editor.deleteLater()
         return True
@@ -1170,6 +1193,7 @@ class MainWindow(QMainWindow):
             return
         self.tabs.setCurrentIndex(index)
         if widget.maybe_save():
+            widget.stop_lint()
             self.tabs.removeTab(index)
             widget.deleteLater()
 
@@ -1434,49 +1458,49 @@ class MainWindow(QMainWindow):
         self.stop_action.setEnabled(True)
         self._set_project_enabled(True)
         self.statusBar().showMessage(f"Running fpm {' '.join(sub)}…")
+        self._esc_tail = ""
+        self.console_writer.reset()
         self.process.start(program, args)
 
     def stop(self):
         if self.process is not None:
             kill_process_tree(self.process)
 
-    def _append(self, text: str, bold: bool = False):
-        cursor = self.console.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        fmt = cursor.charFormat()
-        fmt.setFontWeight(QFont.Bold if bold else QFont.Normal)
-        cursor.setCharFormat(fmt)
-        cursor.insertText(text)
-        self.console.setTextCursor(cursor)
-        self.console.ensureCursorVisible()
+    def _append(self, text: str, bold: bool = False, colored: bool = False):
+        """Add text to the Output panel; ``colored``: program output, whose
+        terminal colour codes are shown as colours."""
+        self.console_writer.write(text, bold, ansi=colored)
 
     def _read_output(self):
         if self.process is None:
             return
         data = bytes(self.process.readAllStandardOutput()).decode("utf-8", errors="replace")
+        data, self._esc_tail = ansi.split_partial(self._esc_tail + data)
         # fpm redraws progress lines with \r; keep only the final state of each line.
-        data = ANSI_RE.sub("", data).replace("\r\n", "\n")
+        data = data.replace("\r\n", "\n")
         data = "\n".join(line.rsplit("\r", 1)[-1] for line in data.split("\n"))
         if self._phase in ("marked", "direct"):
             # Line-buffered so the test markers can be taken out of the output.
             lines = (self._partial + data).split("\n")
             self._partial = lines.pop()
-            self._append("".join(self._test_line(line) for line in lines))
+            self._append("".join(self._test_line(line) for line in lines), colored=True)
             return
-        self._append(data)
+        self._append(data, colored=True)
+        plain = ansi.strip(data)  # colour codes would get in the way of parsing
         if self._phase == "list":
-            self._captured.append(data)
+            self._captured.append(plain)
         if self._monitoring:
             # Output can arrive mid-line; only parse complete lines.
-            lines = (self._partial + data).split("\n")
+            lines = (self._partial + plain).split("\n")
             self._partial = lines.pop()
             for line in lines:
                 self.build_monitor.feed_line(line)
 
-    def _test_line(self, line: str) -> str:
+    def _test_line(self, raw: str) -> str:
         """Pass a line of test output through the test monitor; returns the
-        text to show. The runner prints a blank line before each marker,
-        which is dropped along with the marker."""
+        text to show (with its colour codes). The runner prints a blank line
+        before each marker, which is dropped along with the marker."""
+        line = ansi.strip(raw)
         if self._test_building:
             if MARKER_RE.search(line):
                 self._build_part_done()  # the first test is starting
@@ -1492,6 +1516,8 @@ class MainWindow(QMainWindow):
             self._held_blank = True
             return text
         shown = self._marker_monitor().feed_line(line)
+        if shown == line:
+            shown = raw
         return text + (shown + "\n" if shown is not None else "")
 
     def _build_part_done(self):
@@ -1507,7 +1533,7 @@ class MainWindow(QMainWindow):
     def _flush_monitor(self, exit_code: int, stopped: bool):
         if self._phase in ("marked", "direct"):
             if self._partial:
-                self._append(self._test_line(self._partial))
+                self._append(self._test_line(self._partial), colored=True)
             if self._held_blank:
                 self._append("\n")
             self._partial = ""
@@ -1695,7 +1721,10 @@ class MainWindow(QMainWindow):
                                  self.build_monitor.details_text(row))
 
     def _show_single_output(self, title: str, text: str):
-        self.test_output.setPlainText(text)
+        self.test_output.clear()
+        self.single_writer.reset()
+        self.single_writer.write(text)
+        self.test_output.moveCursor(QTextCursor.Start)
         self.output_title.setText(f"<b>Output</b> — {_breakable(html.escape(title))}")
         self.output_stack.setCurrentWidget(self.test_output)
         self.show_all_button.show()

@@ -57,6 +57,7 @@ from qtpy.QtWidgets import (
 )
 
 from . import manifest as m
+from .ansi import strip as strip_ansi
 
 PROGRESS_RE = re.compile(r"^\[\s*(\d+)%\]\s+(\S+)(?:\s+(done|failed)\.)?\s*$")
 # gfortran/gcc: "src/a.f90:3:15:" (message on later lines) or "a.c:3:5: error: ..."
@@ -67,6 +68,10 @@ GNU_LOC_RE = re.compile(r"^((?:[A-Za-z]:)?[^:\s]+?):(\d+):(?:(\d+):)?\s*"
 INTEL_LOC_RE = re.compile(r"^((?:[A-Za-z]:)?[^:\s(]+?)\((\d+)\):\s*(error|warning|remark)\b[^:]*:\s*(.*)$",
                           re.IGNORECASE)
 GNU_SEVERITY_RE = re.compile(r"^(Fatal Error|Error|Warning):\s*(.*)$")
+# lfortran: "semantic error: ..." / "warning: ..." / "style suggestion: ...",
+# then " --> src/a.f90:3:15" on the next line.
+LFORTRAN_SEVERITY_RE = re.compile(r"^(?:[a-z]+ )?(error|warning|style suggestion):\s*(.*)$")
+LFORTRAN_LOC_RE = re.compile(r"^\s*-->\s*((?:[A-Za-z]:)?.+?):(\d+)(?::\d+)?\s*$")
 FAILED_OBJECT_RE = re.compile(r'Compilation failed for object\s+"\s*(.+?)\s*"')
 UP_TO_DATE_RE = re.compile(r"Project is up to date")
 
@@ -122,8 +127,20 @@ class DiagnosticParser:
 
     def __init__(self):
         self._location: tuple[str, int] | None = None  # gfortran prints the severity later
+        self._pending: tuple[str, str] | None = None  # lfortran prints the location later
 
     def feed(self, line: str) -> Diagnostic | None:
+        match = LFORTRAN_SEVERITY_RE.match(line)
+        if match:
+            severity = "remark" if match.group(1) == "style suggestion" else match.group(1)
+            self._pending = (severity, line)
+            return None
+        if self._pending:
+            match = LFORTRAN_LOC_RE.match(line)
+            if match:
+                (severity, text), self._pending = self._pending, None
+                return Diagnostic(match.group(1), int(match.group(2)), severity,
+                                  f"{match.group(1)}:{match.group(2)}: {text}")
         match = INTEL_LOC_RE.match(line)
         if match:
             return Diagnostic(match.group(1), int(match.group(2)), match.group(3).lower(), line)
@@ -815,9 +832,9 @@ class BuildMonitor(SortableTable, QWidget):
             text = log.read_text(errors="replace")
         except OSError:
             return
-        target.log_text = text
+        target.log_text = text  # shown with its colours
         parser = DiagnosticParser()
-        for line in text.splitlines():
+        for line in strip_ansi(text).splitlines():
             found = parser.feed(line.rstrip())
             if found:
                 # Diagnostics in included files still belong to this target.

@@ -19,7 +19,10 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   listed live (works with parallel/OpenMP builds) with its package, status
   (compiling / done / warnings / failed / aborted) and elapsed time, plus an
   overall progress bar. Warnings are read from fpm's per-object `.o.log`
-  files, since fpm only prints compiler output when a compile fails. Hover a
+  files, since fpm only prints compiler output when a compile fails
+  (gfortran, gcc/clang, Intel and lfortran message formats are understood;
+  colour codes in compiler output, which lfortran always writes, are shown as
+  colours in the Output panel). Hover a
   status for the compiler messages; double-click a row to open the source.
 * The Build, Tests and Review tables sort by clicking a column header
   (again to reverse, a third time for the original order); the order is
@@ -59,6 +62,15 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   message) and open at the first one. Saving the project's `fpm.toml`
   reloads the project. *View → Open Files in Built-in Editor* switches back
   to your default application.
+* Linting: free-form Fortran files (`.f90`, `.F90`, …) open in the editor
+  are checked with [fortitude](https://fortitude.readthedocs.io) when opened
+  and as you type (unsaved text included). Findings are underlined and get a
+  teal marker in the gutter (red for syntax errors); hover either for the
+  rule code, message and suggested fix. fortitude runs in the file's folder,
+  so the project's own settings (`[extra.fortitude]` in `fpm.toml`, or a
+  `fortitude.toml`) apply. *View → Lint Fortran Files* turns it off.
+  fortitude is part of the pixi environment; for a pip install, add it
+  with `pip install fortitude-lint`.
 * AI code review, fully local: *AI → Review Current File* (⌥⌘R) sends the
   file in the editor (plus its compiler messages) to a model running on
   your machine through [Ollama](https://ollama.com) — nothing leaves the

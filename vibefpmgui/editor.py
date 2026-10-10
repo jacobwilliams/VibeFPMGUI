@@ -1,6 +1,6 @@
 """A small built-in code editor: line numbers, syntax highlighting (Pygments,
 chosen by file extension), find/replace, go to line, and compiler warning /
-error markers in the gutter.
+error markers in the gutter, and fortitude lint findings (see :mod:`.lint`).
 
 :class:`EditorTab` wraps a :class:`CodeEditor` with a find bar and a status
 line, and takes care of loading and saving the file (keeping its encoding and
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from qtpy.QtCore import QFileSystemWatcher, QRect, QSize, Qt, QTimer, Signal
+from qtpy.QtCore import QFileSystemWatcher, QProcess, QRect, QSize, Qt, QTimer, Signal
 from qtpy.QtGui import (
     QColor,
     QFont,
@@ -40,6 +40,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from . import lint
 from .highlighter import (
     DARK_STYLE,
     LIGHT_STYLE,
@@ -51,9 +52,11 @@ from .highlighter import (
 INDENT = "    "
 MAX_FIND_HIGHLIGHTS = 2000
 MARKER_COLORS = {"error": "#e03131", "fatal error": "#e03131", "warning": "#f08c00",
-                 "review": "#7048e8", "remark": "#1c7ed6"}
+                 "review": "#7048e8", "remark": "#1c7ed6",
+                 "lint error": "#e03131", "lint": "#0ca678"}
 # Which marker colour wins when a line has several kinds of note.
-MARKER_PRIORITY = ["fatal error", "error", "warning", "review", "remark"]
+MARKER_PRIORITY = ["fatal error", "error", "lint error", "warning", "review", "lint", "remark"]
+LINT_DELAY_MS = 600  # lint once typing pauses this long
 
 
 def worst_severity(notes: list[tuple[str, str]]) -> str:
@@ -101,6 +104,7 @@ class CodeEditor(QPlainTextEdit):
         super().__init__(parent)
         self.markers: dict[int, list[tuple[str, str]]] = {}  # line -> [(severity, message)]
         self.find_selections: list[QTextEdit.ExtraSelection] = []
+        self.lint_issues: list[lint.LintIssue] = []  # underlined, with a tooltip
         self.gutter = LineNumberArea(self)
         self.setLineWrapMode(QPlainTextEdit.NoWrap)
         self.blockCountChanged.connect(self._update_gutter_width)
@@ -184,6 +188,38 @@ class CodeEditor(QPlainTextEdit):
         self._update_extra_selections()
         self.gutter.update()
 
+    def set_lint(self, issues: list[lint.LintIssue]):
+        self.lint_issues = issues
+        self._update_extra_selections()
+
+    def _lint_span(self, issue: lint.LintIssue) -> tuple[int, int] | None:
+        """Document positions to underline: the issue's text, only on its
+        first line (a syntax error can span the rest of the file); at least
+        one character so it can be seen and hovered."""
+        block = self.document().findBlockByNumber(issue.line - 1)
+        if not block.isValid():
+            return None
+        length = max(0, block.length() - 1)
+        start = min(max(issue.column - 1, 0), length)
+        end = min(issue.end_column - 1, length) if issue.end_line == issue.line else length
+        if end <= start:
+            start, end = (start, start + 1) if start < length else (max(0, length - 1), length)
+        if end <= start:
+            return None  # an empty line
+        return block.position() + start, block.position() + end
+
+    def viewportEvent(self, event):
+        if event.type() == event.Type.ToolTip and self.lint_issues:
+            pos = self.cursorForPosition(event.pos()).position()
+            notes = [i.describe() for i in self.lint_issues
+                     if (span := self._lint_span(i)) and span[0] <= pos <= span[1]]
+            if notes:
+                QToolTip.showText(event.globalPos(), "\n".join(notes), self.viewport())
+            else:
+                QToolTip.hideText()
+            return True
+        return super().viewportEvent(event)
+
     # -------------------------------------------------------- highlights
     def _update_extra_selections(self):
         """Current line, lines with errors/warnings, and find matches."""
@@ -208,6 +244,17 @@ class CodeEditor(QPlainTextEdit):
             sel.format.setProperty(QTextFormat.FullWidthSelection, True)
             sel.cursor = self.textCursor()
             sel.cursor.clearSelection()
+            selections.append(sel)
+        for issue in self.lint_issues:
+            span = self._lint_span(issue)
+            if span is None:
+                continue
+            sel = QTextEdit.ExtraSelection()
+            sel.format.setUnderlineStyle(QTextCharFormat.WaveUnderline)
+            sel.format.setUnderlineColor(QColor(MARKER_COLORS[issue.severity]))
+            sel.cursor = QTextCursor(self.document())
+            sel.cursor.setPosition(span[0])
+            sel.cursor.setPosition(span[1], QTextCursor.KeepAnchor)
             selections.append(sel)
         self.setExtraSelections(selections + self.find_selections)
 
@@ -465,6 +512,8 @@ class FindBar(QWidget):
 class EditorTab(QWidget):
     """One open file: editor + find bar + status line."""
 
+    lint_enabled = True  # lint Fortran files with fortitude (View menu)
+
     dirty_changed = Signal(bool)
     saved = Signal(str)
     path_changed = Signal(str)
@@ -477,6 +526,9 @@ class EditorTab(QWidget):
         self._disk_text = ""
         self._compiler_markers: dict[int, list[tuple[str, str]]] = {}
         self._review_markers: dict[int, list[tuple[str, str]]] = {}
+        self._lint_markers: dict[int, list[tuple[str, str]]] = {}
+        self._lint_process: QProcess | None = None
+        self._lint_again = False  # the text changed while fortitude was running
         self.editor = CodeEditor()
         self.highlighter = PygmentsHighlighter(self.editor.document(), lexer_for_path(self.path))
         self.find_bar = FindBar(self.editor)
@@ -497,10 +549,74 @@ class EditorTab(QWidget):
         self._check_timer.setInterval(200)
         self._check_timer.timeout.connect(self._check_disk)
 
+        self._lint_timer = QTimer(self)
+        self._lint_timer.setSingleShot(True)
+        self._lint_timer.setInterval(LINT_DELAY_MS)
+        self._lint_timer.timeout.connect(self.lint)
+
         self.editor.document().modificationChanged.connect(self.dirty_changed)
         self.editor.cursorPositionChanged.connect(self._update_status)
         self.load()
         self.refresh_style()
+        self.editor.textChanged.connect(self._lint_timer.start)
+        self.lint()
+
+    # -------------------------------------------------------------- lint
+    def can_lint(self) -> bool:
+        return self.lint_enabled and lint.can_lint(self.path) and lint.executable() is not None
+
+    def set_lint_enabled(self, on: bool):
+        if on:
+            self.lint()
+        else:
+            self._lint_timer.stop()
+            self._show_lint([])
+
+    def lint(self):
+        """Run fortitude on the current text (in the background)."""
+        if not self.can_lint():
+            self._show_lint([])
+            return
+        if self._lint_process is not None:
+            self._lint_again = True
+            return
+        self._lint_again = False
+        process = QProcess(self)
+        process.setWorkingDirectory(str(self.path.parent))
+        process.finished.connect(lambda *_: self._lint_finished(process))
+        process.errorOccurred.connect(lambda err: err == QProcess.FailedToStart and
+                                      self._lint_finished(process))
+        self._lint_process = process
+        process.start(lint.executable(), lint.command(self.path))
+        process.write(self.editor.toPlainText().encode("utf-8"))
+        process.closeWriteChannel()
+
+    def _lint_finished(self, process: QProcess):
+        if process is not self._lint_process:
+            return
+        self._lint_process = None
+        output = bytes(process.readAllStandardOutput()).decode("utf-8", errors="replace")
+        process.deleteLater()
+        if self.can_lint():
+            self._show_lint(lint.parse(output))
+        if self._lint_again:
+            self._lint_timer.start()
+
+    def stop_lint(self):
+        """Before the tab is closed: don't leave fortitude running."""
+        self._lint_timer.stop()
+        if self._lint_process is not None:
+            process, self._lint_process = self._lint_process, None
+            process.kill()
+            process.waitForFinished(1000)
+
+    def _show_lint(self, issues: list[lint.LintIssue]):
+        markers: dict[int, list[tuple[str, str]]] = {}
+        for issue in issues:
+            markers.setdefault(issue.line, []).append((issue.severity, issue.describe()))
+        self._lint_markers = markers
+        self.editor.set_lint(issues)
+        self._apply_markers()
 
     # ------------------------------------------------------------- files
     @staticmethod
@@ -567,7 +683,9 @@ class EditorTab(QWidget):
         self.path = Path(filename).resolve()
         self.highlighter.set_lexer(lexer_for_path(self.path))
         self.path_changed.emit(str(self.path))
-        return self.save()
+        saved = self.save()
+        self.lint()  # it may (no longer) be a Fortran file
+        return saved
 
     def maybe_save(self) -> bool:
         """Ask about unsaved changes; True if it's fine to close."""
@@ -641,6 +759,9 @@ class EditorTab(QWidget):
         if self._review_markers:
             count = sum(len(ns) for ns in self._review_markers.values())
             parts.append(f"{count} AI review note{'s' * (count != 1)}")
+        if self._lint_markers:
+            count = sum(len(ns) for ns in self._lint_markers.values())
+            parts.append(f"{count} fortitude issue{'s' * (count != 1)}")
         if note:
             parts.append(note)
         self.status.setText("<span style='color:gray'>" + " · ".join(parts) + "</span>")
@@ -667,7 +788,7 @@ class EditorTab(QWidget):
 
     def _apply_markers(self):
         merged: dict[int, list[tuple[str, str]]] = {}
-        for source in (self._compiler_markers, self._review_markers):
+        for source in (self._compiler_markers, self._review_markers, self._lint_markers):
             for line, notes in source.items():
                 merged.setdefault(line, []).extend(notes)
         self.editor.set_markers(merged)

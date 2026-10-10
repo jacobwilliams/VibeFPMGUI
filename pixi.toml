@@ -21,3 +21,7 @@ ollama = ">=0.32.15,<0.33"
 ollama-python = ">=0.6.3,<0.7"
 pathspec = ">=1.1.1,<2"
 ruff = ">=0.17.0,<0.18"
+lfortran = ">=0.67.0,<0.68"
+
+[pypi-dependencies]
+fortitude-lint = ">=0.9.2, <0.10"
