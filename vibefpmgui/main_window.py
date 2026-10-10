@@ -113,7 +113,7 @@ class MainWindow(QMainWindow):
         self.runner_args_edit = QLineEdit()
         self.runner_args_edit.setPlaceholderText("arguments passed to the program")
         form.addRow("Program args:", self.runner_args_edit)
-        self.verbose_check = QCheckBox("Verbose (--verbose)")
+        self.verbose_check = QCheckBox("Verbose")
         form.addRow(self.verbose_check)
         fpm_row = QHBoxLayout()
         self.fpm_edit = QLineEdit()
@@ -124,6 +124,27 @@ class MainWindow(QMainWindow):
         fpm_row.addWidget(self.fpm_edit)
         fpm_row.addWidget(fpm_browse)
         form.addRow("fpm executable:", fpm_row)
+
+        # Hovering an option (or its label) shows the fpm flag it becomes.
+        for widget, flag, text in [
+            (self.profile_combo, "--profile PROF",
+             "Build profile: debug or release. (default) leaves it to fpm, which uses debug."),
+            (self.compiler_edit, "--compiler NAME", "Fortran compiler to use. fpm uses gfortran by default."),
+            (self.flag_edit, "--flag FFLAGS", "Extra Fortran compiler flags."),
+            (self.target_edit, "fpm run|test NAME…",
+             "Names of the programs or tests to run (wildcards allowed). Used by Run and Test."),
+            (self.extra_edit, "(added as typed)",
+             "Any other fpm options, e.g. --runner \"mpirun -np 4\" or --c-compiler gcc."),
+            (self.runner_args_edit, "-- ARGS",
+             "Arguments passed to the program or tests by Run and Test."),
+            (self.verbose_check, "--verbose", "Print more detail about what fpm is doing."),
+            (self.fpm_edit, "(not a flag)", "The fpm program to run. Leave empty to use the fpm on your PATH."),
+        ]:
+            tip = f"<b><code>{html.escape(flag)}</code></b><br>{html.escape(text)}"
+            widget.setToolTip(tip)
+            label = form.labelForField(widget) or form.labelForField(fpm_row)
+            if label is not None and widget is not self.verbose_check:
+                label.setToolTip(tip)
 
         commands = QGroupBox("Commands")
         grid = QVBoxLayout(commands)
