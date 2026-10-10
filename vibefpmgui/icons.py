@@ -3,8 +3,10 @@ match the current text colour (light or dark mode) at any screen scale."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from qtpy.QtCore import QPointF, QRectF, Qt
-from qtpy.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from qtpy.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
 
 SIZE = 24  # logical size; drawn at several pixel ratios for crisp HiDPI
 
@@ -246,3 +248,55 @@ def badged_icon(base: QIcon, badge: str, sizes=(16, 20, 32)) -> QIcon:
             icon.addPixmap(pixmap)
     return icon
 
+
+
+# ----------------------------------------------------------------- app icon
+LOGO_PATH = Path(__file__).with_name("resources") / "fpm-logo-color.svg"
+
+
+def app_icon() -> QIcon:
+    """The application icon: the fpm logo centred on a white rounded square
+    (the usual macOS app-icon shape), drawn crisply at each size."""
+    from qtpy.QtSvg import QSvgRenderer
+
+    renderer = QSvgRenderer(str(LOGO_PATH))
+    icon = QIcon()
+    if not renderer.isValid():
+        return icon
+    view = renderer.viewBoxF()
+    aspect = view.width() / view.height() if view.height() else 1.0
+    for size in (16, 32, 48, 64, 128, 256, 512, 1024):
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.transparent)
+        p = QPainter(pixmap)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
+        # macOS icons leave ~10% margin around the rounded square.
+        margin = size * 0.09
+        tile = QRectF(margin, margin, size - 2 * margin, size - 2 * margin)
+        radius = tile.width() * 0.225
+        if size >= 32:  # a soft shadow (too muddy at tiny sizes)
+            for i, alpha in enumerate((18, 12, 6)):
+                grow = size * 0.006 * (i + 1)
+                p.setPen(Qt.NoPen)
+                p.setBrush(QColor(0, 0, 0, alpha))
+                p.drawRoundedRect(tile.adjusted(-grow, -grow + size * 0.012, grow, grow + size * 0.012),
+                                  radius + grow, radius + grow)
+        gradient = QLinearGradient(tile.topLeft(), tile.bottomLeft())
+        gradient.setColorAt(0, QColor("#ffffff"))
+        gradient.setColorAt(1, QColor("#eef0f6"))
+        p.setBrush(gradient)
+        p.setPen(QPen(QColor(0, 0, 0, 28), max(1.0, size / 256)))
+        p.drawRoundedRect(tile, radius, radius)
+        # The logo, as large as fits with some breathing room.
+        box = tile.adjusted(tile.width() * 0.16, tile.height() * 0.12,
+                            -tile.width() * 0.16, -tile.height() * 0.12)
+        h = box.height()
+        w = h * aspect
+        if w > box.width():
+            w = box.width()
+            h = w / aspect
+        renderer.render(p, QRectF(box.center().x() - w / 2, box.center().y() - h / 2, w, h))
+        p.end()
+        icon.addPixmap(pixmap)
+    return icon

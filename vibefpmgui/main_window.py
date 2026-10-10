@@ -35,7 +35,7 @@ from .editor import EditorTab, monospace_font
 from . import build_outputs as bo
 from .project_tree import ProjectTree, reveal_in_file_manager
 from .review_monitor import ReviewMonitor
-from .icons import make_icon
+from .icons import app_icon, make_icon
 from .highlighter import DARK_STYLE, LIGHT_STYLE, PygmentsHighlighter, is_dark
 from .graph_view import EDGE_STYLES, KIND_LABELS, LAYOUTS, THEME_CHOICES, DependencyGraphView
 
@@ -1880,6 +1880,7 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv if argv is None else argv
     app = QApplication.instance() or QApplication(argv)
     app.setApplicationName("VibeFPMGUI")
+    app.setWindowIcon(app_icon())  # also the Dock icon on macOS
     app.setApplicationVersion(__version__)
     path = next((a for a in argv[1:] if not a.startswith("-")), None)
     if path and Path(path).is_dir():
