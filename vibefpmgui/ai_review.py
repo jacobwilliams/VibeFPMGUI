@@ -181,7 +181,11 @@ class RepeatGuard:
 def build_prompt(path: str, language: str, code: str, focus: str,
                  diagnostics: list[tuple[int, str, str]]) -> str:
     """The user message: instructions, compiler messages and numbered code."""
-    lines = code.splitlines() or [""]
+    # Split only at newlines, like the editor: str.splitlines() would also
+    # split at form feeds, U+2028 etc. and shift every later line number.
+    lines = code.split("\n")
+    if len(lines) > 1 and lines[-1] == "":
+        lines.pop()  # a final newline doesn't start another line
     width = len(str(len(lines)))
     numbered = "\n".join(f"{i:>{width}}| {line}" for i, line in enumerate(lines, 1))
     parts = [f"Review this {language} file: {path}", FOCUS.get(focus, FOCUS["general"])]

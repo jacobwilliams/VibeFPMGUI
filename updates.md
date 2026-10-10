@@ -67,3 +67,13 @@ are done. Effort is a rough guess: small / medium / large.
 - [ ] **Notifications** — a system notification when a long build or test run
   finishes while the app is in the background.
 - [ ] **Command palette (⇧⌘P)** — type to find and run any action.
+
+## AI review
+
+- [ ] **More accurate line numbers for findings** — small local models often
+  cite a line 1–3 lines away from the code they mean (a test on six files:
+  13 of 21 checkable findings on the right line, 6 off by 1–3, 2 off by
+  more). Ask the model to quote the code each finding refers to, then move
+  the finding to where that code actually is near the cited line (marked
+  "line adjusted"). Also make the gutter markers follow edits, so they stay
+  on the right code when lines are added or removed after a review.
