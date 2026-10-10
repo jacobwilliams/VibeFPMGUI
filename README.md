@@ -13,6 +13,14 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   overall progress bar. Warnings are read from fpm's per-object `.o.log`
   files, since fpm only prints compiler output when a compile fails. Hover a
   status for the compiler messages; double-click a row to open the source.
+* Test progress: **Test** first builds and lists the tests (`fpm test
+  --list`), then runs them through a small wrapper given to fpm's `--runner`
+  so each test's start, end and exit code are known. The *Tests* tab shows
+  every test (queued / running / passed / failed / not run) with its time,
+  and a progress bar. Test durations are remembered per project, so later
+  runs weight the bar by expected time and estimate the time left. Click a
+  test to see only its output. A `--runner` you put in *Extra args* (e.g.
+  `mpirun -np 4`) still wraps each test.
 * Dependency diagram (drawn with [pyqtgraph](https://www.pyqtgraph.org)) built
   from the main `fpm.toml` and the `fpm.toml` of every downloaded dependency
   (git, local path, registry and metapackages; dashed edges are dev/test

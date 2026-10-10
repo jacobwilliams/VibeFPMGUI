@@ -155,6 +155,43 @@ def _tint(color: QColor, alpha: int) -> QColor:
     return c
 
 
+def panel_stylesheet(object_name: str, pal: dict) -> str:
+    """Flat table/header/scrollbar styling shared by the build and test panels."""
+    n = f"#{object_name}"
+    return f"""
+        {n} {{ background: {pal['bg']}; }}
+        {n} QLabel {{ color: {pal['text']}; background: transparent; }}
+        {n} QTableWidget {{ background: {pal['bg']}; border: none; }}
+        {n} QHeaderView {{ background: {pal['bg']}; }}
+        {n} QScrollBar:vertical {{ background: transparent; width: 8px; margin: 2px; }}
+        {n} QScrollBar::handle:vertical {{ background: {pal['track']}; border-radius: 3px;
+            min-height: 24px; }}
+        {n} QScrollBar::handle:vertical:hover {{ background: {pal['muted']}; }}
+        {n} QScrollBar::add-line, {n} QScrollBar::sub-line,
+        {n} QScrollBar::add-page, {n} QScrollBar::sub-page {{ background: none; height: 0; }}
+        {n} QHeaderView::section {{
+            background: {pal['bg']}; color: {pal['muted']}; border: none;
+            border-bottom: 1px solid {pal['line']}; padding: 6px 12px;
+            font-size: 10px; font-weight: 600; }}
+    """
+
+
+def chip_stylesheet(pal: dict, color: str) -> str:
+    """A rounded, tinted, checkable summary chip."""
+    c = QColor(color)
+    rgb = f"{c.red()},{c.green()},{c.blue()}"
+    return f"""
+        QPushButton {{ background: rgba({rgb},40); color: {pal['text']}; border: 1px solid transparent;
+            border-radius: 10px; padding: 2px 10px; font-weight: 600; }}
+        QPushButton:hover {{ background: rgba({rgb},70); }}
+        QPushButton:checked {{ background: rgba({rgb},90); border: 1px solid rgb({rgb}); }}
+    """
+
+
+def app_is_light() -> bool:
+    return QApplication.palette().color(QPalette.Base).lightness() >= 128
+
+
 class RowDelegate(QStyledItemDelegate):
     """Paints every cell of the build table from its :class:`Target`."""
 
@@ -424,26 +461,9 @@ class BuildMonitor(QWidget):
     # ------------------------------------------------------------- styling
     def refresh_palette(self):
         """Follow the application's light/dark palette."""
-        app_palette = QApplication.palette()
-        self.is_light = app_palette.color(QPalette.Base).lightness() >= 128
-        self.palette_colors = pal = PALETTES["light" if self.is_light else "dark"]
-        self.setStyleSheet(f"""
-            #BuildMonitor {{ background: {pal['bg']}; }}
-            #BuildMonitor QLabel {{ color: {pal['text']}; background: transparent; }}
-            #BuildMonitor QTableWidget {{ background: {pal['bg']}; border: none; }}
-            #BuildMonitor QHeaderView {{ background: {pal['bg']}; }}
-            #BuildMonitor QScrollBar:vertical {{ background: transparent; width: 8px; margin: 2px; }}
-            #BuildMonitor QScrollBar::handle:vertical {{ background: {pal['track']}; border-radius: 3px;
-                min-height: 24px; }}
-            #BuildMonitor QScrollBar::handle:vertical:hover {{ background: {pal['muted']}; }}
-            #BuildMonitor QScrollBar::add-line, #BuildMonitor QScrollBar::sub-line,
-            #BuildMonitor QScrollBar::add-page, #BuildMonitor QScrollBar::sub-page {{
-                background: none; height: 0; }}
-            #BuildMonitor QHeaderView::section {{
-                background: {pal['bg']}; color: {pal['muted']}; border: none;
-                border-bottom: 1px solid {pal['line']}; padding: 6px 12px;
-                font-size: 10px; font-weight: 600; }}
-        """)
+        self.is_light = app_is_light()
+        self.palette_colors = PALETTES["light" if self.is_light else "dark"]
+        self.setStyleSheet(panel_stylesheet(self.objectName(), self.palette_colors))
         self._style_chips()
         self._update_header()
         self.table.viewport().update()
@@ -457,14 +477,7 @@ class BuildMonitor(QWidget):
     def _style_chips(self):
         pal = self.palette_colors
         for status, chip in self.chips.items():
-            c = QColor(pal["status"][status])
-            rgb = f"{c.red()},{c.green()},{c.blue()}"
-            chip.setStyleSheet(f"""
-                QPushButton {{ background: rgba({rgb},40); color: {pal['text']}; border: 1px solid transparent;
-                    border-radius: 10px; padding: 2px 10px; font-weight: 600; }}
-                QPushButton:hover {{ background: rgba({rgb},70); }}
-                QPushButton:checked {{ background: rgba({rgb},90); border: 1px solid rgb({rgb}); }}
-            """)
+            chip.setStyleSheet(chip_stylesheet(pal, pal["status"][status]))
 
     # ----------------------------------------------------------- lifecycle
     def start(self, graph: m.DependencyGraph | None, project_dir: Path, description: str = ""):

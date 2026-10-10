@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import fnmatch
+import hashlib
 import html
+import json
+import os
 import re
 import shlex
 import shutil
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -13,13 +19,14 @@ from qtpy.QtCore import QEvent, QProcess, QProcessEnvironment, QSettings, Qt, QU
 from qtpy.QtGui import QAction, QActionGroup, QColor, QPalette, QDesktopServices, QFont, QFontDatabase, QKeySequence, QTextCursor
 from qtpy.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
-    QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSplitter,
+    QLabel, QLineEdit, QMainWindow, QMenu, QStackedWidget, QMessageBox, QPlainTextEdit, QPushButton, QSplitter,
     QTabWidget, QTextBrowser, QToolButton, QVBoxLayout, QWidget,
 )
 
 from . import __version__
 from . import manifest as m
 from .build_monitor import BuildMonitor
+from .test_monitor import MARKER_RE, TestMonitor, parse_test_list
 from .highlighter import DARK_STYLE, LIGHT_STYLE, PygmentsHighlighter, is_dark
 from .graph_view import EDGE_STYLES, KIND_LABELS, LAYOUTS, THEME_CHOICES, DependencyGraphView
 
@@ -53,6 +60,10 @@ class MainWindow(QMainWindow):
         self._refresh_after = False
         self._monitoring = False
         self._partial = ""  # output text after the last newline
+        self._phase: str | None = None  # None, "list" or "tests" while running Test
+        self._captured: list[str] = []  # output of "fpm test --list"
+        self._held_blank = False  # blank line that may precede a test marker
+        self._test_args: tuple = ()
         self.command_buttons: list[QPushButton] = []
 
         self._build_ui()
@@ -118,8 +129,11 @@ class MainWindow(QMainWindow):
         grid = QVBoxLayout(commands)
         for label, args, uses_options, refresh in COMMANDS:
             button = QPushButton(label)
-            button.clicked.connect(
-                lambda _=False, a=args, o=uses_options, r=refresh: self.run_fpm(a, o, r))
+            if args == ["test"]:
+                button.clicked.connect(self.run_tests)
+            else:
+                button.clicked.connect(
+                    lambda _=False, a=args, o=uses_options, r=refresh: self.run_fpm(a, o, r))
             grid.addWidget(button)
             self.command_buttons.append(button)
         self.stop_button = QPushButton("Stop")
@@ -175,21 +189,39 @@ class MainWindow(QMainWindow):
         self.console.setReadOnly(True)
         self.console.setFont(mono)
         self.console.setMaximumBlockCount(20000)
+        # Output of a single test, shown when a test row is clicked.
+        self.test_output = QPlainTextEdit()
+        self.test_output.setReadOnly(True)
+        self.test_output.setFont(mono)
+        self.output_stack = QStackedWidget()
+        self.output_stack.addWidget(self.console)
+        self.output_stack.addWidget(self.test_output)
         console_box = QWidget()
         cl = QVBoxLayout(console_box)
         cl.setContentsMargins(0, 0, 0, 0)
         header = QHBoxLayout()
-        header.addWidget(QLabel("<b>Output</b>"))
+        self.output_title = QLabel("<b>Output</b>")
+        header.addWidget(self.output_title)
         header.addStretch(1)
+        self.show_all_button = QPushButton("Show all output")
+        self.show_all_button.clicked.connect(lambda: self.show_test_output(""))
+        self.show_all_button.hide()
+        header.addWidget(self.show_all_button)
         clear = QPushButton("Clear")
         clear.clicked.connect(self.console.clear)
         header.addWidget(clear)
         cl.addLayout(header)
-        cl.addWidget(self.console)
+        cl.addWidget(self.output_stack)
 
         self.build_monitor = BuildMonitor()
+        self.test_monitor = TestMonitor()
+        self.test_monitor.test_selected.connect(self.show_test_output)
+        self.monitor_tabs = QTabWidget()
+        self.monitor_tabs.setDocumentMode(True)
+        self.monitor_tabs.addTab(self.build_monitor, "Build")
+        self.monitor_tabs.addTab(self.test_monitor, "Tests")
         self.bottom_split = QSplitter(Qt.Horizontal)
-        self.bottom_split.addWidget(self.build_monitor)
+        self.bottom_split.addWidget(self.monitor_tabs)
         self.bottom_split.addWidget(console_box)
         self.bottom_split.setStretchFactor(0, 2)
         self.bottom_split.setStretchFactor(1, 3)
@@ -225,6 +257,7 @@ class MainWindow(QMainWindow):
             self.graph_view.refresh_theme()  # "Auto" theme follows the system
             self._update_legend()
             self.build_monitor.refresh_palette()
+            self.test_monitor.refresh_palette()
             self.build_monitor.set_package_colors(self.graph_view.package_colors())
         super().changeEvent(event)
 
@@ -429,7 +462,8 @@ class MainWindow(QMainWindow):
     def _fpm_executable(self) -> str:
         return self.fpm_edit.text().strip() or shutil.which("fpm") or "fpm"
 
-    def build_arguments(self, sub: list[str], uses_options: bool) -> list[str]:
+    def build_arguments(self, sub: list[str], uses_options: bool,
+                        program_args: bool = True) -> list[str]:
         args = list(sub)
         if uses_options:
             if self.profile_combo.currentIndex() > 0:
@@ -442,39 +476,56 @@ class MainWindow(QMainWindow):
                 args.append("--verbose")
             if sub[0] in ("run", "test") and self.target_edit.text().strip():
                 args += shlex.split(self.target_edit.text())
-            args += shlex.split(self.extra_edit.text())
-            if sub[0] in ("run", "test") and self.runner_args_edit.text().strip():
+            extra = shlex.split(self.extra_edit.text())
+            if sub[0] == "test":
+                extra, _ = split_runner(extra)  # the test runner is handled by run_tests
+            args += extra
+            if program_args and sub[0] in ("run", "test") and self.runner_args_edit.text().strip():
                 args += ["--"] + shlex.split(self.runner_args_edit.text())
         elif sub[0] == "update" and self.verbose_check.isChecked():
             args.append("--verbose")
         return args
 
-    def run_fpm(self, sub: list[str], uses_options: bool, refresh: bool):
+    def _build_description(self) -> str:
+        profile = self.profile_combo.currentText() if self.profile_combo.currentIndex() > 0 else "debug"
+        compiler = self.compiler_edit.text().strip() or "gfortran"
+        return f"{profile} · {compiler}"
+
+    def run_fpm(self, sub: list[str], uses_options: bool, refresh: bool,
+                phase: str | None = None, args: list[str] | None = None,
+                env_extra: dict[str, str] | None = None):
         if not self.manifest_path or self.process is not None:
             return
-        try:
-            args = self.build_arguments(sub, uses_options)
-        except ValueError as exc:  # unbalanced quotes in a text field
-            QMessageBox.warning(self, "Invalid arguments", str(exc))
-            return
+        if args is None:
+            try:
+                args = self.build_arguments(sub, uses_options)
+            except ValueError as exc:  # unbalanced quotes in a text field
+                QMessageBox.warning(self, "Invalid arguments", str(exc))
+                return
         program = self._fpm_executable()
         self.process = QProcess(self)
         self.process.setWorkingDirectory(str(self.manifest_path.parent))
         self.process.setProcessChannelMode(QProcess.MergedChannels)
         env = QProcessEnvironment.systemEnvironment()
         env.insert("NO_COLOR", "1")
+        for key, value in (env_extra or {}).items():
+            env.insert(key, value)
         self.process.setProcessEnvironment(env)
         self.process.readyReadStandardOutput.connect(self._read_output)
         self.process.finished.connect(self._finished)
         self.process.errorOccurred.connect(self._process_error)
         self._refresh_after = refresh
         self._partial = ""
-        # Only commands that compile get the per-file status grid.
-        self._monitoring = sub[0] in ("build", "run", "test")
+        self._phase = phase
+        self._captured = []
+        self._held_blank = False
+        # Commands that compile get the per-file status grid (the test run
+        # itself doesn't: "fpm test --list" already built everything).
+        self._monitoring = sub[0] in ("build", "run", "test") and phase != "tests"
         if self._monitoring:
-            profile = self.profile_combo.currentText() if self.profile_combo.currentIndex() > 0 else "debug"
-            compiler = self.compiler_edit.text().strip() or "gfortran"
-            self.build_monitor.start(self.graph, self.manifest_path.parent, f"{profile} · {compiler}")
+            self.build_monitor.start(self.graph, self.manifest_path.parent, self._build_description())
+            if phase is None:
+                self.monitor_tabs.setCurrentWidget(self.build_monitor)
 
         self._append(f"\n$ cd {shlex.quote(str(self.manifest_path.parent))}\n"
                      f"$ {shlex.join([program] + args)}\n", bold=True)
@@ -504,7 +555,15 @@ class MainWindow(QMainWindow):
         # fpm redraws progress lines with \r; keep only the final state of each line.
         data = ANSI_RE.sub("", data).replace("\r\n", "\n")
         data = "\n".join(line.rsplit("\r", 1)[-1] for line in data.split("\n"))
+        if self._phase == "tests":
+            # Line-buffered so the test markers can be taken out of the output.
+            lines = (self._partial + data).split("\n")
+            self._partial = lines.pop()
+            self._append("".join(self._test_line(line) for line in lines))
+            return
         self._append(data)
+        if self._phase == "list":
+            self._captured.append(data)
         if self._monitoring:
             # Output can arrive mid-line; only parse complete lines.
             lines = (self._partial + data).split("\n")
@@ -512,7 +571,30 @@ class MainWindow(QMainWindow):
             for line in lines:
                 self.build_monitor.feed_line(line)
 
+    def _test_line(self, line: str) -> str:
+        """Pass a line of test output through the test monitor; returns the
+        text to show. The runner prints a blank line before each marker,
+        which is dropped along with the marker."""
+        text = ""
+        if self._held_blank:
+            self._held_blank = False
+            if not MARKER_RE.search(line):  # the blank was real output
+                self.test_monitor.feed_line("")
+                text = "\n"
+        if line == "":
+            self._held_blank = True
+            return text
+        shown = self.test_monitor.feed_line(line)
+        return text + (shown + "\n" if shown is not None else "")
+
     def _flush_monitor(self, exit_code: int, stopped: bool):
+        if self._phase == "tests":
+            if self._partial:
+                self._append(self._test_line(self._partial))
+            if self._held_blank:
+                self._append("\n")
+            self._partial = ""
+            self._held_blank = False
         if self._monitoring:
             if self._partial:
                 self.build_monitor.feed_line(self._partial)
@@ -528,9 +610,14 @@ class MainWindow(QMainWindow):
             self._append("\n[process was stopped]\n", bold=True)
         else:
             self._append(f"\n[fpm exited with code {code}]\n", bold=True)
+        phase, self._phase = self._phase, None
         self._cleanup_process()
         self.statusBar().showMessage("Stopped" if crashed else
                                      ("Finished successfully" if code == 0 else f"Failed (exit code {code})"))
+        if phase == "list":
+            self._after_listing(code, crashed)
+        elif phase == "tests":
+            self._after_tests(code, crashed)
 
     def _process_error(self, error):
         if error == QProcess.FailedToStart:
@@ -538,6 +625,9 @@ class MainWindow(QMainWindow):
                          "Set the fpm executable in Build options.\n", bold=True)
             self.statusBar().showMessage("fpm failed to start")
             self._flush_monitor(-1, True)
+            if self._phase is not None:
+                self.test_monitor.finish(-1, stopped=True)
+            self._phase = None
             self._cleanup_process()
 
     def _cleanup_process(self):
@@ -549,6 +639,126 @@ class MainWindow(QMainWindow):
         self._set_project_enabled(self.graph is not None)
         if self._refresh_after:
             self.reload()
+
+    # --------------------------------------------------------------- tests
+    def run_tests(self):
+        """Test in two steps: "fpm test --list" (builds, and tells us the
+        test names), then "fpm test --runner <our wrapper>" so each test's
+        start, end and exit code can be followed."""
+        if not self.manifest_path or self.process is not None:
+            return
+        try:
+            list_args = self.build_arguments(["test", "--list"], True, program_args=False)
+            run_args = self.build_arguments(["test"], True)
+            _, inner_runner = split_runner(shlex.split(self.extra_edit.text()))
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid arguments", str(exc))
+            return
+        runner = runner_command()
+        # Our runner goes before the target names and any "-- program args".
+        cut = run_args.index("--") if "--" in run_args else len(run_args)
+        run_args = run_args[:cut] + ["--runner", runner] + run_args[cut:]
+        patterns = shlex.split(self.target_edit.text())
+        self._test_args = (run_args, inner_runner, patterns)
+        description = self._build_description()
+        if inner_runner:
+            description += f" · runner: {inner_runner}"
+        self.test_monitor.begin_listing(description)
+        self.show_test_output("")
+        self.run_fpm(["test"], True, False, phase="list", args=list_args)
+
+    def _after_listing(self, code: int, stopped: bool):
+        output = "".join(self._captured)
+        names = parse_test_list(output)
+        if stopped or code != 0:
+            self.test_monitor.finish(code, stopped=stopped)
+            self.monitor_tabs.setCurrentWidget(self.build_monitor)
+            return
+        if names == []:
+            self.test_monitor.finish(0, no_tests=True)
+            self.monitor_tabs.setCurrentWidget(self.test_monitor)
+            self.statusBar().showMessage("No tests to run")
+            return
+        run_args, inner_runner, patterns = self._test_args
+        if names and patterns:
+            # "fpm test --list" lists every test regardless of the names given,
+            # so apply the Target names/globs ourselves, as fpm will.
+            names = [n for n in names if any(fnmatch.fnmatchcase(n, p) for p in patterns)]
+        self.test_monitor.start(names or [], self._load_test_durations())
+        self.monitor_tabs.setCurrentWidget(self.test_monitor)
+        env = {"VIBEFPM_INNER_RUNNER": inner_runner} if inner_runner else {}
+        self.run_fpm(["test"], True, True, phase="tests", args=run_args, env_extra=env)
+
+    def _after_tests(self, code: int, stopped: bool):
+        self.test_monitor.finish(code, stopped=stopped)
+        self._save_test_durations(self.test_monitor.durations())
+        counts = self.test_monitor.counts()
+        total = len(self.test_monitor.tests)
+        if stopped:
+            message = "Tests stopped"
+        elif counts["Failed"]:
+            message = f"Tests: {counts['Failed']} of {total} failed"
+        elif counts["Not run"]:
+            message = f"Tests: {counts['Passed']} passed, {counts['Not run']} not run"
+        else:
+            message = f"Tests: all {total} passed"
+        self.statusBar().showMessage(message)
+
+    def _durations_key(self) -> str:
+        digest = hashlib.sha1(str(self.manifest_path).encode()).hexdigest()[:16]
+        return f"test_durations/{digest}"
+
+    def _load_test_durations(self) -> dict[str, float]:
+        try:
+            data = json.loads(self.settings.value(self._durations_key(), "{}"))
+            return {str(k): float(v) for k, v in data.items()}
+        except (TypeError, ValueError, AttributeError):
+            return {}
+
+    def _save_test_durations(self, durations: dict[str, float]):
+        if durations and self.manifest_path:
+            merged = {**self._load_test_durations(), **durations}
+            self.settings.setValue(self._durations_key(), json.dumps(merged))
+
+    def show_test_output(self, name: str):
+        """Show one test's output (or everything when name is empty)."""
+        if name:
+            text = self.test_monitor.output_for(name)
+            self.test_output.setPlainText(text or "(no output)")
+            self.output_title.setText(f"<b>Output</b> — {html.escape(name)}")
+            self.output_stack.setCurrentWidget(self.test_output)
+            self.show_all_button.show()
+        else:
+            self.output_title.setText("<b>Output</b>")
+            self.output_stack.setCurrentWidget(self.console)
+            self.show_all_button.hide()
+            if self.test_monitor.selected:
+                self.test_monitor.selected = ""
+                self.test_monitor.table.viewport().update()
+
+
+def split_runner(args: list[str]) -> tuple[list[str], str]:
+    """Take "--runner CMD" / "--runner=CMD" out of an fpm argument list."""
+    rest, runner = [], ""
+    i = 0
+    while i < len(args):
+        if args[i] == "--runner" and i + 1 < len(args):
+            runner = args[i + 1]
+            i += 2
+            continue
+        if args[i].startswith("--runner="):
+            runner = args[i].split("=", 1)[1]
+        else:
+            rest.append(args[i])
+        i += 1
+    return rest, runner
+
+
+def runner_command() -> str:
+    """The command fpm should put in front of each test executable."""
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_runner.py")
+    parts = [sys.executable, "-I", script]
+    return subprocess.list2cmdline(parts) if os.name == "nt" else shlex.join(parts)
 
 
 def main(argv: list[str] | None = None) -> int:
