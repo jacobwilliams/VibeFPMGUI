@@ -60,6 +60,7 @@ from qtpy.QtWidgets import (
 
 from . import lint
 from . import lsp as lsp_mod
+from .completion import CompletionPopup, SignaturePopup, global_rect
 from .highlighter import (
     DARK_STYLE,
     LIGHT_STYLE,
@@ -77,6 +78,8 @@ MARKER_COLORS = {"error": "#e03131", "fatal error": "#e03131", "warning": "#f08c
 MARKER_PRIORITY = ["fatal error", "error", "lint error", "warning", "review", "lint", "remark"]
 LINT_DELAY_MS = 600  # lint once typing pauses this long
 LSP_SYNC_MS = 300    # send edits to the language server once typing pauses this long
+COMPLETE_MS = 120    # ask for completions once typing pauses this long
+AUTO_COMPLETE_MIN = 2  # characters of a name typed before completions appear by themselves
 WORD_RE = re.compile(r"[A-Za-z0-9_]")
 
 
@@ -202,6 +205,8 @@ class CodeEditor(QPlainTextEdit):
     auto-indent and soft tabs."""
 
     definition_requested = Signal()  # ⌘/Ctrl-click on a name
+    typed = Signal(str)                # a key that changed the text (after it did; "\b" = Backspace)
+    completion_chosen = Signal(object)  # Enter/Tab in the completion list
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -210,9 +215,11 @@ class CodeEditor(QPlainTextEdit):
         self.hover_provider: Callable | None = None
         self._hover_word: tuple[int, int] | None = None
         self.hover_popup = HoverPopup(self)
+        self.completion_popup = CompletionPopup(self)
+        self.signature_popup = SignaturePopup(self)
         self.viewport().setMouseTracking(True)
-        self.verticalScrollBar().valueChanged.connect(self.hover_popup.hide)
-        self.horizontalScrollBar().valueChanged.connect(self.hover_popup.hide)
+        for bar in (self.verticalScrollBar(), self.horizontalScrollBar()):
+            bar.valueChanged.connect(self.hide_popups)
         self.markers: dict[int, list[tuple[str, str]]] = {}  # line -> [(severity, message)]
         self.find_selections: list[QTextEdit.ExtraSelection] = []
         self.lint_issues: list[lint.LintIssue] = []  # underlined, with a tooltip
@@ -379,17 +386,25 @@ class CodeEditor(QPlainTextEdit):
             return
         self.hover_popup.show_at(global_pos, text_html, (line, column))
 
-    def wheelEvent(self, event):
+    def hide_popups(self):
         self.hover_popup.hide()
+        self.completion_popup.hide()
+        self.signature_popup.hide()
+
+    def wheelEvent(self, event):
+        self.hide_popups()
         super().wheelEvent(event)
 
     def focusOutEvent(self, event):
         if not self.hover_popup.geometry().contains(QCursor.pos()):
             self.hover_popup.hide()
+        if not self.completion_popup.geometry().contains(QCursor.pos()):
+            self.completion_popup.hide()  # (unless it's being double-clicked)
+        self.signature_popup.hide()
         super().focusOutEvent(event)
 
     def hideEvent(self, event):
-        self.hover_popup.hide()
+        self.hide_popups()
         super().hideEvent(event)
 
     def mousePressEvent(self, event):
@@ -467,6 +482,30 @@ class CodeEditor(QPlainTextEdit):
     # ------------------------------------------------------------ editing
     def keyPressEvent(self, event):
         self.hover_popup.hide()
+        key = event.key()
+        popup = self.completion_popup
+        plain = not event.modifiers() & (Qt.ShiftModifier | Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)
+        if popup.isVisible():
+            steps = {Qt.Key_Up: -1, Qt.Key_Down: 1,
+                     Qt.Key_PageUp: -popup.page_rows(), Qt.Key_PageDown: popup.page_rows()}
+            if key in steps and plain:
+                popup.move_selection(steps[key])
+                return
+            if key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Tab) and plain:
+                self.completion_chosen.emit(popup.current())
+                return
+            if key == Qt.Key_Escape:
+                popup.hide()
+                return
+        if key == Qt.Key_Escape and self.signature_popup.isVisible():
+            self.signature_popup.hide()
+            return
+        before = self.document().revision()
+        self._edit_key(event)
+        if self.document().revision() != before:
+            self.typed.emit("\b" if key == Qt.Key_Backspace else event.text())
+
+    def _edit_key(self, event):
         key = event.key()
         if key == Qt.Key_Tab and not event.modifiers() & (Qt.ControlModifier | Qt.AltModifier):
             cursor = self.textCursor()
@@ -721,6 +760,8 @@ class EditorTab(QWidget):
     saved = Signal(str)
     path_changed = Signal(str)
     navigate_requested = Signal(str, int, int)  # go to file, line (1-based), column (0-based)
+    references_found = Signal(str, object)  # name, [(file, line, start column, end column)]
+    rename_ready = Signal(str, str, object)  # old name, new name, {file: [lsp.TextEdit]}
 
     def __init__(self, path: Path, parent=None):
         super().__init__(parent)
@@ -778,6 +819,18 @@ class EditorTab(QWidget):
         self._lsp_timer.setInterval(LSP_SYNC_MS)
         self._lsp_timer.timeout.connect(self._lsp_sync)
         self.editor.definition_requested.connect(self.go_to_definition)
+        self._complete_timer = QTimer(self)
+        self._complete_timer.setSingleShot(True)
+        self._complete_timer.setInterval(COMPLETE_MS)
+        self._complete_timer.timeout.connect(lambda: self.request_completion(manual=False))
+        self._signature_timer = QTimer(self)
+        self._signature_timer.setSingleShot(True)
+        self._signature_timer.setInterval(COMPLETE_MS)
+        self._signature_timer.timeout.connect(self.request_signature)
+        self.editor.typed.connect(self._typed)
+        self.editor.completion_chosen.connect(self.accept_completion)
+        self.editor.completion_popup.accepted.connect(self.accept_completion)
+        self.editor.cursorPositionChanged.connect(self._cursor_moved_popups)
 
         self.editor.document().modificationChanged.connect(self.dirty_changed)
         self.editor.cursorPositionChanged.connect(self._update_status)
@@ -804,6 +857,9 @@ class EditorTab(QWidget):
 
     def detach_lsp(self):
         self._lsp_timer.stop()
+        self._complete_timer.stop()
+        self._signature_timer.stop()
+        self.editor.hide_popups()
         if self.lsp is not None:
             self.lsp.close_document(self.path)
         self.lsp = None
@@ -894,6 +950,201 @@ class EditorTab(QWidget):
             self.outline_box.blockSignals(True)
             self.outline_box.setCurrentIndex(best)
             self.outline_box.blockSignals(False)
+
+    # ------------------------------------------------- completion / hints
+    def _typed(self, text: str):
+        """After a key changed the text: offer completions or argument hints."""
+        if self.lsp is None or not text:
+            return
+        ch = text[-1]
+        if WORD_RE.match(ch):
+            if not self.editor.completion_popup.isVisible():
+                self._complete_timer.start()  # request_completion checks the length
+        elif ch == "%":  # a type's components
+            self._complete_timer.start()
+        elif ch in "(," or ch == ")" and self.editor.signature_popup.isVisible():
+            self._signature_timer.start()
+
+    def _name_start(self) -> tuple[int, int, str, str]:
+        """(block number, column where the name before the cursor starts,
+        that partial name, the line's text) for the cursor's position."""
+        cursor = self.editor.textCursor()
+        text = cursor.block().text()
+        column = cursor.positionInBlock()
+        start = column
+        while start > 0 and WORD_RE.match(text[start - 1]):
+            start -= 1
+        return cursor.blockNumber(), start, text[start:column], text
+
+    def request_completion(self, manual: bool = True):
+        """Ask for completions of the name being typed (Show Completions
+        when ``manual``, or by itself once a few letters are typed)."""
+        if self.lsp is None:
+            return
+        block, start, prefix, text = self._name_start()
+        column = self.editor.textCursor().positionInBlock()
+        after_percent = start > 0 and text[start - 1] == "%"
+        if not manual:
+            if lsp_mod.in_comment_or_string(text, column) or prefix[:1].isdigit():
+                return
+            if len(prefix) < AUTO_COMPLETE_MIN and not after_percent:
+                return
+        self._flush_lsp()
+
+        def answered(result):
+            cursor = self.editor.textCursor()
+            if cursor.blockNumber() != block or cursor.positionInBlock() < start:
+                return  # the cursor has moved on
+            now = cursor.block().text()[start:cursor.positionInBlock()]
+            if not all(WORD_RE.match(c) for c in now):
+                return
+            anchor_cursor = QTextCursor(cursor.block())
+            anchor_cursor.setPosition(cursor.block().position() + start)
+            items = lsp_mod.completions(result)
+            shown = self.editor.completion_popup.open(items, (block, start), now,
+                                                      global_rect(self.editor, anchor_cursor))
+            if manual and not shown:
+                self._update_status("no completions here")
+
+        self.lsp.completion(self.path, block + 1, column, answered)
+
+    def accept_completion(self, item):
+        popup = self.editor.completion_popup
+        start = popup.start
+        popup.hide()
+        if item is None or start is None:
+            return
+        cursor = self.editor.textCursor()
+        if cursor.blockNumber() != start[0]:
+            return
+        block = cursor.block()
+        cursor.setPosition(block.position() + start[1])
+        cursor.setPosition(self.editor.textCursor().position(), QTextCursor.KeepAnchor)
+        cursor.insertText(item.insert)
+        self.editor.setTextCursor(cursor)
+
+    def request_signature(self):
+        """Show (or update, or hide) the argument hints for the call the
+        cursor is in."""
+        popup = self.editor.signature_popup
+        if self.lsp is None:
+            return
+        cursor = self.editor.textCursor()
+        block, column = cursor.blockNumber(), cursor.positionInBlock()
+        before = cursor.block().text()[:column]
+        index = lsp_mod.argument_index(before)
+        if index is None or lsp_mod.in_comment_or_string(cursor.block().text(), column):
+            popup.hide()
+            return
+        self._flush_lsp()
+
+        def answered(result):
+            now = self.editor.textCursor()
+            if now.blockNumber() != block:
+                return
+            text = lsp_mod.signature_html(result, index)
+            if not text:
+                popup.hide()
+                return
+            line_start = QTextCursor(now.block())
+            rect = global_rect(self.editor, now)
+            rect.moveLeft(global_rect(self.editor, line_start).left() + self.editor.fontMetrics()
+                          .horizontalAdvance(" ") * (len(before) - len(before.lstrip())))
+            popup.open(text, block, rect)
+
+        self.lsp.signature_help(self.path, block + 1, column, answered)
+
+    def _cursor_moved_popups(self):
+        """Keep the completion list filtered to what's typed (or close it),
+        and the argument hints up to date."""
+        cursor = self.editor.textCursor()
+        block, column = cursor.blockNumber(), cursor.positionInBlock()
+        popup = self.editor.completion_popup
+        if popup.isVisible():
+            start = popup.start
+            typed = cursor.block().text()[start[1]:column] if start and start[0] == block else None
+            if typed is None or column < start[1] or not all(WORD_RE.match(c) for c in typed):
+                popup.hide()
+            else:
+                popup.filter(typed)
+        hint = self.editor.signature_popup
+        if hint.isVisible():
+            if hint.line != block:
+                hint.hide()
+            else:
+                self._signature_timer.start()
+
+    # ------------------------------------------------- references / rename
+    def _name_at_cursor(self) -> tuple[int, int, str] | None:
+        """(1-based line, start column, name) of the name at the cursor."""
+        cursor = self.editor.textCursor()
+        text = cursor.block().text()
+        i = cursor.positionInBlock()
+        if not (i < len(text) and WORD_RE.match(text[i])):
+            if i > 0 and WORD_RE.match(text[i - 1]):
+                i -= 1
+            else:
+                return None
+        start, end = i, i
+        while start > 0 and WORD_RE.match(text[start - 1]):
+            start -= 1
+        while end < len(text) and WORD_RE.match(text[end]):
+            end += 1
+        word = text[start:end]
+        return None if word[0].isdigit() else (cursor.blockNumber() + 1, start, word)
+
+    def find_references(self):
+        if self.lsp is None:
+            return
+        found = self._name_at_cursor()
+        if found is None:
+            self._update_status("put the cursor on a name to find its references")
+            return
+        line, column, name = found
+        self._flush_lsp()
+        self.lsp.references(self.path, line, column,
+                            lambda result: self.references_found.emit(name, lsp_mod.locations(result)))
+
+    def rename_symbol(self):
+        if self.lsp is None:
+            return
+        found = self._name_at_cursor()
+        if found is None:
+            self._update_status("put the cursor on a name to rename it")
+            return
+        line, column, name = found
+        new, ok = QInputDialog.getText(self, "Rename Symbol", f"Rename '{name}' everywhere it is used, to:",
+                                       QLineEdit.Normal, name)
+        new = new.strip()
+        if not ok or not new or new == name:
+            return
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", new):
+            QMessageBox.warning(self, "Rename Symbol", f"'{new}' isn't a valid Fortran name.")
+            return
+        self._flush_lsp()
+
+        def answered(result):
+            edits = lsp_mod.workspace_edits(result)
+            if not edits:
+                self._update_status(f"'{name}' can't be renamed (fortls found nothing to change)")
+                return
+            self.rename_ready.emit(name, new, edits)
+
+        self.lsp.rename(self.path, line, column, new, answered)
+
+    def apply_text_edits(self, edits):
+        """Apply language-server edits to the text as one Undo step."""
+        document = self.editor.document()
+        cursor = QTextCursor(document)
+        cursor.beginEditBlock()
+        for e in sorted(edits, key=lambda e: (e.line, e.column), reverse=True):
+            start, end = document.findBlockByNumber(e.line), document.findBlockByNumber(e.end_line)
+            if not start.isValid() or not end.isValid():
+                continue
+            cursor.setPosition(start.position() + min(e.column, start.length() - 1))
+            cursor.setPosition(end.position() + min(e.end_column, end.length() - 1), QTextCursor.KeepAnchor)
+            cursor.insertText(e.new_text)
+        cursor.endEditBlock()
 
     def close_down(self):
         """Before the tab is closed: stop background work."""

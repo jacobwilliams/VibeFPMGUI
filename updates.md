@@ -35,10 +35,9 @@ are done. Effort is a rough guess: small / medium / large.
 - [x] **fortls (Fortran language server, on conda-forge)** — hover
   information, Go to Definition (F12 / ⌘-click) with Back/Forward, an outline
   of the open file, and Go to Symbol in Project (⌘T).
-- [ ] **fortls, part 2** — completion while typing, argument hints in calls
+- [x] **fortls, part 2** — completion while typing, argument hints in calls
   (signature help), Find References (results in a bottom tab), and Rename
-  Symbol with a preview of the files it changes. *(medium; the client is in
-  place)*
+  Symbol with a preview of the files it changes.
 - [x] **fprettify (on conda-forge)** — Format File. *(Format Selection not done)*
 - [ ] **Search the whole project** — search across the project and its
   downloaded dependencies; results open in the editor.

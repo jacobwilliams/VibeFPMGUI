@@ -23,6 +23,7 @@ import re
 import shutil
 from collections.abc import Callable
 from pathlib import Path
+from typing import NamedTuple
 
 from qtpy.QtCore import QObject, QProcess, QUrl, Signal
 
@@ -83,7 +84,9 @@ def source_dirs(graph: m.DependencyGraph | None, project_dir: Path) -> list[str]
 
 def server_args(graph: m.DependencyGraph | None, project_dir: Path) -> list[str]:
     args = ["--disable_autoupdate",  # it would otherwise ask PyPI for updates
-            "--hover_signature"]
+            "--hover_signature",
+            "--use_signature_help",    # complete names only; arguments are hinted on "("
+            "--lowercase_intrinsics"]  # complete "size", not "SIZE"
     if not has_config(project_dir):
         args += ["--source_dirs", *source_dirs(graph, project_dir)]
     return args
@@ -131,6 +134,7 @@ class LspClient(QObject):
     """One fortls process for the open project."""
 
     stopped = Signal(str)  # the server exited on its own (with why)
+    message = Signal(str)  # something the server wants the user to know
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -257,7 +261,11 @@ class LspClient(QObject):
         if "method" in message:
             if "id" in message:  # a request from the server: we don't support any
                 self._send({"jsonrpc": "2.0", "id": message["id"], "result": None})
-            return  # notifications (diagnostics, logs) aren't used
+            elif message["method"] == "window/showMessage":  # e.g. why a rename failed
+                text = (message.get("params") or {}).get("message")
+                if text:
+                    self.message.emit(str(text))
+            return  # other notifications (diagnostics, logs) aren't used
         callback = self._callbacks.pop(message.get("id"), None)
         if callback is not None:
             try:
@@ -276,6 +284,9 @@ class LspClient(QObject):
         self._versions[uri] = 1
         self.notify("textDocument/didOpen", {"textDocument": {
             "uri": uri, "languageId": "fortran", "version": 1, "text": text}})
+        # fortls reads the file from disk on didOpen; send the editor's text
+        # too, in case it has unsaved changes.
+        self.change_document(path, text)
 
     def change_document(self, path: Path, text: str):
         uri = to_uri(path)
@@ -288,8 +299,13 @@ class LspClient(QObject):
             "contentChanges": [{"text": text}]})
 
     def save_document(self, path: Path):
-        if to_uri(path) in self._versions:
-            self.notify("textDocument/didSave", {"textDocument": {"uri": to_uri(path)}})
+        self.notify("textDocument/didSave", {"textDocument": {"uri": to_uri(path)}})
+
+    def file_changed_on_disk(self, path: Path):
+        """A file that isn't open was rewritten (e.g. by Rename): fortls
+        re-reads a file from disk when told it was saved."""
+        if to_uri(path) not in self._versions:
+            self.save_document(path)
 
     def close_document(self, path: Path):
         uri = to_uri(path)
@@ -315,6 +331,21 @@ class LspClient(QObject):
 
     def workspace_symbols(self, query: str, callback: Callable) -> bool:
         return self.request("workspace/symbol", {"query": query}, callback)
+
+    def completion(self, path: Path, line: int, column: int, callback: Callable) -> bool:
+        return self.request("textDocument/completion", self._at(path, line, column), callback)
+
+    def signature_help(self, path: Path, line: int, column: int, callback: Callable) -> bool:
+        return self.request("textDocument/signatureHelp", self._at(path, line, column), callback)
+
+    def references(self, path: Path, line: int, column: int, callback: Callable) -> bool:
+        return self.request("textDocument/references",
+                            {**self._at(path, line, column), "context": {"includeDeclaration": True}},
+                            callback)
+
+    def rename(self, path: Path, line: int, column: int, new_name: str, callback: Callable) -> bool:
+        return self.request("textDocument/rename",
+                            {**self._at(path, line, column), "newName": new_name}, callback)
 
 
 def outline(symbols, line_text: Callable[[int], str] | None = None) -> list[tuple[int, str, str, int, int]]:
@@ -347,3 +378,236 @@ def outline(symbols, line_text: Callable[[int], str] | None = None) -> list[tupl
     visit(symbols, 0, {})
     rows.sort(key=lambda r: (r[3], r[0]))
     return rows
+
+
+# ------------------------------------------------------------- completion
+# LSP CompletionItemKind numbers -> words.
+COMPLETION_KINDS = {1: "text", 2: "method", 3: "function", 4: "constructor", 5: "component",
+                    6: "variable", 7: "type", 8: "interface", 9: "module", 10: "property",
+                    13: "enum", 14: "keyword", 15: "snippet", 20: "enumerator", 21: "constant",
+                    22: "type", 25: "type parameter"}
+
+
+class Completion(NamedTuple):
+    label: str
+    insert: str   # the text to insert (snippet placeholders removed)
+    kind: str
+    detail: str
+    doc: str      # markdown (fortls: the declaration and doc comment)
+
+
+def snippet_text(text: str) -> str:
+    """A snippet ("foo(${1:x}, $2)$0") as plain text ("foo(x, )")."""
+    text = re.sub(r"\$\{\d+:([^}]*)\}", r"\1", text)
+    text = re.sub(r"\$\{\d+\}|\$\d+", "", text)
+    return text.replace("\\$", "$").replace("\\}", "}")
+
+
+def completions(result) -> list[Completion]:
+    items = result.get("items", []) if isinstance(result, dict) else result or []
+    out = []
+    for item in items:
+        if not isinstance(item, dict) or not item.get("label"):
+            continue
+        insert = item.get("insertText") or item.get("label")
+        edit = item.get("textEdit")
+        if isinstance(edit, dict) and edit.get("newText"):
+            insert = edit["newText"]
+        if item.get("insertTextFormat") == 2:
+            insert = snippet_text(insert)
+        doc = item.get("documentation") or ""
+        if isinstance(doc, dict):
+            doc = doc.get("value", "")
+        out.append(Completion(str(item["label"]), insert, COMPLETION_KINDS.get(item.get("kind"), ""),
+                              str(item.get("detail") or ""), str(doc)))
+    return out
+
+
+def in_comment_or_string(line_text: str, column: int) -> bool:
+    """Is ``column`` of a line inside a "!" comment or a quoted string?"""
+    quote = None
+    for ch in line_text[:column]:
+        if quote:
+            if ch == quote:
+                quote = None
+        elif ch in "'\"":
+            quote = ch
+        elif ch == "!":
+            return True
+    return quote is not None
+
+
+# --------------------------------------------------------- signature help
+def signature_html(result, active_hint: int | None = None) -> str:
+    """signatureHelp answer -> tooltip HTML: the call with the current
+    argument in bold, then that argument's declaration and doc comment."""
+    if not isinstance(result, dict) or not result.get("signatures"):
+        return ""
+    signatures = result["signatures"]
+    sig = signatures[min(int(result.get("activeSignature") or 0), len(signatures) - 1)]
+    params = sig.get("parameters") or []
+    active = sig.get("activeParameter", result.get("activeParameter"))
+    if active is None:
+        active = active_hint
+    label = str(sig.get("label", ""))
+    shown = html.escape(label)
+    doc = ""
+    if active is not None and 0 <= int(active) < len(params):
+        param = params[int(active)]
+        name = param.get("label")
+        if isinstance(name, list) and len(name) == 2:  # [start, end] offsets
+            start, end = name
+            shown = (html.escape(label[:start]) + "<b><u>" + html.escape(label[start:end]) + "</u></b>"
+                     + html.escape(label[end:]))
+        elif isinstance(name, str):
+            # The argument's name inside the parentheses (not the routine's name).
+            open_paren = label.find("(")
+            match = re.search(rf"\b{re.escape(name)}\b", label[open_paren + 1:]) if open_paren >= 0 else None
+            if match:
+                start, end = open_paren + 1 + match.start(), open_paren + 1 + match.end()
+                shown = (html.escape(label[:start]) + "<b><u>" + html.escape(label[start:end]) + "</u></b>"
+                         + html.escape(label[end:]))
+        doc = hover_html(param.get("documentation") or "")
+    return f"<pre style='margin:0'>{shown}</pre>" + doc
+
+
+def argument_index(text_before: str) -> int | None:
+    """Which argument (0-based) the cursor is in, from the text before it
+    on the line: the commas at the level of the innermost open "(" (None if
+    the cursor isn't inside parentheses)."""
+    depth, commas, quote = 0, 0, None
+    for ch in reversed(text_before):
+        if quote:
+            if ch == quote:
+                quote = None
+            continue
+        if ch in "'\"":
+            quote = ch
+        elif ch in ")]":
+            depth += 1
+        elif ch in "([":
+            if depth == 0:
+                return commas if ch == "(" else None
+            depth -= 1
+        elif ch == "," and depth == 0:
+            commas += 1
+    return None
+
+
+# ------------------------------------------------------- references / rename
+class TextEdit(NamedTuple):
+    line: int        # 0-based, as in LSP
+    column: int
+    end_line: int
+    end_column: int
+    new_text: str
+
+
+def locations(result) -> list[tuple[Path, int, int, int]]:
+    """references answer -> [(file, 1-based line, start column, end column)]."""
+    out = []
+    for loc in result or []:
+        try:
+            rng = loc["range"]
+            out.append((from_uri(loc["uri"]), rng["start"]["line"] + 1, rng["start"]["character"],
+                        rng["end"]["character"] if rng["end"]["line"] == rng["start"]["line"]
+                        else rng["start"]["character"]))
+        except (KeyError, TypeError):
+            continue
+    return sorted(set(out), key=lambda r: (str(r[0]), r[1], r[2]))
+
+
+def workspace_edits(result) -> dict[Path, list[TextEdit]]:
+    """rename answer (a WorkspaceEdit) -> {file: [edits]}."""
+    if not isinstance(result, dict):
+        return {}
+    pairs = list((result.get("changes") or {}).items())
+    for change in result.get("documentChanges") or []:
+        if isinstance(change, dict) and "textDocument" in change:
+            pairs.append((change["textDocument"]["uri"], change.get("edits", [])))
+    out: dict[Path, list[TextEdit]] = {}
+    for uri, edits in pairs:
+        for e in edits or []:
+            try:
+                r = e["range"]
+                out.setdefault(from_uri(uri), []).append(TextEdit(
+                    r["start"]["line"], r["start"]["character"], r["end"]["line"], r["end"]["character"],
+                    e["newText"]))
+            except (KeyError, TypeError):
+                continue
+    return out
+
+
+def apply_edits(text: str, edits: list[TextEdit]) -> str:
+    """Apply LSP text edits to a text ("\\n" line ends), last first so the
+    earlier positions stay valid."""
+    lines = text.split("\n")
+    starts = [0]
+    for line in lines:
+        starts.append(starts[-1] + len(line) + 1)
+
+    def offset(line: int, column: int) -> int:
+        line = min(max(line, 0), len(lines) - 1)
+        return starts[line] + min(column, len(lines[line]))
+
+    for e in sorted(edits, key=lambda e: (e.line, e.column), reverse=True):
+        text = text[:offset(e.line, e.column)] + e.new_text + text[offset(e.end_line, e.end_column):]
+    return text
+
+
+def _code_spans(line: str) -> list[tuple[int, int]]:
+    """The parts of a line that are code: not in a string or a "!" comment."""
+    spans, start, quote = [], 0, None
+    for i, ch in enumerate(line):
+        if quote:
+            if ch == quote:
+                quote, start = None, i + 1
+        elif ch in "'\"":
+            spans.append((start, i))
+            quote = ch
+        elif ch == "!":
+            spans.append((start, i))
+            return spans
+    if quote is None:
+        spans.append((start, len(line)))
+    return spans
+
+
+def add_result_variable_edits(edits: dict[Path, list[TextEdit]], old: str, new: str,
+                              file_text: Callable[[Path], str]) -> dict[Path, list[TextEdit]]:
+    """fortls's rename misses a function's result variable: in a function
+    without a ``result(...)`` clause, ``old = ...`` inside the body also
+    names the function and must be renamed too. Adds those edits."""
+    header = re.compile(rf"\bfunction\s+{re.escape(old)}\s*\(", re.IGNORECASE)
+    word = re.compile(rf"\b{re.escape(old)}\b", re.IGNORECASE)
+    end = re.compile(r"^\s*(end\s*(function\b|$)|contains\b)", re.IGNORECASE)
+    out = {}
+    for path, file_edits in edits.items():
+        try:
+            lines = file_text(path).split("\n")
+        except OSError:
+            out[path] = file_edits
+            continue
+        have = {(e.line, e.column) for e in file_edits}
+        added = list(file_edits)
+        for i, line in enumerate(lines):
+            code = "".join(line[a:b] for a, b in _code_spans(line))
+            if not header.search(code):
+                continue
+            # The whole statement (it may continue over "&" lines).
+            statement, j = code, i
+            while statement.rstrip().endswith("&") and j + 1 < len(lines):
+                j += 1
+                statement += "".join(lines[j][a:b] for a, b in _code_spans(lines[j]))
+            if re.search(r"\bresult\s*\(", statement, re.IGNORECASE):
+                continue  # the result has its own name
+            for k in range(j + 1, len(lines)):
+                if end.match(lines[k]):
+                    break
+                for a, b in _code_spans(lines[k]):
+                    for match in word.finditer(lines[k], a, b):
+                        if (k, match.start()) not in have:
+                            have.add((k, match.start()))
+                            added.append(TextEdit(k, match.start(), k, match.end(), new))
+        out[path] = added
+    return out

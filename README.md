@@ -90,6 +90,24 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
     and procedures, follows the cursor, and jumps to the one you pick.
   * *Edit → Go to Symbol in Project…* (⌘T) finds a module, type or
     procedure by name in the project and its dependencies.
+  * Completion: after two letters of a name (or a `%`, for a derived
+    type's components) a list of matching names appears — your procedures,
+    variables and modules, those of the dependencies, and intrinsics — with
+    each one's type below the list. ↑/↓ choose, Enter or Tab inserts, Esc
+    closes; *Show Completions* (⌃Space; Ctrl+Space elsewhere) asks at any
+    point. Nothing pops up inside comments or strings.
+  * Argument hints: typing `(` or `,` in a call shows the routine's
+    arguments with the current one underlined, and that argument's
+    declaration and documentation.
+  * *Find References* (⇧F12) lists every use of the name at the cursor in
+    the *References* tab, grouped by file; click one to go there.
+  * *Rename Symbol…* (F2) renames a module, procedure, type or variable
+    everywhere it is used, after a preview of every file and line it will
+    change. Files open in the editor are changed there (unsaved; Undo
+    reverts), other files are saved straight away. Files in dependencies
+    are left unticked in the preview. (fortls misses a function's result
+    variable — `mean = …` inside `function mean` — so the GUI renames that
+    too.)
 
   Unless the project has its own fortls settings (`.fortlsrc`,
   `.fortls.json` or `.fortls`), fortls indexes only the fpm folders (`src`,

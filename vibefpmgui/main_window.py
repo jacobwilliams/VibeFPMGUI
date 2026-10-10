@@ -84,6 +84,8 @@ from .graph_view import (
 from .highlighter import DARK_STYLE, LIGHT_STYLE, PygmentsHighlighter, is_dark
 from .icons import app_icon, make_icon
 from .project_tree import ProjectTree, reveal_in_file_manager
+from .references_panel import ReferencesPanel
+from .rename_dialog import RenamePreviewDialog
 from .review_monitor import ReviewMonitor
 from .run_monitor import RunMonitor
 from .symbol_search import SymbolSearchDialog
@@ -117,6 +119,7 @@ class MainWindow(QMainWindow):
         self.settings = make_settings()
         self.lsp_client = lsp.LspClient(self)  # fortls, for the editor (see _update_language_server)
         self.lsp_client.stopped.connect(self._language_server_stopped)
+        self.lsp_client.message.connect(lambda text: self.statusBar().showMessage(f"fortls: {text}", 8000))
         self.manifest_path: Path | None = None
         self.graph: m.DependencyGraph | None = None
         self.process: QProcess | None = None
@@ -426,6 +429,9 @@ class MainWindow(QMainWindow):
         self.review_monitor = ReviewMonitor()
         self.review_monitor.finding_selected.connect(self._go_to_finding)
         self.monitor_tabs.addTab(self.review_monitor, "Review")
+        self.references_panel = ReferencesPanel()
+        self.references_panel.open_requested.connect(self.navigate_to)
+        self.monitor_tabs.addTab(self.references_panel, "References")
         self.bottom_split = QSplitter(Qt.Horizontal)
         self.bottom_split.addWidget(self.monitor_tabs)
         self.bottom_split.addWidget(console_box)
@@ -1187,6 +1193,84 @@ class MainWindow(QMainWindow):
         dialog.chosen.connect(self.navigate_to)
         dialog.exec()
 
+    def _open_editor_for(self, path: Path) -> EditorTab | None:
+        path = path.resolve()
+        return next((e for e in self.editors() if e.path == path), None)
+
+    @staticmethod
+    def _read_source(path: Path) -> tuple[str, str, str]:
+        """(text with "\\n" line ends, encoding, original line end) of a file."""
+        raw = path.read_bytes()
+        try:
+            text, encoding = raw.decode("utf-8"), "utf-8"
+        except UnicodeDecodeError:
+            text, encoding = raw.decode("latin-1"), "latin-1"
+        newline = "\r\n" if "\r\n" in text else "\n"
+        return text.replace("\r\n", "\n"), encoding, newline
+
+    def _file_text(self, path: Path) -> str:
+        """A file's current text: the editor's (maybe unsaved) if it's open."""
+        editor = self._open_editor_for(path)
+        if editor is not None:
+            return editor.editor.toPlainText()
+        return self._read_source(path)[0]
+
+    def _show_references(self, name: str, results: list):
+        cache: dict[Path, list[str]] = {}
+
+        def line_text(path: Path, line: int) -> str:
+            if path not in cache:
+                try:
+                    cache[path] = self._file_text(path).split("\n")
+                except OSError:
+                    cache[path] = []
+            lines = cache[path]
+            return lines[line - 1] if 0 < line <= len(lines) else ""
+
+        self.references_panel.show_results(name, results, line_text,
+                                           self.manifest_path.parent if self.manifest_path else None,
+                                           self._mono_font())
+        self.monitor_tabs.setCurrentWidget(self.references_panel)
+        self.statusBar().showMessage(f"{len(results)} reference{'s' * (len(results) != 1)} to {name}", 5000)
+
+    def _preview_rename(self, old: str, new: str, edits: dict):
+        edits = lsp.add_result_variable_edits(edits, old, new, self._file_text)
+        open_files = {e.path for e in self.editors()}
+        dialog = RenamePreviewDialog(old, new, edits, self._file_text, open_files,
+                                     self.manifest_path.parent if self.manifest_path else None,
+                                     self._mono_font(), self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        changed_open, written, failed, places = 0, 0, [], 0
+        for path in dialog.selected():
+            file_edits = edits.get(path, [])
+            editor = self._open_editor_for(path)
+            if editor is not None:
+                editor.apply_text_edits(file_edits)  # unsaved; Undo reverts it
+                changed_open += 1
+            else:
+                try:
+                    text, encoding, newline = self._read_source(path)
+                    text = lsp.apply_edits(text, file_edits)
+                    path.write_bytes(text.replace("\n", newline).encode(encoding, errors="replace"))
+                except OSError as exc:
+                    failed.append(f"{path}: {exc}")
+                    continue
+                self.lsp_client.file_changed_on_disk(path)
+                written += 1
+            places += len(file_edits)
+        if failed:
+            QMessageBox.warning(self, "Rename Symbol", "Some files could not be changed:\n\n"
+                                + "\n".join(failed))
+        parts = []
+        if written:
+            parts.append(f"{written} file{'s' * (written != 1)} saved")
+        if changed_open:
+            parts.append(f"{changed_open} open file{'s' * (changed_open != 1)} changed (not saved yet)")
+        self.statusBar().showMessage(f"Renamed {old} → {new} in {places} place{'s' * (places != 1)}"
+                                     + (f": {', '.join(parts)}" if parts else ""), 10000)
+        self.project_tree.refresh()
+
     def _location(self) -> tuple[str, int, int] | None:
         editor = self.current_editor()
         if editor is None:
@@ -1248,6 +1332,8 @@ class MainWindow(QMainWindow):
             editor.path_changed.connect(self._update_editor_actions)
             editor.saved.connect(self._editor_saved)
             editor.navigate_requested.connect(self.navigate_to)
+            editor.references_found.connect(self._show_references)
+            editor.rename_ready.connect(self._preview_rename)
             editor.attach_lsp(self.lsp_client)
             self.tabs.addTab(editor, file.name)
             self._update_editor_title(editor)
@@ -1308,7 +1394,9 @@ class MainWindow(QMainWindow):
         editor = self.current_editor()
         self.format_action.setEnabled(editor is not None and formatter.can_format(editor.path)
                                       and formatter.executable() is not None)
-        self.definition_action.setEnabled(editor is not None and editor.lsp is not None)
+        for action in (self.definition_action, self.references_action, self.rename_action,
+                       self.complete_action):
+            action.setEnabled(editor is not None and editor.lsp is not None)
         self.symbol_action.setEnabled(self.lsp_client.is_running())
         self.back_action.setEnabled(bool(self._back))
         self.forward_action.setEnabled(bool(self._forward))
@@ -1388,6 +1476,17 @@ class MainWindow(QMainWindow):
         self.definition_action = editor_action("Go to Definition", "F12", lambda e: e.go_to_definition())
         self.definition_action.setStatusTip("Open the definition of the name at the cursor "
                                             "(or ⌘/Ctrl-click the name)")
+        self.references_action = editor_action("Find References", "Shift+F12", lambda e: e.find_references())
+        self.references_action.setStatusTip("List every use of the name at the cursor (References tab)")
+        self.rename_action = editor_action("Rename Symbol…", "F2", lambda e: e.rename_symbol())
+        self.rename_action.setStatusTip("Rename the name at the cursor everywhere it is used "
+                                        "(with a preview)")
+        # ⌃Space on macOS (⌘Space is Spotlight), Ctrl+Space elsewhere.
+        self.complete_action = editor_action("Show Completions",
+                                             "Meta+Space" if sys.platform == "darwin" else "Ctrl+Space",
+                                             lambda e: e.request_completion(manual=True))
+        self.complete_action.setStatusTip("Offer completions for the name being typed "
+                                          "(they also appear by themselves as you type)")
         self.symbol_action = menu.addAction("Go to Symbol in Project…")
         self.symbol_action.setShortcut(QKeySequence("Ctrl+T"))
         self.symbol_action.setStatusTip("Find a module, type or procedure in the project "
