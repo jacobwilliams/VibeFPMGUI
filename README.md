@@ -19,6 +19,9 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   overall progress bar. Warnings are read from fpm's per-object `.o.log`
   files, since fpm only prints compiler output when a compile fails. Hover a
   status for the compiler messages; double-click a row to open the source.
+* The Build, Tests and Review tables sort by clicking a column header
+  (again to reverse, a third time for the original order); the order is
+  kept while a build or test run updates them.
 * Test progress: **Test** first builds and lists the tests (`fpm test
   --list`), then runs them through a small wrapper given to fpm's `--runner`
   so each test's start, end and exit code are known. The *Tests* tab shows

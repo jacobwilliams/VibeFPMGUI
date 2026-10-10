@@ -135,6 +135,7 @@ def target_kind(name: str) -> str:
 class Target:
     name: str
     row: int
+    seq: int = 0  # original (start) order, for "unsorted"
     status: str = COMPILING
     started: float = field(default_factory=time.monotonic)
     finished: float | None = None
@@ -343,6 +344,91 @@ class RowDelegate(QStyledItemDelegate):
         p.drawText(r.adjusted(0, 0, -12, 0), Qt.AlignVCenter | Qt.AlignRight, f"{elapsed:.1f} s")
 
 
+class SortableTable:
+    """Click-to-sort for the custom-drawn status tables.
+
+    The delegates paint row *n* from ``rows()[n]``, so instead of Qt's own
+    sorting (which would reorder the items but not our list) the list itself
+    is sorted and every row's items are rewritten. Clicking a header cycles
+    through: sorted, reversed, original order. The order is kept while rows
+    are added or change (re-sorted a few times a second at most).
+
+    Subclasses provide ``table``, ``COLUMNS``, ``rows()``, ``_sync_row(i)``
+    and ``_reapply_filter()``, and may override ``_selected_object`` /
+    ``_restore_selection`` to keep the selection on the same object.
+    """
+
+    def _init_sorting(self, keys: dict, descending_first: set[int] = frozenset()):
+        self._sort_keys = keys
+        self._sort_desc_first = set(descending_first)
+        self.sort_column = -1
+        self.sort_descending = False
+        self._sort_clicks = 0
+        header = self.table.horizontalHeader()
+        header.setSectionsClickable(True)
+        header.sectionClicked.connect(self._header_clicked)
+        self._sort_timer = QTimer(self)
+        self._sort_timer.setSingleShot(True)
+        self._sort_timer.setInterval(150)
+        self._sort_timer.timeout.connect(self.apply_sort)
+        for column in keys:
+            item = self.table.horizontalHeaderItem(column)
+            if item is not None:
+                item.setToolTip("Click to sort (again to reverse, a third time for the original order)")
+
+    def _header_clicked(self, column: int):
+        if column not in self._sort_keys:
+            return
+        if column != self.sort_column:
+            self.sort_column = column
+            self.sort_descending = column in self._sort_desc_first
+            self._sort_clicks = 1
+        elif self._sort_clicks == 1:
+            self.sort_descending = not self.sort_descending
+            self._sort_clicks = 2
+        else:
+            self.sort_column = -1  # back to the original order
+            self._sort_clicks = 0
+        self.apply_sort()
+
+    def schedule_sort(self):
+        """Call when rows were added or changed; re-sorts shortly if sorted."""
+        if self.sort_column >= 0 and not self._sort_timer.isActive():
+            self._sort_timer.start()
+
+    def apply_sort(self):
+        rows = self.rows()
+        selected = self._selected_object()
+        rows.sort(key=lambda o: getattr(o, "seq", 0))  # stable base: original order
+        if self.sort_column >= 0:
+            rows.sort(key=self._sort_keys[self.sort_column], reverse=self.sort_descending)
+        for index, obj in enumerate(rows):
+            if hasattr(obj, "row"):
+                obj.row = index
+            self._sync_row(index)
+        self._restore_selection(selected)
+        self._reapply_filter()
+        self._update_sort_header()
+        self.table.viewport().update()
+
+    def _update_sort_header(self):
+        labels = []
+        for column, name in enumerate(self.COLUMNS):
+            if column == self.sort_column:
+                name += " ▼" if self.sort_descending else " ▲"
+            labels.append(name)
+        self.table.setHorizontalHeaderLabels(labels)
+
+    def _selected_object(self):
+        row = getattr(self, "selected_row", -1)
+        rows = self.rows()
+        return rows[row] if 0 <= row < len(rows) else None
+
+    def _restore_selection(self, obj):
+        if hasattr(self, "selected_row"):
+            self.selected_row = self.rows().index(obj) if obj is not None else -1
+
+
 class ProgressLine(QWidget):
     """Thin rounded progress bar with a gradient fill. In "busy" mode
     (:meth:`set_busy`) it shows a segment sliding back and forth instead of
@@ -434,7 +520,10 @@ class ProgressLine(QWidget):
 
 
 # ------------------------------------------------------------------ widget
-class BuildMonitor(QWidget):
+STATUS_SORT = {FAILED: 0, WARNING: 1, COMPILING: 2, ABORTED: 3, DONE: 4}
+
+
+class BuildMonitor(SortableTable, QWidget):
     """Per-file compile status: header with filter chips, a slim progress bar
     and a custom-drawn table."""
 
@@ -524,6 +613,12 @@ class BuildMonitor(QWidget):
             hh.setSectionResizeMode(column, QHeaderView.Fixed)
         self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._fit_columns()
+        self._init_sorting({
+            0: lambda t: t.name.lower(),
+            1: lambda t: (t.package.lower(), t.name.lower()),
+            2: lambda t: (STATUS_SORT.get(t.status, 9), -t.warnings),
+            3: lambda t: t.elapsed(),
+        }, descending_first={3})
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 10, 14, 6)
@@ -765,7 +860,7 @@ class BuildMonitor(QWidget):
     def _add(self, name: str) -> Target:
         row = self.table.rowCount()
         self.table.insertRow(row)
-        target = Target(name, row)
+        target = Target(name, row, seq=len(self.targets))
         self.targets.append(target)
         for column in range(len(self.COLUMNS)):
             self.table.setItem(row, column, QTableWidgetItem())
@@ -790,6 +885,7 @@ class BuildMonitor(QWidget):
         self._apply_filter(target)
         if not self.table.isRowHidden(row):
             self.table.scrollToItem(self.table.item(row, 0))
+        self.schedule_sort()
         return target
 
     def _set_owner(self, target: Target, package: str, path: Path):
@@ -817,6 +913,28 @@ class BuildMonitor(QWidget):
         self.table.item(target.row, 2).setText(status)
         self._apply_filter(target)
         self.table.viewport().update()
+        self.schedule_sort()
+
+    # SortableTable hooks
+    def rows(self) -> list[Target]:
+        return self.targets
+
+    def _sync_row(self, row: int):
+        """Rewrite a row's items (text, tooltips, data) from its target."""
+        t = self.targets[row]
+        file_item = self.table.item(row, 0)
+        file_item.setText(t.name)
+        file_item.setToolTip(str(t.path) if t.path else target_kind(t.name))
+        file_item.setData(Qt.UserRole, str(t.path) if t.path else None)
+        self.table.item(row, 1).setText(t.package)
+        status_item = self.table.item(row, 2)
+        status_item.setText(t.status)
+        status_item.setToolTip("")
+        self._update_tooltip(t)
+
+    def _reapply_filter(self):
+        for t in self.targets:
+            self._apply_filter(t)
 
     def _update_tooltip(self, target: Target):
         if target.messages:

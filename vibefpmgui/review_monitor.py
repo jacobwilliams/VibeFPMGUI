@@ -13,8 +13,8 @@ from qtpy.QtWidgets import (
 
 from .ai_review import CATEGORIES, Finding
 from .build_monitor import (
-    PALETTES, ROW_HEIGHT, ProgressLine, _tint, app_is_light, chip_stylesheet, panel_stylesheet,
-    scaled,
+    PALETTES, ROW_HEIGHT, ProgressLine, SortableTable, _tint, app_is_light, chip_stylesheet,
+    panel_stylesheet, scaled,
 )
 
 CATEGORY_COLORS = {"bug": "#e03131", "warning": "#f08c00", "performance": "#0c8599",
@@ -87,7 +87,11 @@ class FindingDelegate(QStyledItemDelegate):
         return fm.elidedText(text, Qt.ElideRight, rect.width() * lines * 0.9)
 
 
-class ReviewMonitor(QWidget):
+def _category_rank(category: str) -> int:
+    return CATEGORIES.index(category) if category in CATEGORIES else len(CATEGORIES)
+
+
+class ReviewMonitor(SortableTable, QWidget):
     """Findings table with chips, a progress line and the model's summary.
     Clicking a finding emits :attr:`finding_selected` with its line."""
 
@@ -155,6 +159,11 @@ class ReviewMonitor(QWidget):
         hh.setSectionResizeMode(0, QHeaderView.Fixed)
         hh.setSectionResizeMode(1, QHeaderView.Fixed)
         hh.setSectionResizeMode(2, QHeaderView.Stretch)
+        self._init_sorting({
+            0: lambda f: (f.line, f.end_line),
+            1: lambda f: (_category_rank(f.category), f.line),
+            2: lambda f: f.comment.lower(),
+        })
 
         self.summary = QLabel()
         self.summary.setWordWrap(True)
@@ -242,14 +251,15 @@ class ReviewMonitor(QWidget):
         self._status = "Reviewing"
 
     def set_findings(self, findings: list[Finding], summary: str):
-        self.findings = sorted(findings, key=lambda f: (f.line, CATEGORIES.index(f.category)
-                                                         if f.category in CATEGORIES else 9))
+        self.findings = sorted(findings, key=lambda f: (f.line, _category_rank(f.category)))
+        for seq, f in enumerate(self.findings):
+            f.seq = seq  # original order (by line), for "unsorted"
         self.table.setRowCount(len(self.findings))
-        for row, f in enumerate(self.findings):
+        for row in range(len(self.findings)):
             for column in range(len(self.COLUMNS)):
-                item = QTableWidgetItem()
-                item.setToolTip(f"Line {f.line}: {f.category}\n{f.comment}")
-                self.table.setItem(row, column, item)
+                self.table.setItem(row, column, QTableWidgetItem())
+            self._sync_row(row)
+        self.apply_sort()  # keep the user's chosen order
         self._update_chips()
         self.summary.setText(f"<b>Summary:</b> {summary}" if summary else "")
         self.show_message(None if self.findings else
@@ -297,6 +307,18 @@ class ReviewMonitor(QWidget):
 
     def _tick(self):
         self._update_label()  # elapsed time and token count
+
+    # SortableTable hooks
+    def rows(self) -> list[Finding]:
+        return self.findings
+
+    def _sync_row(self, row: int):
+        f = self.findings[row]
+        for column in range(len(self.COLUMNS)):
+            self.table.item(row, column).setToolTip(f"Line {f.line}: {f.category}\n{f.comment}")
+
+    def _reapply_filter(self):
+        self.set_filter(self.filter_category)
 
     def _row_clicked(self, row: int, _column: int):
         if row < len(self.findings):

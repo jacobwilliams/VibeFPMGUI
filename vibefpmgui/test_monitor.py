@@ -26,7 +26,8 @@ from qtpy.QtWidgets import (
 )
 
 from .build_monitor import (
-    ABORTED, COMPILING, DONE, FAILED, PALETTES, ROW_HEIGHT, ProgressLine, _tint, app_is_light,
+    ABORTED, COMPILING, DONE, FAILED, PALETTES, ROW_HEIGHT, ProgressLine, SortableTable, _tint,
+    app_is_light,
     chip_stylesheet, panel_stylesheet, scaled,
 )
 
@@ -66,6 +67,7 @@ class TestCase:
     name: str
     row: int
     expected: float | None = None  # duration last time, if known
+    seq: int = 0  # original (listed) order, for "unsorted"
     status: str = QUEUED
     started: float | None = None
     finished: float | None = None
@@ -198,7 +200,10 @@ class TestDelegate(QStyledItemDelegate):
         p.drawText(r.adjusted(0, 0, -12, 0), Qt.AlignVCenter | Qt.AlignRight, f"{elapsed:.1f} s")
 
 
-class TestMonitor(QWidget):
+STATUS_SORT = {FAILED_T: 0, RUNNING: 1, QUEUED: 2, NOT_RUN: 3, PASSED: 4}
+
+
+class TestMonitor(SortableTable, QWidget):
     """Header with filter chips, progress bar and a table of tests. Clicking a
     test emits :attr:`test_selected` with its name ("" to show all output)."""
 
@@ -277,6 +282,11 @@ class TestMonitor(QWidget):
         for column in (1, 2):
             hh.setSectionResizeMode(column, QHeaderView.Fixed)
         self._fit_columns()
+        self._init_sorting({
+            0: lambda t: t.name.lower(),
+            1: lambda t: STATUS_SORT.get(t.status, 9),
+            2: lambda t: t.elapsed() if t.status != QUEUED else (t.expected or 0.0),
+        }, descending_first={2})
 
         self.empty = QLabel()
         self.empty.setAlignment(Qt.AlignCenter)
@@ -386,6 +396,7 @@ class TestMonitor(QWidget):
         self.progress.set(1.0 if self._result in ("ok", "none") else self.fraction(), state)
         self._update_header()
         self.table.viewport().update()
+        self.schedule_sort()
 
     def durations(self) -> dict[str, float]:
         """Measured durations of the tests that ran to completion."""
@@ -427,6 +438,7 @@ class TestMonitor(QWidget):
         self._apply_filter(test)
         self._update_header()
         self.table.viewport().update()
+        self.schedule_sort()
         return before if before.strip() else None
 
     # ------------------------------------------------------------- helpers
@@ -437,12 +449,32 @@ class TestMonitor(QWidget):
             self.table.setItem(row, column, QTableWidgetItem())
         self.table.item(row, 0).setText(name)
         self.table.item(row, 0).setToolTip("Click to show only this test's output")
-        test = TestCase(name, row, expected)
+        test = TestCase(name, row, expected, seq=len(self.tests))
         self.tests.append(test)
         self.by_name[name] = test
         self._apply_filter(test)
         self._show_empty(None)
+        self.schedule_sort()
         return test
+
+    # SortableTable hooks (the selection is kept by name, so nothing to remap)
+    def rows(self) -> list[TestCase]:
+        return self.tests
+
+    def _sync_row(self, row: int):
+        item = self.table.item(row, 0)
+        item.setText(self.tests[row].name)
+        item.setToolTip("Click to show only this test's output")
+
+    def _reapply_filter(self):
+        for t in self.tests:
+            self._apply_filter(t)
+
+    def _selected_object(self):
+        return None
+
+    def _restore_selection(self, _obj):
+        pass
 
     def _expected(self) -> dict[str, float]:
         """Expected duration for every test (unknown ones get the median of
