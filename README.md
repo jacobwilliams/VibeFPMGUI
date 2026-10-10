@@ -189,6 +189,13 @@ pixi run ollama pull qwen2.5-coder:14b  # download another model
 pixi run ollama rm qwen2.5-coder:7b     # delete a model and free the space
 ```
 
+These talk to the Ollama server, so one must be running: either the one the
+GUI starts for a review, or `pixi run ollama serve` in another terminal
+(otherwise they fail with "could not connect to ollama"). Deleting a model
+removes its files from the models folder above; it can be downloaded again
+at any time. Deleting the model selected in *AI → Model* just means the GUI
+offers to download it again the next time you start a review.
+
 In the GUI, **AI → Model** lists the installed models and remembers your
 choice; **AI → Model → Other Model…** accepts any name from the
 [Ollama library](https://ollama.com/library) and offers to download it on
