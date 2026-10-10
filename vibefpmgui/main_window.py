@@ -8,7 +8,6 @@ import html
 import json
 import os
 import re
-import shlex
 import shutil
 import signal
 import subprocess
@@ -31,6 +30,7 @@ from . import manifest as m
 from .build_monitor import BuildMonitor, set_ui_scale
 from .test_monitor import MARKER_RE, TestMonitor, parse_test_list
 from . import ai_review as ai
+from .compat import join_args, quote_arg, set_windows_app_id, split_args
 from .editor import EditorTab, monospace_font
 from . import build_outputs as bo
 from .project_tree import ProjectTree, reveal_in_file_manager
@@ -694,7 +694,7 @@ class MainWindow(QMainWindow):
             return
         changed = bo.changed_folders(before, bo.snapshot(self.manifest_path.parent))
         flags = " ".join(x for x in (self.flag_edit.text().strip(),
-                                     " ".join(split_runner(shlex.split(self.extra_edit.text()))[0]))
+                                     " ".join(split_runner(split_args(self.extra_edit.text()))[0]))
                          if x)
         if changed:
             self._config_records().record_build(self._build_description(), flags, changed)
@@ -738,7 +738,7 @@ class MainWindow(QMainWindow):
         if self.process is not None or not self.manifest_path:
             return
         try:
-            args = shlex.split(self.runner_args_edit.text())
+            args = split_args(self.runner_args_edit.text())
         except ValueError as exc:
             QMessageBox.warning(self, "Invalid arguments", str(exc))
             return
@@ -757,8 +757,8 @@ class MainWindow(QMainWindow):
         self._process_label = Path(path).name
         self.show_all_output()
         rel = os.path.relpath(path, self.manifest_path.parent)
-        self._append(f"\n$ cd {shlex.quote(str(self.manifest_path.parent))}\n"
-                     f"$ {shlex.join([rel] + args)}\n", bold=True)
+        self._append(f"\n$ cd {quote_arg(str(self.manifest_path.parent))}\n"
+                     f"$ {join_args([rel] + args)}\n", bold=True)
         self.stop_action.setEnabled(True)
         self._set_project_enabled(True)
         self.statusBar().showMessage(f"Running {Path(path).name}…")
@@ -803,7 +803,7 @@ class MainWindow(QMainWindow):
         buttons.addStretch(1)
         copy = QPushButton("Copy")
         copy.setToolTip("Copy as one line")
-        copy.clicked.connect(lambda: (QApplication.clipboard().setText(shlex.join(args)),
+        copy.clicked.connect(lambda: (QApplication.clipboard().setText(join_args(args)),
                                       copy.setText("Copied")))
         close = QPushButton("Close")
         close.setDefault(True)
@@ -1100,13 +1100,13 @@ class MainWindow(QMainWindow):
             if self.verbose_check.isChecked():
                 args.append("--verbose")
             if sub[0] in ("run", "test") and self.target_edit.text().strip():
-                args += shlex.split(self.target_edit.text())
-            extra = shlex.split(self.extra_edit.text())
+                args += split_args(self.target_edit.text())
+            extra = split_args(self.extra_edit.text())
             if sub[0] == "test":
                 extra, _ = split_runner(extra)  # the test runner is handled by run_tests
             args += extra
             if program_args and sub[0] in ("run", "test") and self.runner_args_edit.text().strip():
-                args += ["--"] + shlex.split(self.runner_args_edit.text())
+                args += ["--"] + split_args(self.runner_args_edit.text())
         elif sub[0] == "update" and self.verbose_check.isChecked():
             args.append("--verbose")
         return args
@@ -1264,8 +1264,8 @@ class MainWindow(QMainWindow):
             # tests themselves start).
             self.monitor_tabs.setCurrentWidget(self.build_monitor)
 
-        self._append(f"\n$ cd {shlex.quote(str(self.manifest_path.parent))}\n"
-                     f"$ {shlex.join([program] + args)}\n", bold=True)
+        self._append(f"\n$ cd {quote_arg(str(self.manifest_path.parent))}\n"
+                     f"$ {join_args([program] + args)}\n", bold=True)
         self.stop_action.setEnabled(True)
         self._set_project_enabled(True)
         self.statusBar().showMessage(f"Running fpm {' '.join(sub)}…")
@@ -1407,7 +1407,7 @@ class MainWindow(QMainWindow):
         try:
             list_args = self.build_arguments(["test", "--list"], True, program_args=False)
             run_args = self.build_arguments(["test"], True)
-            _, inner_runner = split_runner(shlex.split(self.extra_edit.text()))
+            _, inner_runner = split_runner(split_args(self.extra_edit.text()))
         except ValueError as exc:
             QMessageBox.warning(self, "Invalid arguments", str(exc))
             return
@@ -1415,7 +1415,7 @@ class MainWindow(QMainWindow):
         # Our runner goes before the target names and any "-- program args".
         cut = run_args.index("--") if "--" in run_args else len(run_args)
         run_args = run_args[:cut] + ["--runner", runner] + run_args[cut:]
-        patterns = shlex.split(self.target_edit.text())
+        patterns = split_args(self.target_edit.text())
         self._test_args = (run_args, inner_runner, patterns)
         description = self._build_description()
         if inner_runner:
@@ -1871,13 +1871,14 @@ def runner_command() -> str:
     """The command fpm should put in front of each test executable."""
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_runner.py")
     parts = [sys.executable, "-I", script]
-    return subprocess.list2cmdline(parts) if os.name == "nt" else shlex.join(parts)
+    return join_args(parts)  # quoted for the platform's shell
 
 
 def main(argv: list[str] | None = None) -> int:
     import sys
 
     argv = sys.argv if argv is None else argv
+    set_windows_app_id()  # Windows: our own taskbar icon, not python.exe's
     app = QApplication.instance() or QApplication(argv)
     app.setApplicationName("VibeFPMGUI")
     app.setWindowIcon(app_icon())  # also the Dock icon on macOS

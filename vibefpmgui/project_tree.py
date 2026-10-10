@@ -22,6 +22,7 @@ from qtpy.QtWidgets import (
 
 from . import manifest as m
 from .build_monitor import SOURCE_EXTS
+from .compat import file_manager_name, reveal_label
 from .icons import badged_icon
 
 PATH_ROLE = Qt.UserRole + 1
@@ -308,7 +309,7 @@ class ProjectTree(QWidget):
 
     def _add_hidden(self, parent: QStandardItem, path: Path, kind: str, why: str, link: bool = False):
         """A greyed-out entry: listed, but folders can't be opened in the tree
-        (double-click shows them in Finder; files still open)."""
+        (double-click shows them in the file manager; files still open)."""
         child = QStandardItem(path.name)
         child.setData(str(path), PATH_ROLE)
         child.setData(kind, KIND_ROLE)
@@ -318,7 +319,8 @@ class ProjectTree(QWidget):
         if kind == "dir":
             child.setData(True, LOADED_ROLE)  # never filled, so no expand arrow
             child.setIcon(self._folder_icon)
-            action = "double-click to go there" if link else "double-click to show it in Finder"
+            action = ("double-click to go there" if link
+                      else f"double-click to show it in {file_manager_name()}")
             child.setToolTip(f"{why}\n{path}" if link else f"{why} ({action})\n{path}")
         else:
             child.setIcon(self._file_icon(path))
@@ -534,9 +536,7 @@ class ProjectTree(QWidget):
                 menu.addAction("Show Compile Command…",
                                lambda: self.compile_command_requested.emit(path))
         if path:
-            label = {"darwin": "Show in Finder", "win32": "Show in Explorer"}.get(
-                sys.platform, "Open Containing Folder")
-            menu.addAction(label, lambda: reveal_in_file_manager(path))
+            menu.addAction(reveal_label(), lambda: reveal_in_file_manager(path))
             menu.addAction("Copy Path", lambda: QApplication.clipboard().setText(path))
             menu.addSeparator()
         menu.addAction("Refresh", self.refresh)

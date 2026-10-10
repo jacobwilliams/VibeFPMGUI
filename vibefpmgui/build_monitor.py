@@ -44,10 +44,12 @@ from . import manifest as m
 
 PROGRESS_RE = re.compile(r"^\[\s*(\d+)%\]\s+(\S+)(?:\s+(done|failed)\.)?\s*$")
 # gfortran/gcc: "src/a.f90:3:15:" (message on later lines) or "a.c:3:5: error: ..."
-GNU_LOC_RE = re.compile(r"^(\S+?):(\d+):(?:(\d+):)?\s*(?:(fatal error|error|warning)\b:?\s*(.*))?$",
-                        re.IGNORECASE)
+# (An optional "C:" drive prefix, so Windows paths aren't cut at the drive colon.)
+GNU_LOC_RE = re.compile(r"^((?:[A-Za-z]:)?[^:\s]+?):(\d+):(?:(\d+):)?\s*"
+                        r"(?:(fatal error|error|warning)\b:?\s*(.*))?$", re.IGNORECASE)
 # Intel: "src/a.f90(3): error #5082: ..."
-INTEL_LOC_RE = re.compile(r"^(\S+?)\((\d+)\):\s*(error|warning|remark)\b[^:]*:\s*(.*)$", re.IGNORECASE)
+INTEL_LOC_RE = re.compile(r"^((?:[A-Za-z]:)?[^:\s(]+?)\((\d+)\):\s*(error|warning|remark)\b[^:]*:\s*(.*)$",
+                          re.IGNORECASE)
 GNU_SEVERITY_RE = re.compile(r"^(Fatal Error|Error|Warning):\s*(.*)$")
 FAILED_OBJECT_RE = re.compile(r'Compilation failed for object\s+"\s*(.+?)\s*"')
 UP_TO_DATE_RE = re.compile(r"Project is up to date")
@@ -816,7 +818,7 @@ class BuildMonitor(SortableTable, QWidget):
                 rel = os.path.relpath(path, self.project_dir)
             except ValueError:
                 continue
-            if log_name == rel.replace(os.sep, "_") + ".o.log":
+            if log_name == rel.replace("\\", "_").replace("/", "_") + ".o.log":
                 self._set_owner(target, package, path)
                 return
 

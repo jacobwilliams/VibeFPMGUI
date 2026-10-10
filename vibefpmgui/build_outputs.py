@@ -23,7 +23,6 @@ import os
 import re
 import shlex
 import shutil
-import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,6 +35,7 @@ from qtpy.QtWidgets import (
 )
 
 from .build_monitor import PALETTES, app_is_light
+from .compat import WINDOWS, quote_arg, reveal_label
 
 BUILD_DIR_RE = re.compile(r"^(?P<compiler>.+)_(?P<hash>[0-9A-F]{16})$")
 PROGRAM_KINDS = {"app": "program", "test": "test", "example": "example"}
@@ -177,17 +177,18 @@ def format_command(args: list[str]) -> str:
     """A shell-quoted command, one option per line for readability."""
     if not args:
         return ""
-    lines = [shlex.quote(args[0])]
+    lines = [quote_arg(args[0])]
     i = 1
     while i < len(args):
-        part = shlex.quote(args[i])
+        part = quote_arg(args[i])
         # Keep an option and its value together ("-o file", "-J dir").
         if args[i] in ("-o", "-J", "-I", "-c") and i + 1 < len(args):
-            part += " " + shlex.quote(args[i + 1])
+            part += " " + quote_arg(args[i + 1])
             i += 1
         lines.append(part)
         i += 1
-    return " \\\n    ".join(lines)
+    # Line continuation: "\" in POSIX shells, "^" in the Windows shell.
+    return f" {'^' if WINDOWS else chr(92)}\n    ".join(lines)
 
 
 # ------------------------------------------------------------------ records
@@ -366,8 +367,7 @@ class ConfigCard(QFrame):
             top.addWidget(pill)
         top.addStretch(1)
         reveal = QToolButton()
-        reveal.setText({"darwin": "Show in Finder", "win32": "Show in Explorer"}.get(
-            sys.platform, "Open Folder"))
+        reveal.setText(reveal_label())
         reveal.clicked.connect(lambda: self.reveal_requested.emit(str(config.folders[0].path)))
         delete = QToolButton()
         delete.setText("Delete…")

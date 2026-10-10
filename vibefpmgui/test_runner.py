@@ -31,7 +31,12 @@ def main(argv: list[str]) -> int:
     if name.lower().endswith(".exe"):
         name = name[:-4]
     inner = os.environ.get("VIBEFPM_INNER_RUNNER", "")
-    command = shlex.split(inner, posix=os.name != "nt") + argv
+    if os.name == "nt":  # backslashes are path separators there, not escapes
+        parts = shlex.split(inner, posix=False)
+        parts = [p[1:-1] if len(p) >= 2 and p[0] == p[-1] and p[0] in "\"'" else p for p in parts]
+    else:
+        parts = shlex.split(inner)
+    command = parts + argv
 
     # The test writes straight to our stdout, so flush our own text first.
     # The leading newline keeps the marker off a line the previous test left
