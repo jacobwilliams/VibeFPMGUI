@@ -16,12 +16,21 @@ import tomllib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 from qtpy.QtCore import QObject, Qt, QThread, QUrl, Signal, Slot
 from qtpy.QtGui import QColor, QDesktopServices
 from qtpy.QtWidgets import (
-    QAbstractItemView, QDialog, QHBoxLayout, QHeaderView, QLabel, QPushButton, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget,
+    QAbstractItemView,
+    QDialog,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
 )
 
 from . import manifest as m
@@ -103,7 +112,7 @@ def ls_remote(url: str) -> dict[str, str]:
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0")  # never wait for a password
     try:
         out = subprocess.run(["git", "ls-remote", url, "HEAD", "refs/heads/*", "refs/tags/*"],
-                             capture_output=True, text=True, timeout=LS_REMOTE_TIMEOUT, env=env)
+                             capture_output=True, text=True, timeout=LS_REMOTE_TIMEOUT, env=env, check=False)
     except FileNotFoundError:
         raise RuntimeError("git was not found on PATH")
     except subprocess.TimeoutExpired:
@@ -272,7 +281,7 @@ class UpdatesDialog(QDialog):
     update_tag_requested = Signal(object)   # DepCheck
     update_deps_requested = Signal()
 
-    COLUMNS = ["Dependency", "Requested", "Current", "Newest", "Status", ""]
+    COLUMNS: ClassVar[list[str]] = ["Dependency", "Requested", "Current", "Newest", "Status", ""]
 
     def __init__(self, checks: list[DepCheck], web_url, commit_url, compare_url, parent=None):
         super().__init__(parent)

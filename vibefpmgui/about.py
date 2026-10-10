@@ -21,7 +21,7 @@ PROJECT_URL = "https://github.com/jacobwilliams/VibeFPMGUI"
 def tool_version(command: list[str], timeout: float = 5) -> str:
     """First useful line of ``<tool> --version`` ("" if it can't be run)."""
     try:
-        out = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+        out = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
     except (OSError, subprocess.SubprocessError):
         return ""
     text = (out.stdout or out.stderr or "").strip()

@@ -13,15 +13,40 @@ from pathlib import Path
 
 from qtpy.QtCore import QFileSystemWatcher, QRect, QSize, Qt, QTimer, Signal
 from qtpy.QtGui import (
-    QColor, QFont, QFontDatabase, QPainter, QPalette, QTextCharFormat,
-    QTextCursor, QTextDocument, QTextFormat,
+    QColor,
+    QFont,
+    QFontDatabase,
+    QPainter,
+    QPalette,
+    QTextCharFormat,
+    QTextCursor,
+    QTextDocument,
+    QTextFormat,
 )
 from qtpy.QtWidgets import (
-    QApplication, QCheckBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
-    QMessageBox, QPlainTextEdit, QTextEdit, QToolButton, QToolTip, QVBoxLayout, QWidget,
+    QApplication,
+    QCheckBox,
+    QFileDialog,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPlainTextEdit,
+    QTextEdit,
+    QToolButton,
+    QToolTip,
+    QVBoxLayout,
+    QWidget,
 )
 
-from .highlighter import DARK_STYLE, LIGHT_STYLE, PygmentsHighlighter, is_dark, lexer_for_path
+from .highlighter import (
+    DARK_STYLE,
+    LIGHT_STYLE,
+    PygmentsHighlighter,
+    is_dark,
+    lexer_for_path,
+)
 
 INDENT = "    "
 MAX_FIND_HIGHLIGHTS = 2000
@@ -39,7 +64,7 @@ def worst_severity(notes: list[tuple[str, str]]) -> str:
 class LineNumberArea(QWidget):
     """The gutter: line numbers plus warning/error markers."""
 
-    def __init__(self, editor: "CodeEditor"):
+    def __init__(self, editor: CodeEditor):
         super().__init__(editor)
         self.editor = editor
         self.setMouseTracking(True)

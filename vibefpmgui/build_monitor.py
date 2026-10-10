@@ -28,16 +28,32 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import NamedTuple
+from typing import ClassVar, NamedTuple
 
 from qtpy.QtCore import QEvent, QRectF, QSize, Qt, QTimer, Signal
 from qtpy.QtGui import (
-    QColor, QFont, QFontDatabase, QFontMetricsF, QLinearGradient, QPainter,
-    QPalette, QPen,
+    QColor,
+    QFont,
+    QFontDatabase,
+    QFontMetricsF,
+    QLinearGradient,
+    QPainter,
+    QPalette,
+    QPen,
 )
 from qtpy.QtWidgets import (
-    QAbstractItemView, QApplication, QHBoxLayout, QHeaderView, QLabel, QMenu, QPushButton,
-    QStyledItemDelegate, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QAbstractItemView,
+    QApplication,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QMenu,
+    QPushButton,
+    QStyledItemDelegate,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
 )
 
 from . import manifest as m
@@ -63,14 +79,14 @@ STATUS_ICONS = {COMPILING: "⟳", DONE: "✓", WARNING: "⚠", FAILED: "✕", AB
 LIBRARY = "library"  # package kind used for link targets
 
 PALETTES = {
-    "light": dict(bg="#ffffff", text="#1f2328", muted="#8b949e", line="#eaeef2", hover="#f3f6f9",
-                  track="#eaeef2", accent1="#4c6ef5", accent2="#15aabf",
-                  status={COMPILING: "#e8a317", DONE: "#2f9e44", WARNING: "#e8590c",
-                          FAILED: "#e03131", ABORTED: "#868e96"}),
-    "dark": dict(bg="#1e1f22", text="#e6e8eb", muted="#8b929b", line="#2f3237", hover="#2a2d31",
-                 track="#33363b", accent1="#748ffc", accent2="#3bc9db",
-                 status={COMPILING: "#fcc419", DONE: "#51cf66", WARNING: "#ff922b",
-                         FAILED: "#ff6b6b", ABORTED: "#868e96"}),
+    "light": {"bg": "#ffffff", "text": "#1f2328", "muted": "#8b949e", "line": "#eaeef2", "hover": "#f3f6f9",
+                  "track": "#eaeef2", "accent1": "#4c6ef5", "accent2": "#15aabf",
+                  "status": {COMPILING: "#e8a317", DONE: "#2f9e44", WARNING: "#e8590c",
+                          FAILED: "#e03131", ABORTED: "#868e96"}},
+    "dark": {"bg": "#1e1f22", "text": "#e6e8eb", "muted": "#8b929b", "line": "#2f3237", "hover": "#2a2d31",
+                 "track": "#33363b", "accent1": "#748ffc", "accent2": "#3bc9db",
+                 "status": {COMPILING: "#fcc419", DONE: "#51cf66", WARNING: "#ff922b",
+                         FAILED: "#ff6b6b", ABORTED: "#868e96"}},
 }
 # Package-tag dot colours; the main window replaces these with the graph theme's.
 DEFAULT_PACKAGE_COLORS = {m.ROOT: "#f6c85f", m.GIT: "#74c0fc", m.PATH: "#8ce99a",
@@ -225,7 +241,7 @@ def app_is_light() -> bool:
 class RowDelegate(QStyledItemDelegate):
     """Paints every cell of the build table from its :class:`Target`."""
 
-    def __init__(self, monitor: "BuildMonitor"):
+    def __init__(self, monitor: BuildMonitor):
         super().__init__(monitor.table)
         self.monitor = monitor
 
@@ -438,7 +454,7 @@ class ProgressLine(QWidget):
 
     SEGMENT = 0.28  # busy segment width, as a fraction of the bar
 
-    def __init__(self, monitor: "BuildMonitor"):
+    def __init__(self, monitor: BuildMonitor):
         super().__init__()
         self.monitor = monitor
         self.value = 0.0
@@ -529,7 +545,7 @@ class BuildMonitor(SortableTable, QWidget):
     """Per-file compile status: header with filter chips, a slim progress bar
     and a custom-drawn table."""
 
-    COLUMNS = ["FILE", "PACKAGE", "STATUS", "TIME"]
+    COLUMNS: ClassVar[list[str]] = ["FILE", "PACKAGE", "STATUS", "TIME"]
     # Row clicked: show that file's compiler messages (-1: show all output).
     details_requested = Signal(int)
     # Double-click: open (path, [Diagnostic]) in an editor.
@@ -854,7 +870,7 @@ class BuildMonitor(SortableTable, QWidget):
 
     def _find_object(self, obj: str) -> Target | None:
         # fpm names objects after the source path with "/" -> "_", plus ".o".
-        stem = obj[:-2] if obj.endswith(".o") else obj
+        stem = obj.removesuffix(".o")
         candidates = [t for t in self.targets if stem == t.name or stem.endswith("_" + t.name)]
         return max(candidates, key=lambda t: len(t.name), default=None)
 

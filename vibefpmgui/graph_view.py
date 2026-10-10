@@ -21,15 +21,23 @@ import qtpy
 # Make sure pyqtgraph uses the same Qt binding that qtpy picked.
 os.environ.setdefault("PYQTGRAPH_QT_LIB", qtpy.API_NAME)
 
-import numpy as np  # noqa: E402
-import pyqtgraph as pg  # noqa: E402
-from qtpy.QtCore import QPointF, QRectF, Qt, QTimer, Signal  # noqa: E402
-from qtpy.QtGui import (  # noqa: E402
-    QBrush, QColor, QFont, QFontMetricsF, QLinearGradient, QPainter, QPainterPath, QPalette, QPen,
+import numpy as np
+import pyqtgraph as pg
+from qtpy.QtCore import QPointF, QRectF, Qt, QTimer, Signal
+from qtpy.QtGui import (
+    QBrush,
+    QColor,
+    QFont,
+    QFontMetricsF,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPalette,
+    QPen,
 )
-from qtpy.QtWidgets import QApplication, QLabel, QStackedLayout, QWidget  # noqa: E402
+from qtpy.QtWidgets import QApplication, QLabel, QStackedLayout, QWidget
 
-from . import manifest as m  # noqa: E402
+from . import manifest as m
 
 pg.setConfigOptions(antialias=True)
 
@@ -57,30 +65,30 @@ EDGE_STYLES = {"curved": "Curved", "straight": "Straight"}
 
 # fill / border are per node kind; border None means "a darker fill".
 THEMES = {
-    "light": dict(
-        name="Light", background="#f8f9fa", text="#1b1b1b", subtext="#495057",
-        edge="#8a8f98", down="#e8590c", up="#1c7ed6", shadow=40, glow=False,
-        fill={m.ROOT: "#f6c85f", m.GIT: "#9dd0f5", m.PATH: "#a8e6a1",
+    "light": {
+        "name": "Light", "background": "#f8f9fa", "text": "#1b1b1b", "subtext": "#495057",
+        "edge": "#8a8f98", "down": "#e8590c", "up": "#1c7ed6", "shadow": 40, "glow": False,
+        "fill": {m.ROOT: "#f6c85f", m.GIT: "#9dd0f5", m.PATH: "#a8e6a1",
               m.REGISTRY: "#d7b8f3", m.META: "#f3c6a5", m.MISSING: "#e9ecef"},
-        border=None),
-    "dark": dict(
-        name="Dark", background="#1e1f22", text="#f1f3f5", subtext="#ced4da",
-        edge="#6c717a", down="#ff922b", up="#4dabf7", shadow=90, glow=False,
-        fill={m.ROOT: "#b8860b", m.GIT: "#2f6aa3", m.PATH: "#2f7d43",
+        "border": None},
+    "dark": {
+        "name": "Dark", "background": "#1e1f22", "text": "#f1f3f5", "subtext": "#ced4da",
+        "edge": "#6c717a", "down": "#ff922b", "up": "#4dabf7", "shadow": 90, "glow": False,
+        "fill": {m.ROOT: "#b8860b", m.GIT: "#2f6aa3", m.PATH: "#2f7d43",
               m.REGISTRY: "#6a45a0", m.META: "#a35a2a", m.MISSING: "#3d4046"},
-        border=None),
-    "blueprint": dict(
-        name="Blueprint", background="#0b3d6b", text="#ffffff", subtext="#cfe3f7",
-        edge="#9cc3e6", down="#ffd43b", up="#63e6be", shadow=0, glow=False,
-        fill={k: "#0e4f8a" for k in KIND_ORDER},
-        border={m.ROOT: "#ffffff", m.GIT: "#a5d8ff", m.PATH: "#b2f2bb",
-                m.REGISTRY: "#e5dbff", m.META: "#ffd8a8", m.MISSING: "#748ba3"}),
-    "neon": dict(
-        name="Neon", background="#0d0221", text="#ffffff", subtext="#c9c2e6",
-        edge="#4a3d7a", down="#ff2a6d", up="#05d9e8", shadow=0, glow=True,
-        fill={k: "#160a3a" for k in KIND_ORDER},
-        border={m.ROOT: "#f9f871", m.GIT: "#00f5ff", m.PATH: "#39ff14",
-                m.REGISTRY: "#ff00e6", m.META: "#ff9f1c", m.MISSING: "#6c6c8a"}),
+        "border": None},
+    "blueprint": {
+        "name": "Blueprint", "background": "#0b3d6b", "text": "#ffffff", "subtext": "#cfe3f7",
+        "edge": "#9cc3e6", "down": "#ffd43b", "up": "#63e6be", "shadow": 0, "glow": False,
+        "fill": {k: "#0e4f8a" for k in KIND_ORDER},
+        "border": {m.ROOT: "#ffffff", m.GIT: "#a5d8ff", m.PATH: "#b2f2bb",
+                m.REGISTRY: "#e5dbff", m.META: "#ffd8a8", m.MISSING: "#748ba3"}},
+    "neon": {
+        "name": "Neon", "background": "#0d0221", "text": "#ffffff", "subtext": "#c9c2e6",
+        "edge": "#4a3d7a", "down": "#ff2a6d", "up": "#05d9e8", "shadow": 0, "glow": True,
+        "fill": {k: "#160a3a" for k in KIND_ORDER},
+        "border": {m.ROOT: "#f9f871", m.GIT: "#00f5ff", m.PATH: "#39ff14",
+                m.REGISTRY: "#ff00e6", m.META: "#ff9f1c", m.MISSING: "#6c6c8a"}},
 }
 AUTO_THEME = "auto"
 THEME_CHOICES = {AUTO_THEME: "Auto (follow system)", **{k: v["name"] for k, v in THEMES.items()}}
@@ -108,7 +116,7 @@ def node_border(theme: dict, kind: str) -> QColor:
 class NodeItem(pg.GraphicsObject):
     """A package box, positioned by its top-left corner in view coordinates."""
 
-    def __init__(self, view: "DependencyGraphView", package: m.Package):
+    def __init__(self, view: DependencyGraphView, package: m.Package):
         super().__init__()
         self.view = view
         self.hovered = False
@@ -261,7 +269,7 @@ class NodeItem(pg.GraphicsObject):
 class EdgeItem:
     """A dependency arrow: a curve plus an arrow head, both pyqtgraph items."""
 
-    def __init__(self, view: "DependencyGraphView", source: NodeItem, target: NodeItem, dev: bool):
+    def __init__(self, view: DependencyGraphView, source: NodeItem, target: NodeItem, dev: bool):
         self.view, self.source, self.target, self.dev = view, source, target, dev
         self.curve = pg.PlotCurveItem()
         self.arrow = pg.ArrowItem(headLen=12, tipAngle=32, tailLen=None, pen=None)
@@ -363,10 +371,10 @@ def compute_layers(graph: m.DependencyGraph) -> list[list[str]]:
     for _ in range(len(graph.packages)):
         changed = False
         for e in graph.edges:
-            if e.parent in depth and depth.get(e.child, -1) < depth[e.parent] + 1:
-                if depth[e.parent] + 1 < len(graph.packages):
-                    depth[e.child] = depth[e.parent] + 1
-                    changed = True
+            new_depth = depth[e.parent] + 1 if e.parent in depth else None
+            if new_depth is not None and depth.get(e.child, -1) < new_depth < len(graph.packages):
+                depth[e.child] = new_depth
+                changed = True
         if not changed:
             break
     for name in graph.packages:
@@ -797,7 +805,7 @@ class DependencyGraphView(QWidget):
 
     def export_image(self, filename: str) -> bool:
         """Save the whole diagram as PNG/JPG, or SVG if the name ends in .svg."""
-        import pyqtgraph.exporters as exporters
+        from pyqtgraph import exporters
 
         x_range, y_range = self.vb.viewRange()
         self.fit()

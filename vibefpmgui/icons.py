@@ -6,7 +6,15 @@ from __future__ import annotations
 from pathlib import Path
 
 from qtpy.QtCore import QPointF, QRectF, Qt
-from qtpy.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
+from qtpy.QtGui import (
+    QColor,
+    QIcon,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+)
 
 SIZE = 24  # logical size; drawn at several pixel ratios for crisp HiDPI
 

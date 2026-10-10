@@ -11,11 +11,15 @@ from bisect import bisect_right
 
 from pygments import lex
 from pygments.lexers import (
-    FortranFixedLexer, FortranLexer, TextLexer, TOMLLexer, get_lexer_for_filename,
+    FortranFixedLexer,
+    FortranLexer,
+    TextLexer,
+    TOMLLexer,
+    get_lexer_for_filename,
 )
-from pygments.util import ClassNotFound
 from pygments.styles import get_style_by_name
 from pygments.token import Name
+from pygments.util import ClassNotFound
 from qtpy.QtCore import QTimer
 from qtpy.QtGui import QColor, QFont, QPalette, QSyntaxHighlighter, QTextCharFormat
 

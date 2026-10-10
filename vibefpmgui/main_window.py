@@ -16,31 +16,77 @@ import time
 import tomllib
 from pathlib import Path
 
-from qtpy.QtCore import QEvent, QProcess, QProcessEnvironment, QSettings, QSize, Qt, QTimer, QUrl
-from qtpy.QtGui import QAction, QActionGroup, QColor, QPalette, QDesktopServices, QFont, QFontDatabase, QKeySequence, QTextCursor
+from qtpy.QtCore import (
+    QEvent,
+    QProcess,
+    QProcessEnvironment,
+    QSettings,
+    QSize,
+    Qt,
+    QTimer,
+    QUrl,
+)
+from qtpy.QtGui import (
+    QAction,
+    QActionGroup,
+    QColor,
+    QDesktopServices,
+    QFont,
+    QFontDatabase,
+    QKeySequence,
+    QPalette,
+    QTextCursor,
+)
 from qtpy.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QFileDialog,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
     QInputDialog,
-    QLabel, QLineEdit, QMainWindow, QMenu, QSizePolicy, QStackedWidget, QTabBar, QMessageBox, QPlainTextEdit, QPushButton, QSplitter,
-    QTabWidget, QTextBrowser, QToolBar, QToolButton, QVBoxLayout, QWidget,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
+    QSizePolicy,
+    QSplitter,
+    QStackedWidget,
+    QTabBar,
+    QTabWidget,
+    QTextBrowser,
+    QToolBar,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
 )
 
-from . import __version__
-from . import manifest as m
-from .build_monitor import BuildMonitor, set_ui_scale
-from .test_monitor import MARKER_RE, TestMonitor, parse_test_list
+from . import __version__, dep_updates
 from . import ai_review as ai
+from . import build_outputs as bo
+from . import manifest as m
+from .about import FPM_DOCS_URL, AboutDialog
+from .build_monitor import BuildMonitor, set_ui_scale
 from .compat import join_args, quote_arg, set_windows_app_id, split_args
 from .editor import EditorTab, monospace_font
-from . import build_outputs as bo
-from .about import FPM_DOCS_URL, AboutDialog
-from . import dep_updates
+from .graph_view import (
+    EDGE_STYLES,
+    KIND_LABELS,
+    LAYOUTS,
+    THEME_CHOICES,
+    DependencyGraphView,
+)
+from .highlighter import DARK_STYLE, LIGHT_STYLE, PygmentsHighlighter, is_dark
+from .icons import app_icon, make_icon
 from .project_tree import ProjectTree, reveal_in_file_manager
 from .review_monitor import ReviewMonitor
 from .run_monitor import RunMonitor
-from .icons import app_icon, make_icon
-from .highlighter import DARK_STYLE, LIGHT_STYLE, PygmentsHighlighter, is_dark
-from .graph_view import EDGE_STYLES, KIND_LABELS, LAYOUTS, THEME_CHOICES, DependencyGraphView
+from .test_monitor import MARKER_RE, TestMonitor, parse_test_list
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
 
@@ -1966,7 +2012,7 @@ def kill_process_tree(process: QProcess):
     pid = int(process.processId() or 0)
     if pid > 0:
         if os.name == "nt":
-            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, check=False)
         else:
             for child in reversed(_descendants(pid)):  # deepest first
                 try:
@@ -1980,7 +2026,7 @@ def _descendants(pid: int) -> list[int]:
     """All processes below ``pid``, parents before children (POSIX)."""
     try:
         out = subprocess.run(["ps", "-A", "-o", "pid=", "-o", "ppid="],
-                             capture_output=True, text=True, timeout=5).stdout
+                             capture_output=True, text=True, timeout=5, check=False).stdout
     except (OSError, subprocess.SubprocessError):
         return []
     children: dict[int, list[int]] = {}

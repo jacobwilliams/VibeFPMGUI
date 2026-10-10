@@ -30,8 +30,16 @@ from pathlib import Path
 from qtpy.QtCore import Qt, Signal
 from qtpy.QtGui import QFont
 from qtpy.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy,
-    QToolButton, QVBoxLayout, QWidget,
+    QApplication,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
 )
 
 from .build_monitor import PALETTES, app_is_light

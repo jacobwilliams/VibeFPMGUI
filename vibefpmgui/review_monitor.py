@@ -3,18 +3,35 @@
 from __future__ import annotations
 
 import time
+from typing import ClassVar
 
 from qtpy.QtCore import QEvent, QRectF, QSize, Qt, QTimer, Signal
 from qtpy.QtGui import QColor, QFont, QFontDatabase, QFontMetricsF, QPainter, QPen
 from qtpy.QtWidgets import (
-    QAbstractItemView, QApplication, QHBoxLayout, QHeaderView, QLabel, QPushButton,
-    QStyledItemDelegate, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QAbstractItemView,
+    QApplication,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QPushButton,
+    QStyledItemDelegate,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
 )
 
 from .ai_review import CATEGORIES, Finding
 from .build_monitor import (
-    PALETTES, ROW_HEIGHT, ProgressLine, SortableTable, _tint, app_is_light, chip_stylesheet,
-    panel_stylesheet, scaled,
+    PALETTES,
+    ROW_HEIGHT,
+    ProgressLine,
+    SortableTable,
+    _tint,
+    app_is_light,
+    chip_stylesheet,
+    panel_stylesheet,
+    scaled,
 )
 
 CATEGORY_COLORS = {"bug": "#e03131", "warning": "#f08c00", "performance": "#0c8599",
@@ -23,7 +40,7 @@ CATEGORY_ICONS = {"bug": "✕", "warning": "⚠", "performance": "⚡", "style":
 
 
 class FindingDelegate(QStyledItemDelegate):
-    def __init__(self, monitor: "ReviewMonitor"):
+    def __init__(self, monitor: ReviewMonitor):
         super().__init__(monitor.table)
         self.monitor = monitor
 
@@ -95,7 +112,7 @@ class ReviewMonitor(SortableTable, QWidget):
     """Findings table with chips, a progress line and the model's summary.
     Clicking a finding emits :attr:`finding_selected` with its line."""
 
-    COLUMNS = ["LINE", "CATEGORY", "COMMENT"]
+    COLUMNS: ClassVar[list[str]] = ["LINE", "CATEGORY", "COMMENT"]
     finding_selected = Signal(int)
 
     def __init__(self, parent=None):

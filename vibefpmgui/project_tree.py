@@ -14,10 +14,24 @@ import sys
 from pathlib import Path
 
 from qtpy.QtCore import QFileInfo, QSortFilterProxyModel, Qt, QUrl, Signal
-from qtpy.QtGui import QColor, QDesktopServices, QFont, QPalette, QStandardItem, QStandardItemModel
+from qtpy.QtGui import (
+    QColor,
+    QDesktopServices,
+    QFont,
+    QPalette,
+    QStandardItem,
+    QStandardItemModel,
+)
 from qtpy.QtWidgets import (
-    QAbstractItemView, QApplication, QFileIconProvider, QLabel, QLineEdit, QMenu, QTreeView,
-    QVBoxLayout, QWidget,
+    QAbstractItemView,
+    QApplication,
+    QFileIconProvider,
+    QLabel,
+    QLineEdit,
+    QMenu,
+    QTreeView,
+    QVBoxLayout,
+    QWidget,
 )
 
 from . import manifest as m

@@ -17,18 +17,38 @@ import re
 import statistics
 import time
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 from qtpy.QtCore import QEvent, QRectF, QSize, Qt, QTimer, Signal
 from qtpy.QtGui import QColor, QFont, QFontDatabase, QFontMetricsF, QPainter, QPen
 from qtpy.QtWidgets import (
-    QAbstractItemView, QApplication, QHBoxLayout, QHeaderView, QLabel, QPushButton, QStyledItemDelegate,
-    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QAbstractItemView,
+    QApplication,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QPushButton,
+    QStyledItemDelegate,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
 )
 
 from .build_monitor import (
-    ABORTED, COMPILING, DONE, FAILED, PALETTES, ROW_HEIGHT, ProgressLine, SortableTable, _tint,
+    ABORTED,
+    COMPILING,
+    DONE,
+    FAILED,
+    PALETTES,
+    ROW_HEIGHT,
+    ProgressLine,
+    SortableTable,
+    _tint,
     app_is_light,
-    chip_stylesheet, panel_stylesheet, scaled,
+    chip_stylesheet,
+    panel_stylesheet,
+    scaled,
 )
 
 MARKER_RE = re.compile(r"@@vibefpm:(start|end):([^:@]+)(?::(-?\d+):([\d.]+))?@@")
@@ -85,7 +105,7 @@ class TestCase:
 
 
 class TestDelegate(QStyledItemDelegate):
-    def __init__(self, monitor: "TestMonitor"):
+    def __init__(self, monitor: TestMonitor):
         super().__init__(monitor.table)
         self.monitor = monitor
 
@@ -210,10 +230,10 @@ class TestMonitor(SortableTable, QWidget):
     """Header with filter chips, progress bar and a table of tests. Clicking a
     test emits :attr:`test_selected` with its name ("" to show all output)."""
 
-    COLUMNS = ["TEST", "STATUS", "TIME"]
+    COLUMNS: ClassVar[list[str]] = ["TEST", "STATUS", "TIME"]
     test_selected = Signal(str)
     # Everything the panel says, so a "Run" version can reuse it (see run_monitor).
-    WORDS = {
+    WORDS: ClassVar[dict[str, str]] = {
         "title": "Tests", "item": "test", "items": "tests",
         PASSED: "Passed", "passed": "passed",
         "idle": "Run Test to see each test's progress here.",

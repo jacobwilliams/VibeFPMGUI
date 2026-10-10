@@ -8,12 +8,14 @@ estimate the next run.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from .test_monitor import PASSED, TestMonitor
 
 
 class RunMonitor(TestMonitor):
-    COLUMNS = ["PROGRAM", "STATUS", "TIME"]
-    WORDS = {
+    COLUMNS: ClassVar[list[str]] = ["PROGRAM", "STATUS", "TIME"]
+    WORDS: ClassVar[dict[str, str]] = {
         "title": "Run", "item": "program", "items": "programs",
         PASSED: "Finished", "passed": "finished",
         "idle": "Run a program (toolbar Run, or Run in the Build outputs tab) to see it here.",
