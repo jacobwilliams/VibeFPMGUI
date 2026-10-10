@@ -643,6 +643,12 @@ class MainWindow(QMainWindow):
         text = QApplication.palette().color(QPalette.WindowText)
         for action, name in self.command_icons.items():
             action.setIcon(make_icon(name, STOP_COLOR if name == "stop" else text))
+        # The ">>" button shown when the window is too narrow for every
+        # button. Qt 6.11 draws its default arrow with a macOS symbol image,
+        # which crashes in AppKit on macOS 27, so give it our own icon.
+        extension = self.command_toolbar.findChild(QToolButton, "qt_toolbar_ext_button")
+        if extension is not None:
+            extension.setIcon(make_icon("more", text))
         hover = "rgba(128,128,128,45)"
         self.command_toolbar.setStyleSheet(f"""
             QToolBar#CommandsToolbar {{ border: none; spacing: 2px; padding: 2px 6px; }}
@@ -650,6 +656,7 @@ class MainWindow(QMainWindow):
                 padding: 4px 10px; }}
             QToolBar#CommandsToolbar QToolButton:hover {{ background: {hover}; }}
             QToolBar#CommandsToolbar QToolButton:pressed {{ background: rgba(128,128,128,80); }}
+            QToolBar#CommandsToolbar QToolButton#qt_toolbar_ext_button {{ padding: 0px; }}
         """)
 
     def _set_project_enabled(self, enabled: bool):

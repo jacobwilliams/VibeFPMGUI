@@ -170,6 +170,13 @@ def _format(p: QPainter, c: QColor):
     p.drawPath(path)
 
 
+def _more(p: QPainter, c: QColor):
+    # ">>": the toolbar's overflow button.
+    p.setPen(_pen(c, 1.9))
+    for x in (6.5, 12.5):
+        p.drawPolyline([QPointF(x, 7), QPointF(x + 5, 12), QPointF(x, 17)])
+
+
 DRAWERS = {
     "build": _hammer,
     "run": _play,
@@ -180,6 +187,7 @@ DRAWERS = {
     "stop": _stop,
     "robot": _robot,
     "format": _format,
+    "more": _more,
 }
 
 
