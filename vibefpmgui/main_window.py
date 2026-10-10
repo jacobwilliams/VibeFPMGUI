@@ -14,7 +14,7 @@ from qtpy.QtGui import QAction, QActionGroup, QColor, QPalette, QDesktopServices
 from qtpy.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
     QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSplitter,
-    QTabWidget, QTextBrowser, QToolBar, QToolButton, QVBoxLayout, QWidget,
+    QTabWidget, QTextBrowser, QToolButton, QVBoxLayout, QWidget,
 )
 
 from . import __version__
@@ -64,18 +64,12 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self):
-        toolbar = QToolBar("Main")
-        toolbar.setMovable(False)
-        self.addToolBar(toolbar)
         open_action = QAction("Open fpm.toml…", self)
         open_action.setShortcut(QKeySequence.Open)
         open_action.triggered.connect(self.browse)
-        toolbar.addAction(open_action)
         reload_action = QAction("Reload", self)
         reload_action.setShortcut(QKeySequence.Refresh)
         reload_action.triggered.connect(self.reload)
-        toolbar.addAction(reload_action)
-        toolbar.addSeparator()
         file_menu = self.menuBar().addMenu("&File")
         file_menu.addAction(open_action)
         file_menu.addAction(reload_action)
@@ -84,13 +78,12 @@ class MainWindow(QMainWindow):
         quit_action.setShortcut(QKeySequence.Quit)
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
-        self.path_label = QLabel("No project loaded")
-        self.path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        toolbar.addWidget(self.path_label)
 
         # --- left: build options + commands
         options = QGroupBox("Build options")
         form = QFormLayout(options)
+        # macOS defaults to fields staying at their size hint; let them widen with the panel.
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         self.profile_combo = QComboBox()
         self.profile_combo.addItems(["(default)", "debug", "release"])
         form.addRow("Profile:", self.profile_combo)
@@ -149,21 +142,6 @@ class MainWindow(QMainWindow):
         self.graph_menu = self._build_graph_menu()
         self.menuBar().addMenu(self.graph_menu)
 
-        graph_buttons = QHBoxLayout()
-        style_button = QToolButton()
-        style_button.setText("Style")
-        style_button.setMenu(self.graph_menu)
-        style_button.setPopupMode(QToolButton.InstantPopup)
-        graph_buttons.addWidget(style_button)
-        for text, slot in [("Fit", self.graph_view.fit),
-                           ("Zoom +", lambda: self.graph_view.zoom(1.25)),
-                           ("Zoom −", lambda: self.graph_view.zoom(0.8)),
-                           ("Re-layout", self.graph_view.relayout),
-                           ("Export image…", self.export_graph)]:
-            b = QPushButton(text)
-            b.clicked.connect(slot)
-            graph_buttons.addWidget(b)
-        graph_buttons.addStretch(1)
         self.legend = QLabel()
         self.legend.setWordWrap(True)
 
@@ -179,7 +157,6 @@ class MainWindow(QMainWindow):
 
         graph_tab = QWidget()
         gl = QVBoxLayout(graph_tab)
-        gl.addLayout(graph_buttons)
         gl.addWidget(graph_split, 1)
         gl.addWidget(self.legend)
 
@@ -216,7 +193,7 @@ class MainWindow(QMainWindow):
         self.bottom_split.addWidget(console_box)
         self.bottom_split.setStretchFactor(0, 2)
         self.bottom_split.setStretchFactor(1, 3)
-        self.bottom_split.setSizes([420, 600])
+        self.bottom_split.setSizes([620, 480])
 
         self.right_split = QSplitter(Qt.Vertical)
         self.right_split.addWidget(self.tabs)
@@ -247,6 +224,8 @@ class MainWindow(QMainWindow):
             self._apply_highlight_style()
             self.graph_view.refresh_theme()  # "Auto" theme follows the system
             self._update_legend()
+            self.build_monitor.refresh_palette()
+            self.build_monitor.set_package_colors(self.graph_view.package_colors())
         super().changeEvent(event)
 
     def _build_graph_menu(self) -> QMenu:
@@ -293,6 +272,7 @@ class MainWindow(QMainWindow):
         self._check_style_action("theme", value)
         self.settings.setValue("graph_theme", value)
         self._update_legend()
+        self.build_monitor.set_package_colors(self.graph_view.package_colors())
 
     def _set_graph_edges(self, value: str):
         self.graph_view.set_edge_style(value)
@@ -358,7 +338,7 @@ class MainWindow(QMainWindow):
     def open_manifest(self, filename: str | Path):
         self.manifest_path = Path(filename).resolve()
         self.settings.setValue("last_manifest", str(self.manifest_path))
-        self.path_label.setText(str(self.manifest_path))
+        self.setWindowFilePath(str(self.manifest_path))  # macOS title-bar proxy icon
         self.setWindowTitle(f"VibeFPMGUI — {self.manifest_path.parent.name}")
         self.reload()
 
@@ -492,7 +472,9 @@ class MainWindow(QMainWindow):
         # Only commands that compile get the per-file status grid.
         self._monitoring = sub[0] in ("build", "run", "test")
         if self._monitoring:
-            self.build_monitor.start(self.graph, self.manifest_path.parent)
+            profile = self.profile_combo.currentText() if self.profile_combo.currentIndex() > 0 else "debug"
+            compiler = self.compiler_edit.text().strip() or "gfortran"
+            self.build_monitor.start(self.graph, self.manifest_path.parent, f"{profile} · {compiler}")
 
         self._append(f"\n$ cd {shlex.quote(str(self.manifest_path.parent))}\n"
                      f"$ {shlex.join([program] + args)}\n", bold=True)

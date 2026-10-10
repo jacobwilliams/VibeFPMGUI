@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import math
 import os
+import time
 
 import qtpy
 
@@ -114,6 +115,7 @@ class NodeItem(pg.GraphicsObject):
         self.selected = False
         self.dimmed = False
         self._drag_offset = QPointF()
+        self._last_click = 0.0
         self.title_font = QFont()
         self.title_font.setBold(True)
         self.title_font.setPointSizeF(self.title_font.pointSizeF() + 1)
@@ -225,9 +227,15 @@ class NodeItem(pg.GraphicsObject):
             ev.ignore()
             return
         ev.accept()
-        if ev.double():
+        # pyqtgraph only flags ev.double() for some event orders, so also
+        # detect a second click within the system double-click interval.
+        now = time.monotonic()
+        interval = QApplication.doubleClickInterval() / 1000
+        if ev.double() or now - self._last_click < interval:
+            self._last_click = 0.0
             self.view.package_activated.emit(self.package.name)
         else:
+            self._last_click = now
             self.view.select(self.package.name, center=False)
 
     def mouseDragEvent(self, ev):
@@ -593,6 +601,11 @@ class DependencyGraphView(QWidget):
         self.plot.setBackground(self.theme["background"])
         self.message.setStyleSheet(
             f"background:{self.theme['background']}; color:{self.theme['subtext']}; font-size:14px;")
+
+    def package_colors(self) -> dict[str, str]:
+        """The colour that identifies each package kind in the current theme."""
+        return {k: (node_border(self.theme, k).name() if self.theme["border"] else self.theme["fill"][k])
+                for k in KIND_ORDER}
 
     def legend_html(self) -> str:
         theme = self.theme
