@@ -1,0 +1,100 @@
+"""Syntax highlighting for QPlainTextEdit/QTextEdit using a Pygments lexer.
+
+The whole document is lexed at once (so multi-line strings and the like are
+handled correctly) and each text block then just applies the token formats
+that overlap it.
+"""
+
+from __future__ import annotations
+
+from bisect import bisect_right
+
+from pygments import lex
+from pygments.lexers import TOMLLexer
+from pygments.styles import get_style_by_name
+from pygments.token import Name
+from qtpy.QtGui import QColor, QFont, QPalette, QSyntaxHighlighter, QTextCharFormat
+
+LIGHT_STYLE = "default"
+DARK_STYLE = "monokai"
+
+
+def is_dark(palette: QPalette) -> bool:
+    return palette.color(QPalette.Base).lightness() < 128
+
+
+class PygmentsHighlighter(QSyntaxHighlighter):
+    def __init__(self, document, lexer=None, style: str | None = None):
+        super().__init__(document)
+        self.lexer = lexer or TOMLLexer()
+        self._spans: list[tuple[int, int, QTextCharFormat]] = []
+        self._starts: list[int] = []
+        self._formats: dict = {}
+        self._busy = False
+        self.set_style(style or LIGHT_STYLE)
+        document.contentsChange.connect(self._relex)
+
+    def set_style(self, name: str):
+        self.style = get_style_by_name(name)
+        self._formats.clear()
+        self._relex()
+
+    def background(self) -> QColor:
+        return QColor(self.style.background_color)
+
+    def _format(self, ttype) -> QTextCharFormat:
+        fmt = self._formats.get(ttype)
+        if fmt is None:
+            spec = self.style.style_for_token(ttype)
+            if ttype is Name and not spec["color"]:
+                # The TOML lexer marks keys as plain Name, which most styles
+                # leave uncoloured; borrow the attribute-name colour instead.
+                spec = self.style.style_for_token(Name.Attribute)
+            fmt = QTextCharFormat()
+            if spec["color"]:
+                fmt.setForeground(QColor("#" + spec["color"]))
+            if spec["bgcolor"]:
+                fmt.setBackground(QColor("#" + spec["bgcolor"]))
+            if spec["bold"]:
+                fmt.setFontWeight(QFont.Bold)
+            if spec["italic"]:
+                fmt.setFontItalic(True)
+            if spec["underline"]:
+                fmt.setFontUnderline(True)
+            self._formats[ttype] = fmt
+        return fmt
+
+    def _relex(self, *_):
+        # rehighlight() itself emits contentsChange; don't recurse.
+        if self._busy:
+            return
+        self._busy = True
+        try:
+            self._lex_and_highlight()
+        finally:
+            self._busy = False
+
+    def _lex_and_highlight(self):
+        text = self.document().toPlainText()
+        spans, pos = [], 0
+        for ttype, value in lex(text, self.lexer):
+            # Pygments may append a trailing newline that isn't in the document.
+            length = min(len(value), len(text) - pos)
+            if length > 0:
+                spans.append((pos, length, self._format(ttype)))
+            pos += len(value)
+        self._spans = spans
+        self._starts = [s[0] for s in spans]
+        self.rehighlight()
+
+    def highlightBlock(self, text: str):
+        start = self.currentBlock().position()
+        end = start + len(text)
+        first = max(bisect_right(self._starts, start) - 1, 0)
+        for pos, length, fmt in self._spans[first:]:
+            if pos >= end:
+                break
+            if pos + length <= start:
+                continue
+            a, b = max(pos, start), min(pos + length, end)
+            self.setFormat(a - start, b - a, fmt)

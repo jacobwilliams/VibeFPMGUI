@@ -9,8 +9,8 @@ import shutil
 import tomllib
 from pathlib import Path
 
-from qtpy.QtCore import QProcess, QProcessEnvironment, QSettings, Qt, QUrl
-from qtpy.QtGui import QAction, QDesktopServices, QFont, QFontDatabase, QKeySequence, QTextCursor
+from qtpy.QtCore import QEvent, QProcess, QProcessEnvironment, QSettings, Qt, QUrl
+from qtpy.QtGui import QAction, QColor, QPalette, QDesktopServices, QFont, QFontDatabase, QKeySequence, QTextCursor
 from qtpy.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
     QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QSplitter,
@@ -20,6 +20,7 @@ from qtpy.QtWidgets import (
 from . import __version__
 from . import manifest as m
 from .build_monitor import BuildMonitor
+from .highlighter import DARK_STYLE, LIGHT_STYLE, PygmentsHighlighter, is_dark
 from .graph_view import KIND_LABELS, NODE_COLORS, DependencyGraphView
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
@@ -168,6 +169,8 @@ class MainWindow(QMainWindow):
         self.manifest_view = QPlainTextEdit()
         self.manifest_view.setReadOnly(True)
         self.manifest_view.setFont(mono)
+        self.toml_highlighter = PygmentsHighlighter(self.manifest_view.document())
+        self._apply_highlight_style()
 
         self.tabs = QTabWidget()
         self.tabs.addTab(graph_tab, "Dependency graph")
@@ -211,6 +214,20 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.main_split)
         self.statusBar().showMessage("Ready")
         self._set_project_enabled(False)
+
+    def _apply_highlight_style(self):
+        """Pick a light or dark Pygments style to match the system palette."""
+        dark = is_dark(QApplication.palette())
+        self.toml_highlighter.set_style(DARK_STYLE if dark else LIGHT_STYLE)
+        palette = self.manifest_view.palette()
+        palette.setColor(QPalette.Base, self.toml_highlighter.background())
+        palette.setColor(QPalette.Text, QColor("#f8f8f2") if dark else QColor("#1b1b1b"))
+        self.manifest_view.setPalette(palette)
+
+    def changeEvent(self, event):
+        if event.type() == QEvent.PaletteChange and hasattr(self, "toml_highlighter"):
+            self._apply_highlight_style()
+        super().changeEvent(event)
 
     def _legend(self) -> QLabel:
         parts = [f'<span style="background:{NODE_COLORS[k]}; color:#1b1b1b">&nbsp;{KIND_LABELS[k]}&nbsp;</span>'
