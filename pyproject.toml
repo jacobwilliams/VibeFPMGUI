@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vibefpmgui"
+dynamic = ["version"]
+description = "A Qt GUI for the Fortran Package Manager (fpm): build, run and test fpm projects, with a dependency graph, live build/test progress and a built-in editor"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE.md"]
+authors = [{ name = "Jacob Williams", email = "jacobwilliams@users.noreply.github.com" }]
+requires-python = ">=3.11"  # tomllib
+keywords = ["fortran", "fpm", "package manager", "gui", "qt"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: X11 Applications :: Qt",
+    "Environment :: MacOS X",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Fortran",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Software Development :: Build Tools",
+]
+# Keep in step with [dependencies] in pixi.toml. fpm and a Fortran compiler
+# (e.g. gfortran) are also needed at run time but aren't Python packages
+# (fpm is also on PyPI as "fpm").
+dependencies = [
+    "qtpy>=2.4.3",
+    "PySide6>=6.11.1",   # the Qt binding qtpy uses (the only one tested)
+    "pyqtgraph>=0.14.0", # dependency graph drawing
+    "numpy",             # force-directed layout (also required by pyqtgraph)
+    "pygments>=2.21.0",  # syntax highlighting
+]
+
+[project.urls]
+Homepage = "https://github.com/jacobwilliams/VibeFPMGUI"
+Source = "https://github.com/jacobwilliams/VibeFPMGUI"
+"Fortran Package Manager" = "https://fpm.fortran-lang.org"
+
+[project.gui-scripts]
+vibefpmgui = "vibefpmgui.main_window:main"
+
+[tool.hatch.version]
+path = "vibefpmgui/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["vibefpmgui"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/vibefpmgui", "/README.md", "/LICENSE.md", "/pyproject.toml"]  # "/" = top level only

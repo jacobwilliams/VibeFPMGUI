@@ -58,6 +58,14 @@ pixi run start path/to/fpm.toml     # or a project directory
 pixi run demo                       # open the demo project in examples/demo
 ```
 
+Or install it as a Python package (Python 3.11+); `fpm` and a Fortran compiler
+must also be on your `PATH`:
+
+```sh
+pip install .        # from a checkout
+vibefpmgui [path/to/fpm.toml]
+```
+
 The demo project ([examples/demo](examples/demo)) uses features, profiles,
 git/path/metapackage/dev dependencies, warnings, parallel compiles and tests,
 so every part of the GUI can be tried; its README lists what to click.
