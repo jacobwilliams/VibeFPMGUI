@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 from qtpy.QtCore import QFileInfo, QSortFilterProxyModel, Qt, QUrl, Signal
-from qtpy.QtGui import QColor, QDesktopServices, QFont, QStandardItem, QStandardItemModel
+from qtpy.QtGui import QColor, QDesktopServices, QFont, QPalette, QStandardItem, QStandardItemModel
 from qtpy.QtWidgets import (
     QAbstractItemView, QApplication, QFileIconProvider, QLabel, QLineEdit, QMenu, QTreeView,
     QVBoxLayout, QWidget,
@@ -27,6 +27,8 @@ from .icons import badged_icon
 PATH_ROLE = Qt.UserRole + 1
 KIND_ROLE = Qt.UserRole + 2    # "package", "group", "dir", "file", "placeholder"
 LOADED_ROLE = Qt.UserRole + 3  # folder contents have been read
+HIDDEN_ROLE = Qt.UserRole + 4  # why an entry is greyed out (empty: it isn't)
+LINK_ROLE = Qt.UserRole + 5    # a folder that is listed as a package elsewhere
 
 SKIP_DIRS = {"build", "__pycache__", "node_modules"}
 SKIP_SUFFIXES = {".o", ".obj", ".mod", ".smod", ".a", ".so", ".dylib", ".dll", ".lib",
@@ -262,11 +264,17 @@ class ProjectTree(QWidget):
             return
         for entry in entries:
             name = entry.name
-            if name.startswith("."):
-                continue
             path = Path(entry.path)
             if entry.is_dir(follow_symlinks=False):
-                if name in SKIP_DIRS or path.resolve() in self._skip_dirs:
+                if path.resolve() in self._skip_dirs:
+                    self._add_hidden(item, path, "dir",
+                                     "A package of its own — listed under Dependencies "
+                                     "(double-click to go there)", link=True)
+                    continue
+                if name.startswith(".") or name in SKIP_DIRS:
+                    why = ("fpm's build output — see the Build outputs tab" if name == "build"
+                           else "Hidden folder" if name.startswith(".") else "Generated folder")
+                    self._add_hidden(item, path, "dir", why)
                     continue
                 child = QStandardItem(name)
                 child.setData(str(path), PATH_ROLE)
@@ -284,7 +292,11 @@ class ProjectTree(QWidget):
                 item.appendRow(child)
                 self._items[str(path)] = child
             elif entry.is_file():
+                if name.startswith("."):
+                    self._add_hidden(item, path, "file", "Hidden file")
+                    continue
                 if path.suffix in SKIP_SUFFIXES or path.suffix.lower() in SKIP_SUFFIXES:
+                    self._add_hidden(item, path, "file", "Compiled / generated file")
                     continue
                 child = QStandardItem(name)
                 child.setData(str(path), PATH_ROLE)
@@ -293,6 +305,30 @@ class ProjectTree(QWidget):
                 item.appendRow(child)
                 self._items[str(path)] = child
                 self._mark_item(str(path), child)
+
+    def _add_hidden(self, parent: QStandardItem, path: Path, kind: str, why: str, link: bool = False):
+        """A greyed-out entry: listed, but folders can't be opened in the tree
+        (double-click shows them in Finder; files still open)."""
+        child = QStandardItem(path.name)
+        child.setData(str(path), PATH_ROLE)
+        child.setData(kind, KIND_ROLE)
+        child.setData(why, HIDDEN_ROLE)
+        if link:
+            child.setData(str(path.resolve()), LINK_ROLE)
+        if kind == "dir":
+            child.setData(True, LOADED_ROLE)  # never filled, so no expand arrow
+            child.setIcon(self._folder_icon)
+            action = "double-click to go there" if link else "double-click to show it in Finder"
+            child.setToolTip(f"{why}\n{path}" if link else f"{why} ({action})\n{path}")
+        else:
+            child.setIcon(self._file_icon(path))
+            child.setToolTip(f"{why}\n{path}")
+        child.setForeground(self._grey())
+        parent.appendRow(child)
+        self._items[str(path)] = child
+
+    def _grey(self) -> QColor:
+        return QApplication.palette().color(QPalette.Disabled, QPalette.Text)
 
     def _load_all(self):
         """Load every folder (for filtering, which must see all files)."""
@@ -345,10 +381,13 @@ class ProjectTree(QWidget):
 
     def _apply_marks(self):
         for path, item in self._items.items():
-            if item.data(KIND_ROLE) == "file":
+            if item.data(KIND_ROLE) == "file" or item.data(HIDDEN_ROLE):
                 self._mark_item(path, item)
 
     def _mark_item(self, path: str, item: QStandardItem):
+        if item.data(HIDDEN_ROLE):
+            item.setForeground(self._grey())  # greyed entries stay grey
+            return
         mark = self._marks.get(str(Path(path).resolve())) if self._marks else None
         if mark:
             item.setForeground(QColor(FILE_COLORS[mark]))
@@ -456,8 +495,32 @@ class ProjectTree(QWidget):
 
     # ------------------------------------------------------------- actions
     def _activated(self, index):
+        path = index.data(PATH_ROLE)
         if index.data(KIND_ROLE) == "file":
-            self.open_requested.emit(index.data(PATH_ROLE))
+            self.open_requested.emit(path)
+        elif index.data(LINK_ROLE):
+            self._go_to_package(index.data(LINK_ROLE))
+        elif index.data(HIDDEN_ROLE) and path:
+            reveal_in_file_manager(path)
+
+    def _go_to_package(self, directory: str):
+        """Select the Dependencies entry for a package folder."""
+        stack = [self.model.item(r) for r in range(self.model.rowCount())]
+        while stack:
+            item = stack.pop()
+            if item is None:
+                continue
+            if item.data(KIND_ROLE) == "package" and \
+                    str(Path(item.data(PATH_ROLE)).resolve()) == directory:
+                index = self.proxy.mapFromSource(item.index())
+                parent = index.parent()
+                while parent.isValid():
+                    self.view.expand(parent)
+                    parent = parent.parent()
+                self.view.setCurrentIndex(index)
+                self.view.scrollTo(index)
+                return
+            stack.extend(item.child(r) for r in range(item.rowCount()))
 
     def _context_menu(self, pos):
         index = self.view.indexAt(pos)

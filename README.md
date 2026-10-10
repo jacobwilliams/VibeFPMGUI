@@ -37,7 +37,9 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   with a filter box. fpm's standard folders get a badge on their icon
   (library sources, include, programs, tests, examples — following any
   `source-dir`/`include-dir` set in `fpm.toml`), and `fpm.toml` gets its own
-  icon. Double-click to open in the editor; right-click for Open
+  icon. Hidden files and folders, `build/`, compiled files and nested
+  packages are shown greyed out (greyed folders don't expand; double-click
+  shows them in Finder). Double-click a file to open it in the editor; right-click for Open
   in Default App, Show in Finder and Copy Path. Files with errors or warnings
   in the last build are shown in red / orange.
 * Built-in editor: double-clicking a file (a row in the Build tab, or a
