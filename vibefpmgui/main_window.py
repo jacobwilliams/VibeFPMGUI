@@ -93,6 +93,9 @@ class MainWindow(QMainWindow):
         reload_action.triggered.connect(self.reload)
         file_menu = self.menuBar().addMenu("&File")
         file_menu.addAction(open_action)
+        self.recent_menu = file_menu.addMenu("Recent Manifests")
+        self.recent_menu.aboutToShow.connect(self._fill_recent_menu)
+        self.recent_menu.setToolTipsVisible(True)
         file_menu.addAction(reload_action)
         file_menu.addSeparator()
         open_file_action = QAction("Open File in Editor…", self)
@@ -599,10 +602,59 @@ class MainWindow(QMainWindow):
             self._clear_run_panels()
         self.manifest_path = path
         self.settings.setValue("last_manifest", str(self.manifest_path))
+        self._remember_manifest(self.manifest_path)
         self.settings.sync()  # write now, so it survives the app being killed
         self.setWindowFilePath(str(self.manifest_path))  # macOS title-bar proxy icon
         self.setWindowTitle(f"VibeFPMGUI — {self.manifest_path.parent.name}")
         self.reload()
+
+    # ------------------------------------------------------ recent manifests
+    MAX_RECENT = 10
+
+    def recent_manifests(self) -> list[str]:
+        value = self.settings.value("recent_manifests", [], type=list) or []
+        return [str(p) for p in value if p]
+
+    def _remember_manifest(self, path: Path):
+        recent = [p for p in self.recent_manifests() if Path(p) != path]
+        recent.insert(0, str(path))
+        self.settings.setValue("recent_manifests", recent[:self.MAX_RECENT])
+
+    def _fill_recent_menu(self):
+        """Rebuilt each time it opens, so missing files show as such."""
+        menu = self.recent_menu
+        menu.clear()
+        recent = self.recent_manifests()
+        if not recent:
+            menu.addAction("No recent manifests").setEnabled(False)
+        home = str(Path.home())
+        for path in recent:
+            shown = "~" + path[len(home):] if path.startswith(home + os.sep) else path
+            exists = Path(path).is_file()
+            label = f"{Path(path).parent.name} — {shown}" + ("" if exists else "  (not found)")
+            action = menu.addAction(label.replace("&", "&&"))  # "&" would be a mnemonic
+            action.setToolTip(path if exists else f"{path}\nThis file no longer exists.")
+            action.setEnabled(exists)
+            action.setCheckable(True)
+            action.setChecked(self.manifest_path is not None and Path(path) == self.manifest_path)
+            action.triggered.connect(lambda _=False, p=path: self.open_recent(p))
+        menu.addSeparator()
+        clear = menu.addAction("Clear Menu")
+        clear.setEnabled(bool(recent))
+        clear.triggered.connect(self.clear_recent_manifests)
+
+    def open_recent(self, path: str):
+        if not Path(path).is_file():
+            # It was there when the menu opened, but not any more.
+            QMessageBox.warning(self, "File not found",
+                                f"{path}\n\nno longer exists, so it was removed from Recent Manifests.")
+            self.settings.setValue("recent_manifests",
+                                   [p for p in self.recent_manifests() if p != path])
+            return
+        self.open_manifest(path)
+
+    def clear_recent_manifests(self):
+        self.settings.setValue("recent_manifests", [])
 
     def _clear_run_panels(self):
         """Empty the output console and the build/test panels."""

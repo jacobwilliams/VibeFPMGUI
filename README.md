@@ -9,6 +9,8 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   Stop ⌘.; Ctrl on Linux/Windows), with live output and the usual options
   (profile, compiler, flags, target, extra arguments, program arguments).
   Hover an option to see the fpm flag it becomes.
+  *File → Recent Manifests* reopens any of the last 10 projects (missing
+  ones are greyed out); the last one is reopened at startup.
 * *Features* menu: tick any of the features declared in the project's
   `[features]` table to build/run/test with `--features …` (remembered per
   project). The *Profile* list also offers the project's own `[profiles]`;
