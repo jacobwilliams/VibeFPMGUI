@@ -62,7 +62,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("VibeFPMGUI")
         self.resize(1300, 850)
-        self.settings = QSettings("VibeFPMGUI", "VibeFPMGUI")
+        self.settings = make_settings()
         self.manifest_path: Path | None = None
         self.graph: m.DependencyGraph | None = None
         self.process: QProcess | None = None
@@ -277,19 +277,34 @@ class MainWindow(QMainWindow):
         console_box = QWidget()
         cl = QVBoxLayout(console_box)
         cl.setContentsMargins(0, 0, 0, 0)
-        header = QHBoxLayout()
+        cl.setSpacing(3)  # (the default spacing left a visible gap above the buttons)
         self.output_title = QLabel("<b>Output</b>")
-        header.addWidget(self.output_title)
-        header.addStretch(1)
+        # Titles like "AI review of a_very_long_file_name.f90 (model)" wrap
+        # instead of forcing the panel wider.
+        self.output_title.setWordWrap(True)
+        self.output_title.setMinimumWidth(40)
+        self.output_title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.output_title.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        # Title alone at the top; the buttons sit below the output.
+        footer = QHBoxLayout()
+        footer.setContentsMargins(0, 0, 0, 0)
+        footer.setSpacing(6)
+        footer.addStretch(1)
         self.show_all_button = QPushButton("Show all output")
         self.show_all_button.clicked.connect(self.show_all_output)
         self.show_all_button.hide()
-        header.addWidget(self.show_all_button)
+        footer.addWidget(self.show_all_button)
         clear = QPushButton("Clear")
+        clear.setToolTip("Clear the output")
         clear.clicked.connect(self.console.clear)
-        header.addWidget(clear)
-        cl.addLayout(header)
-        cl.addWidget(self.output_stack)
+        footer.addWidget(clear)
+        for button in (self.show_all_button, clear):
+            # macOS buttons reserve extra room around themselves (for the
+            # focus ring); lay them out by their visible size instead.
+            button.setAttribute(Qt.WA_LayoutUsesWidgetRect)
+        cl.addWidget(self.output_title)
+        cl.addWidget(self.output_stack, 1)
+        cl.addLayout(footer)
 
         self.build_monitor = BuildMonitor()
         self.test_monitor = TestMonitor()
@@ -584,6 +599,7 @@ class MainWindow(QMainWindow):
             self._clear_run_panels()
         self.manifest_path = path
         self.settings.setValue("last_manifest", str(self.manifest_path))
+        self.settings.sync()  # write now, so it survives the app being killed
         self.setWindowFilePath(str(self.manifest_path))  # macOS title-bar proxy icon
         self.setWindowTitle(f"VibeFPMGUI — {self.manifest_path.parent.name}")
         self.reload()
@@ -1217,7 +1233,7 @@ class MainWindow(QMainWindow):
 
     def _show_single_output(self, title: str, text: str):
         self.test_output.setPlainText(text)
-        self.output_title.setText(f"<b>Output</b> — {html.escape(title)}")
+        self.output_title.setText(f"<b>Output</b> — {_breakable(html.escape(title))}")
         self.output_stack.setCurrentWidget(self.test_output)
         self.show_all_button.show()
 
@@ -1436,6 +1452,10 @@ class MainWindow(QMainWindow):
         findings, summary = ai.parse_findings(text, max_line)
         self.review_monitor.set_findings(findings, summary)
         detail = f"{stats.get('seconds', 0):.1f} s · {self.ai_model}" if stats else self.ai_model
+        if stats.get("repeated"):
+            detail += " · stopped a repetition loop"
+        elif stats.get("truncated"):
+            detail += " · answer cut off at the length limit"
         self.review_monitor.finish(True, detail)
         if editor in self.editors():
             editor.show_review(findings)
@@ -1466,6 +1486,22 @@ class MainWindow(QMainWindow):
         if self._ollama_process is not None:  # only a server we started ourselves
             self._ollama_process.terminate()
             self._ollama_process.waitForFinished(3000)
+
+
+def make_settings() -> QSettings:
+    """The app's saved settings. VIBEFPMGUI_SETTINGS=/path/file.ini uses a
+    separate file instead (e.g. for testing without touching your own)."""
+    path = os.environ.get("VIBEFPMGUI_SETTINGS")
+    if path:
+        return QSettings(path, QSettings.IniFormat)
+    return QSettings("VibeFPMGUI", "VibeFPMGUI")
+
+
+def _breakable(text: str) -> str:
+    """Let long names wrap: add zero-width spaces after _ . / - (word wrap
+    otherwise only breaks at spaces). For display only: text copied from the
+    label may include them."""
+    return re.sub(r"([_./\\-])(?=\w)", "\\1\u200b", text)
 
 
 def split_runner(args: list[str]) -> tuple[list[str], str]:

@@ -23,11 +23,13 @@ from __future__ import annotations
 import re
 import shutil
 import threading
+import time
 from dataclasses import dataclass
 
 from qtpy.QtCore import QObject, QThread, Signal, Slot
 
 DEFAULT_MODEL = "qwen2.5-coder:7b"
+MAX_ANSWER_TOKENS = 1500  # plenty for a list of findings; stops runaway answers
 DEFAULT_HOST = None  # the ollama library's default: $OLLAMA_HOST or localhost:11434
 CATEGORIES = ("bug", "warning", "performance", "style", "suggestion")
 
@@ -122,10 +124,58 @@ def parse_findings(text: str, max_line: int | None = None) -> tuple[list[Finding
         comment = match.group(4).strip().strip("*").strip()
         if comment:
             findings.append(Finding(start, min(end, max_line or end), category, comment))
+    unique: list[Finding] = []
+    seen = set()
     for f in findings:
         # Text after a blank line wasn't part of the finding.
         f.comment = f.comment.split("\x00")[0].strip()
-    return findings, " ".join(summary_lines)
+        key = (f.line, f.end_line, f.category, " ".join(f.comment.lower().split()))
+        if key not in seen:  # small models sometimes repeat themselves
+            seen.add(key)
+            unique.append(f)
+    return unique, " ".join(summary_lines)
+
+
+class RepeatGuard:
+    """Spots a model stuck in a loop (writing a line it already wrote).
+
+    Text is passed on a line at a time, so a repeated line can be held back:
+    :meth:`feed` returns the text that's safe to show and whether to stop.
+    """
+
+    MIN_LENGTH = 12  # short lines ("", "```", "SUMMARY:") may legitimately repeat
+
+    def __init__(self):
+        self._partial = ""
+        self._seen: set[str] = set()
+        self.repeated = False
+
+    @staticmethod
+    def _key(line: str) -> str:
+        return " ".join(line.lower().split())
+
+    def feed(self, text: str) -> tuple[str, bool]:
+        self._partial += text
+        out = []
+        while "\n" in self._partial:
+            line, self._partial = self._partial.split("\n", 1)
+            key = self._key(line)
+            if len(key) >= self.MIN_LENGTH:
+                if key in self._seen:
+                    self.repeated = True
+                    self._partial = ""
+                    return "".join(out), True
+                self._seen.add(key)
+            out.append(line + "\n")
+        return "".join(out), False
+
+    def flush(self) -> str:
+        """Whatever is left at the end (a last line without a newline)."""
+        rest, self._partial = self._partial, ""
+        if rest and len(self._key(rest)) >= self.MIN_LENGTH and self._key(rest) in self._seen:
+            self.repeated = True
+            return ""
+        return rest
 
 
 def build_prompt(path: str, language: str, code: str, focus: str,
@@ -233,25 +283,53 @@ class ReviewWorker(QObject):
         self.finished.emit("", {})
 
     def _review(self, client):
-        options = {"num_ctx": context_size(self.prompt), "temperature": 0.2}
+        options = {
+            "num_ctx": context_size(self.prompt),
+            "temperature": 0.2,
+            # Discourage the repetition loops small models fall into, and
+            # cap the answer so a runaway one always ends.
+            "repeat_penalty": 1.1,
+            "repeat_last_n": 512,
+            "num_predict": MAX_ANSWER_TOKENS,
+        }
+        started = time.monotonic()
         stream = client.chat(model=self.model, stream=True, options=options, messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": self.prompt},
         ])
+        guard = RepeatGuard()
         parts: list[str] = []
         stats: dict = {}
-        for part in stream:
-            if self._cancel.is_set():
-                self.failed.emit("Review stopped")
-                return
-            message = getattr(part, "message", None)
-            text = getattr(message, "content", "") if message is not None else ""
-            if text:
-                parts.append(text)
-                self.chunk.emit(text)
-            if getattr(part, "done", False):
-                stats = {"tokens": getattr(part, "eval_count", 0) or 0,
-                         "seconds": (getattr(part, "total_duration", 0) or 0) / 1e9}
+        try:
+            for part in stream:
+                if self._cancel.is_set():
+                    self.failed.emit("Review stopped")
+                    return
+                message = getattr(part, "message", None)
+                text = getattr(message, "content", "") if message is not None else ""
+                if text:
+                    shown, stop = guard.feed(text)
+                    if shown:
+                        parts.append(shown)
+                        self.chunk.emit(shown)
+                    if stop:
+                        break  # closing the stream makes Ollama stop generating
+                if getattr(part, "done", False):
+                    stats = {"tokens": getattr(part, "eval_count", 0) or 0,
+                             "seconds": (getattr(part, "total_duration", 0) or 0) / 1e9}
+                    if (stats["tokens"] or 0) >= MAX_ANSWER_TOKENS:
+                        stats["truncated"] = True
+        finally:
+            close = getattr(stream, "close", None)
+            if close is not None:
+                close()
+        rest = guard.flush()
+        if rest:
+            parts.append(rest)
+            self.chunk.emit(rest)
+        if guard.repeated:
+            stats = {"seconds": time.monotonic() - started, "repeated": True}
+            self.chunk.emit("\n[The model started repeating itself, so the review was stopped here.]\n")
         self.finished.emit("".join(parts), stats)
 
 
