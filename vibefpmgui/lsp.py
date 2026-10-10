@@ -107,8 +107,9 @@ def hover_html(contents) -> str:
         else:
             for chunk in re.split(r"^\s*-{3,}\s*$", part.strip(), flags=re.MULTILINE):
                 if chunk.strip():
-                    out.append(f"<p style='margin:4px 0 0 0'>"
-                               f"{html.escape(chunk.strip()).replace(chr(10), '<br>')}</p>")
+                    prose = html.escape(chunk.strip()).replace("\n", "<br>")
+                    prose = re.sub(r"`([^`]+)`", r"<code>\1</code>", prose)  # inline code
+                    out.append(f"<p style='margin:4px 0 0 0'>{prose}</p>")
     return "".join(out)
 
 

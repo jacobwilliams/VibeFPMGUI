@@ -43,12 +43,14 @@ from qtpy.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPlainTextEdit,
+    QTextBrowser,
     QTextEdit,
     QToolButton,
     QToolTip,
@@ -81,6 +83,86 @@ WORD_RE = re.compile(r"[A-Za-z0-9_]")
 def worst_severity(notes: list[tuple[str, str]]) -> str:
     return min((s for s, _ in notes),
                key=lambda s: MARKER_PRIORITY.index(s) if s in MARKER_PRIORITY else len(MARKER_PRIORITY))
+
+
+class HoverPopup(QFrame):
+    """A tooltip-like popup for hover information that can scroll: fortls's
+    answer for a long declaration or doc comment can be taller than the
+    screen, and QToolTip can't scroll. It stays open while the mouse is on
+    the name or inside the popup (so it can be scrolled), and closes when
+    the mouse leaves both, on a key press, or when the editor scrolls."""
+
+    MAX_WIDTH, MAX_HEIGHT = 720, 420  # also at most ~60% / 45% of the screen
+
+    def __init__(self, editor: CodeEditor):
+        super().__init__(editor, Qt.ToolTip | Qt.FramelessWindowHint)
+        self.editor = editor
+        self.anchor = None  # what the popup is about (see CodeEditor.hover_key)
+        self.setFrameShape(QFrame.Box)
+        self.browser = QTextBrowser()
+        self.browser.setFrameShape(QFrame.NoFrame)
+        self.browser.setOpenLinks(False)
+        self.browser.setFont(QToolTip.font())
+        self.browser.document().setDocumentMargin(6)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(1, 1, 1, 1)
+        layout.addWidget(self.browser)
+        self._hide_timer = QTimer(self)
+        self._hide_timer.setSingleShot(True)
+        self._hide_timer.setInterval(300)  # time to move the mouse into the popup
+        self._hide_timer.timeout.connect(self._hide_unless_hovered)
+
+    def show_at(self, global_pos: QPoint, text_html: str, anchor):
+        self.anchor = anchor
+        self._hide_timer.stop()
+        # The editor's colours (Qt's tooltip colours don't follow dark mode on macOS).
+        pal = self.editor.palette()
+        base, text = pal.color(QPalette.Base), pal.color(QPalette.Text)
+        bg = base.lighter(115) if base.lightness() < 128 else base.darker(103)
+        border = QColor(text.red(), text.green(), text.blue(), 90).name(QColor.HexArgb)
+        self.setStyleSheet(f"HoverPopup {{ background: {bg.name()}; border: 1px solid {border}; }}"
+                           f"QTextBrowser {{ background: {bg.name()}; color: {text.name()}; }}")
+        self.browser.setHtml(text_html)
+        screen = (QApplication.screenAt(global_pos) or QApplication.primaryScreen()).availableGeometry()
+        max_w = min(self.MAX_WIDTH, int(screen.width() * 0.6))
+        max_h = min(self.MAX_HEIGHT, int(screen.height() * 0.45))
+        doc = self.browser.document()
+        doc.setTextWidth(-1)
+        bar = self.browser.verticalScrollBar().sizeHint().width()
+        width = min(int(doc.idealWidth()) + 4, max_w)
+        doc.setTextWidth(width)
+        height = int(doc.size().height()) + 4
+        if height > max_h:  # it will scroll: leave room for the scroll bar
+            width = min(width + bar, max_w)
+            height = max_h
+        self.resize(width + 2, height + 2)
+        # Below the mouse; above it if there's no room; always on screen.
+        x = min(max(global_pos.x(), screen.left()), screen.right() - self.width())
+        y = global_pos.y() + 18
+        if y + self.height() > screen.bottom():
+            y = max(screen.top(), global_pos.y() - 8 - self.height())
+        self.move(x, y)
+        self.browser.verticalScrollBar().setValue(0)
+        self.show()
+
+    def schedule_hide(self):
+        if self.isVisible() and not self._hide_timer.isActive():
+            self._hide_timer.start()
+
+    def keep(self):
+        self._hide_timer.stop()
+
+    def _hide_unless_hovered(self):
+        if not self.geometry().contains(QCursor.pos()):
+            self.hide()
+
+    def leaveEvent(self, event):
+        self.schedule_hide()
+        super().leaveEvent(event)
+
+    def enterEvent(self, event):
+        self.keep()
+        super().enterEvent(event)
 
 
 class LineNumberArea(QWidget):
@@ -127,7 +209,10 @@ class CodeEditor(QPlainTextEdit):
         # global position, lint tooltip HTML) when the mouse rests on a name.
         self.hover_provider: Callable | None = None
         self._hover_word: tuple[int, int] | None = None
+        self.hover_popup = HoverPopup(self)
         self.viewport().setMouseTracking(True)
+        self.verticalScrollBar().valueChanged.connect(self.hover_popup.hide)
+        self.horizontalScrollBar().valueChanged.connect(self.hover_popup.hide)
         self.markers: dict[int, list[tuple[str, str]]] = {}  # line -> [(severity, message)]
         self.find_selections: list[QTextEdit.ExtraSelection] = []
         self.lint_issues: list[lint.LintIssue] = []  # underlined, with a tooltip
@@ -257,21 +342,32 @@ class CodeEditor(QPlainTextEdit):
             return None  # a number
         return cursor.blockNumber() + 1, start, word
 
+    def hover_key(self, point: QPoint):
+        """What the mouse is on, for deciding when the hover popup is stale:
+        the name (line, start column), or else the character position."""
+        word = self.word_at(point)
+        return word[:2] if word else ("at", self.cursorForPosition(point).position())
+
     def viewportEvent(self, event):
         if event.type() == event.Type.ToolTip:
+            if self.hover_popup.isVisible() and self.hover_popup.anchor == self.hover_key(event.pos()):
+                return True  # already showing (and maybe scrolled): leave it
             pos = self.cursorForPosition(event.pos()).position()
             notes = [i.describe() for i in self.lint_issues
                      if (span := self._lint_span(i)) and span[0] <= pos <= span[1]]
             lint_html = "".join(f"<p style='margin:0'>{html.escape(n)}</p>" for n in notes)
             word = self.word_at(event.pos()) if self.hover_provider is not None else None
             self._hover_word = word[:2] if word else None
+            key = self.hover_key(event.pos())
             if notes:
-                QToolTip.showText(event.globalPos(), lint_html, self.viewport())
-            else:
-                QToolTip.hideText()
+                self.hover_popup.show_at(event.globalPos(), lint_html, key)
+            elif self.hover_popup.anchor != key:
+                self.hover_popup.hide()
             if word:  # the language server's answer is added when it arrives
                 self.hover_provider(word[0], word[1], event.globalPos(), lint_html)
             return True
+        if event.type() == event.Type.Leave:
+            self.hover_popup.schedule_hide()
         return super().viewportEvent(event)
 
     def show_hover(self, line: int, column: int, global_pos: QPoint, text_html: str):
@@ -281,7 +377,20 @@ class CodeEditor(QPlainTextEdit):
         word = self.word_at(self.viewport().mapFromGlobal(QCursor.pos()))
         if word is None or word[:2] != (line, column):
             return
-        QToolTip.showText(global_pos, text_html, self.viewport())
+        self.hover_popup.show_at(global_pos, text_html, (line, column))
+
+    def wheelEvent(self, event):
+        self.hover_popup.hide()
+        super().wheelEvent(event)
+
+    def focusOutEvent(self, event):
+        if not self.hover_popup.geometry().contains(QCursor.pos()):
+            self.hover_popup.hide()
+        super().focusOutEvent(event)
+
+    def hideEvent(self, event):
+        self.hover_popup.hide()
+        super().hideEvent(event)
 
     def mousePressEvent(self, event):
         if (event.button() == Qt.LeftButton and event.modifiers() & Qt.ControlModifier
@@ -294,6 +403,11 @@ class CodeEditor(QPlainTextEdit):
 
     def mouseMoveEvent(self, event):
         super().mouseMoveEvent(event)
+        if self.hover_popup.isVisible():
+            if self.hover_key(event.position().toPoint()) == self.hover_popup.anchor:
+                self.hover_popup.keep()
+            else:
+                self.hover_popup.schedule_hide()
         if self.hover_provider is not None and event.modifiers() & Qt.ControlModifier \
                 and self.word_at(event.position().toPoint()):
             self.viewport().setCursor(Qt.PointingHandCursor)
@@ -352,6 +466,7 @@ class CodeEditor(QPlainTextEdit):
 
     # ------------------------------------------------------------ editing
     def keyPressEvent(self, event):
+        self.hover_popup.hide()
         key = event.key()
         if key == Qt.Key_Tab and not event.modifiers() & (Qt.ControlModifier | Qt.AltModifier):
             cursor = self.textCursor()
