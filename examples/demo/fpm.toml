@@ -1,0 +1,46 @@
+# Demo project for VibeFPMGUI: it exercises the dependency graph, the build
+# grid, the test runner and the Features menu. See README.md next to this file.
+name = "demo"
+version = "1.2.0"
+license = "MIT"
+author = "VibeFPMGUI"
+description = "Example project that uses every part of the GUI"
+homepage = "https://github.com/fortran-lang/fpm"
+
+[build]
+auto-executables = true
+auto-tests = true
+auto-examples = true
+
+[dependencies]
+# Local path dependency, which itself pulls in a git dependency (fmin).
+mathutils = { path = "mathutils" }
+# Metapackage: fpm adds the compiler's OpenMP flags.
+openmp = "*"
+
+[dev-dependencies]
+# Only used by the tests (shown as a dashed edge in the graph).
+test-drive = { git = "https://github.com/fortran-lang/test-drive", tag = "v0.5.0" }
+
+# ---------------------------------------------------------------- features
+# Pick these in the GUI's Features menu (or: fpm build --features fast,warnings).
+[features]
+# Optimised build, with an extra flag only for gfortran.
+fast.flags = "-O3"
+fast.gfortran.flags = "-O3 -funroll-loops"
+# Runtime checks (bounds, etc.) and debug info.
+checks.flags = "-fcheck=all -g"
+# Turn on compiler warnings: src/demo_legacy.f90 has a few on purpose,
+# so the build grid shows "warnings" badges.
+warnings.flags = "-Wall -Wextra"
+# Preprocessor macro read by app/demo.F90.
+greeting.preprocess.cpp.macros = ["DEMO_GREETING"]
+# Makes test/check_feature.F90 fail, to see a failing test in the Tests tab.
+failing-test.preprocess.cpp.macros = ["DEMO_FAIL"]
+# Makes src/demo_broken.F90 fail to compile, to see a failed build.
+broken.preprocess.cpp.macros = ["DEMO_BROKEN"]
+
+# Feature profiles (appear in the Profile list): fpm build --profile ci
+[profiles]
+ci = ["checks", "warnings"]
+failures = ["failing-test"]

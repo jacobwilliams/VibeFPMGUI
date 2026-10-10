@@ -5,8 +5,14 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
 ## Features
 
 * Open any `fpm.toml` and run `fpm build`, `run`, `test`, `update` and `clean`
-  with live output, a Stop button and the usual options (profile, compiler,
-  flags, target, extra arguments, program arguments).
+  from the toolbar or the *Commands* menu (Build ⌘B, Run ⌘R, Test ⌘U,
+  Stop ⌘.; Ctrl on Linux/Windows), with live output and the usual options
+  (profile, compiler, flags, target, extra arguments, program arguments).
+  Hover an option to see the fpm flag it becomes.
+* *Features* menu: tick any of the features declared in the project's
+  `[features]` table to build/run/test with `--features …` (remembered per
+  project). The *Profile* list also offers the project's own `[profiles]`;
+  since fpm can't combine the two, Profile is disabled while features are on.
 * Build status grid next to the output: every file/target fpm compiles is
   listed live (works with parallel/OpenMP builds) with its package, status
   (compiling / done / warnings / failed / aborted) and elapsed time, plus an
@@ -41,4 +47,9 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
 ```sh
 pixi run start                      # reopens the last project
 pixi run start path/to/fpm.toml     # or a project directory
+pixi run demo                       # open the demo project in examples/demo
 ```
+
+The demo project ([examples/demo](examples/demo)) uses features, profiles,
+git/path/metapackage/dev dependencies, warnings, parallel compiles and tests,
+so every part of the GUI can be tried; its README lists what to click.

@@ -1,0 +1,9 @@
+# Local (path) dependency of the demo project. It has its own git
+# dependency, so the graph shows a second level.
+name = "mathutils"
+version = "0.3.1"
+license = "BSD-3-Clause"
+description = "Helper routines for the demo project"
+
+[dependencies]
+fmin = { git = "https://github.com/jacobwilliams/fmin.git", rev = "3d094fba0e9b98d132414f8442c7c76d32da1d30" }

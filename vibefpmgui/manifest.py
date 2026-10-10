@@ -224,3 +224,30 @@ def _locate(name, spec, parent: Package, root_dir: Path, cached: dict):
         return pkg, None
     _fill_from_manifest(pkg, data)
     return pkg, data
+
+
+def project_features(data: dict) -> dict[str, list[str]]:
+    """Features declared in a manifest's ``[features]`` table, each with the
+    (dotted) properties it sets, e.g. ``{"mpi": ["dependencies.mpi", "flags"]}``."""
+    table = data.get("features")
+    if not isinstance(table, dict):
+        return {}
+
+    def paths(value, prefix=""):
+        if isinstance(value, dict):
+            out = []
+            for key, sub in value.items():
+                out += paths(sub, f"{prefix}.{key}" if prefix else str(key))
+            return out
+        return [prefix]
+
+    return {str(name): paths(value) for name, value in table.items()}
+
+
+def project_profiles(data: dict) -> dict[str, list[str]]:
+    """Feature profiles declared in ``[profiles]`` (name -> list of features)."""
+    table = data.get("profiles")
+    if not isinstance(table, dict):
+        return {}
+    return {str(name): [str(f) for f in value] if isinstance(value, list) else []
+            for name, value in table.items()}

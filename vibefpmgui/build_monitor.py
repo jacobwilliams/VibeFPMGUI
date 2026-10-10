@@ -136,12 +136,17 @@ def index_sources(graph: m.DependencyGraph | None) -> dict[str, list[tuple[str, 
     index: dict[str, list[tuple[str, Path]]] = {}
     if graph is None:
         return index
-    for pkg in graph.packages.values():
-        if not pkg.directory or not pkg.directory.is_dir() or pkg.kind == m.MISSING:
-            continue
-        for dirpath, dirnames, filenames in os.walk(pkg.directory):
-            # Skip build trees (they hold other packages' sources) and VCS dirs.
-            dirnames[:] = [d for d in dirnames if d != "build" and not d.startswith(".")]
+    packages = [p for p in graph.packages.values()
+                if p.directory and p.directory.is_dir() and p.kind != m.MISSING]
+    package_dirs = {p.directory.resolve() for p in packages}
+    for pkg in packages:
+        own = pkg.directory.resolve()
+        for dirpath, dirnames, filenames in os.walk(own):
+            # Skip build trees (they hold other packages' sources), VCS dirs,
+            # and nested packages (e.g. a path dependency inside the project),
+            # which are indexed under their own name.
+            dirnames[:] = [d for d in dirnames if d != "build" and not d.startswith(".")
+                           and (Path(dirpath) / d).resolve() not in package_dirs]
             for f in filenames:
                 if Path(f).suffix.lower() in SOURCE_EXTS:
                     index.setdefault(f, []).append((pkg.name, Path(dirpath) / f))

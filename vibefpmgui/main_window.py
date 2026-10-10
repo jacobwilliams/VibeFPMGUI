@@ -15,32 +15,37 @@ import sys
 import tomllib
 from pathlib import Path
 
-from qtpy.QtCore import QEvent, QProcess, QProcessEnvironment, QSettings, Qt, QUrl
+from qtpy.QtCore import QEvent, QProcess, QProcessEnvironment, QSettings, QSize, Qt, QUrl
 from qtpy.QtGui import QAction, QActionGroup, QColor, QPalette, QDesktopServices, QFont, QFontDatabase, QKeySequence, QTextCursor
 from qtpy.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
     QLabel, QLineEdit, QMainWindow, QMenu, QStackedWidget, QMessageBox, QPlainTextEdit, QPushButton, QSplitter,
-    QTabWidget, QTextBrowser, QToolButton, QVBoxLayout, QWidget,
+    QTabWidget, QTextBrowser, QToolBar, QToolButton, QVBoxLayout, QWidget,
 )
 
 from . import __version__
 from . import manifest as m
 from .build_monitor import BuildMonitor
 from .test_monitor import MARKER_RE, TestMonitor, parse_test_list
+from .icons import make_icon
 from .highlighter import DARK_STYLE, LIGHT_STYLE, PygmentsHighlighter, is_dark
 from .graph_view import EDGE_STYLES, KIND_LABELS, LAYOUTS, THEME_CHOICES, DependencyGraphView
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
 
-# (label, fpm sub-command, uses build options, refresh graph afterwards)
+# (label, fpm sub-command, uses build options, refresh graph afterwards, icon, shortcut, description)
 COMMANDS = [
-    ("Build", ["build"], True, True),
-    ("Run", ["run"], True, True),
-    ("Test", ["test"], True, True),
-    ("Update deps", ["update"], False, True),
-    ("Clean", ["clean", "--skip"], False, False),
-    ("Clean all", ["clean", "--all"], False, True),
+    ("Build", ["build"], True, True, "build", "Ctrl+B", "Compile the project"),
+    ("Run", ["run"], True, True, "run", "Ctrl+R", "Build and run the program(s)"),
+    ("Test", ["test"], True, True, "test", "Ctrl+U", "Build and run the tests"),
+    ("Update deps", ["update"], False, True, "update", "", "Fetch or update the dependencies"),
+    ("Clean", ["clean", "--skip"], False, False, "clean", "",
+     "Delete the build output, keeping downloaded dependencies"),
+    ("Clean all", ["clean", "--all"], False, True, "clean-all", "",
+     "Delete the build output including downloaded dependencies"),
 ]
+STOP_COLOR = "#e03131"
+BUILTIN_PROFILES = ["(default)", "debug", "release"]
 
 
 def _signature(graph: m.DependencyGraph):
@@ -64,7 +69,7 @@ class MainWindow(QMainWindow):
         self._captured: list[str] = []  # output of "fpm test --list"
         self._held_blank = False  # blank line that may precede a test marker
         self._test_args: tuple = ()
-        self.command_buttons: list[QPushButton] = []
+        self.command_actions: list[QAction] = []
 
         self._build_ui()
         self._restore_settings()
@@ -79,7 +84,7 @@ class MainWindow(QMainWindow):
         open_action.setShortcut(QKeySequence.Open)
         open_action.triggered.connect(self.browse)
         reload_action = QAction("Reload", self)
-        reload_action.setShortcut(QKeySequence.Refresh)
+        reload_action.setShortcut(QKeySequence("Ctrl+Shift+R"))  # Ctrl/⌘+R is Run
         reload_action.triggered.connect(self.reload)
         file_menu = self.menuBar().addMenu("&File")
         file_menu.addAction(open_action)
@@ -96,8 +101,11 @@ class MainWindow(QMainWindow):
         # macOS defaults to fields staying at their size hint; let them widen with the panel.
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         self.profile_combo = QComboBox()
-        self.profile_combo.addItems(["(default)", "debug", "release"])
+        self.profile_combo.addItems(BUILTIN_PROFILES)
         form.addRow("Profile:", self.profile_combo)
+        self.features_label = QLabel()
+        self.features_label.setWordWrap(True)
+        form.addRow("Features:", self.features_label)
         self.compiler_edit = QLineEdit()
         self.compiler_edit.setPlaceholderText("gfortran (default)")
         form.addRow("Compiler:", self.compiler_edit)
@@ -129,6 +137,8 @@ class MainWindow(QMainWindow):
         for widget, flag, text in [
             (self.profile_combo, "--profile PROF",
              "Build profile: debug or release. (default) leaves it to fpm, which uses debug."),
+            (self.features_label, "--features LIST",
+             "Features to enable, chosen in the Features menu. Can't be combined with a profile."),
             (self.compiler_edit, "--compiler NAME", "Fortran compiler to use. fpm uses gfortran by default."),
             (self.flag_edit, "--flag FFLAGS", "Extra Fortran compiler flags."),
             (self.target_edit, "fpm run|test NAME…",
@@ -146,27 +156,17 @@ class MainWindow(QMainWindow):
             if label is not None and widget is not self.verbose_check:
                 label.setToolTip(tip)
 
-        commands = QGroupBox("Commands")
-        grid = QVBoxLayout(commands)
-        for label, args, uses_options, refresh in COMMANDS:
-            button = QPushButton(label)
-            if args == ["test"]:
-                button.clicked.connect(self.run_tests)
-            else:
-                button.clicked.connect(
-                    lambda _=False, a=args, o=uses_options, r=refresh: self.run_fpm(a, o, r))
-            grid.addWidget(button)
-            self.command_buttons.append(button)
-        self.stop_button = QPushButton("Stop")
-        self.stop_button.setEnabled(False)
-        self.stop_button.clicked.connect(self.stop)
-        grid.addWidget(self.stop_button)
+        self._build_commands()
+        self.features_menu = self.menuBar().addMenu("Fea&tures")
+        self.project_features: dict[str, list[str]] = {}
+        self.selected_features: list[str] = []
+        self._wanted_profile = "(default)"
+        self._rebuild_features_menu()
 
         left = QWidget()
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.addWidget(options)
-        left_layout.addWidget(commands)
         left_layout.addStretch(1)
 
         # --- right: tabs (graph / manifest) over the output console
@@ -279,6 +279,7 @@ class MainWindow(QMainWindow):
             self._update_legend()
             self.build_monitor.refresh_palette()
             self.test_monitor.refresh_palette()
+            self._update_command_icons()
             self.build_monitor.set_package_colors(self.graph_view.package_colors())
         super().changeEvent(event)
 
@@ -336,10 +337,74 @@ class MainWindow(QMainWindow):
     def _update_legend(self):
         self.legend.setText(self.graph_view.legend_html())
 
+    def _build_commands(self):
+        """The fpm commands as actions, shown in a toolbar and a Commands menu."""
+        self.command_icons: dict[QAction, str] = {}
+
+        def make(label, icon, shortcut, description, slot):
+            action = QAction(label, self)
+            if shortcut:
+                action.setShortcut(QKeySequence(shortcut))
+                keys = QKeySequence(shortcut).toString(QKeySequence.NativeText)
+                action.setToolTip(f"{label} ({keys}) — {description}")
+            else:
+                action.setToolTip(f"{label} — {description}")
+            action.setStatusTip(description)
+            action.triggered.connect(slot)
+            self.command_icons[action] = icon
+            return action
+
+        actions = {}
+        for label, args, uses_options, refresh, icon, shortcut, description in COMMANDS:
+            if args == ["test"]:
+                slot = self.run_tests
+            else:
+                slot = lambda _=False, a=args, o=uses_options, r=refresh: self.run_fpm(a, o, r)
+            actions[icon] = make(label, icon, shortcut, description, slot)
+            self.command_actions.append(actions[icon])
+        self.stop_action = make("Stop", "stop", "Ctrl+.", "Stop the running fpm command", self.stop)
+        self.stop_action.setEnabled(False)
+
+        groups = [[actions["build"], actions["run"], actions["test"], self.stop_action],
+                  [actions["update"]],
+                  [actions["clean"], actions["clean-all"]]]
+        toolbar = QToolBar("Commands")
+        toolbar.setObjectName("CommandsToolbar")
+        toolbar.setMovable(False)
+        toolbar.setFloatable(False)
+        toolbar.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        toolbar.setIconSize(QSize(22, 22))
+        toolbar.toggleViewAction().setEnabled(False)  # don't let it be hidden by accident
+        menu = self.menuBar().addMenu("&Commands")
+        for i, group in enumerate(groups):
+            if i:
+                toolbar.addSeparator()
+                menu.addSeparator()
+            toolbar.addActions(group)
+            menu.addActions(group)
+        self.addToolBar(Qt.TopToolBarArea, toolbar)
+        self.setUnifiedTitleAndToolBarOnMac(True)
+        self.command_toolbar = toolbar
+        self._update_command_icons()
+
+    def _update_command_icons(self):
+        """(Re)draw the toolbar icons in the current text colour."""
+        text = QApplication.palette().color(QPalette.WindowText)
+        for action, name in self.command_icons.items():
+            action.setIcon(make_icon(name, STOP_COLOR if name == "stop" else text))
+        hover = "rgba(128,128,128,45)"
+        self.command_toolbar.setStyleSheet(f"""
+            QToolBar#CommandsToolbar {{ border: none; spacing: 2px; padding: 2px 6px; }}
+            QToolBar#CommandsToolbar QToolButton {{ border: none; border-radius: 7px;
+                padding: 4px 10px; }}
+            QToolBar#CommandsToolbar QToolButton:hover {{ background: {hover}; }}
+            QToolBar#CommandsToolbar QToolButton:pressed {{ background: rgba(128,128,128,80); }}
+        """)
+
     def _set_project_enabled(self, enabled: bool):
         running = self.process is not None
-        for b in self.command_buttons:
-            b.setEnabled(enabled and not running)
+        for action in self.command_actions:
+            action.setEnabled(enabled and not running)
 
     # ------------------------------------------------------------ settings
     def _restore_settings(self):
@@ -347,7 +412,9 @@ class MainWindow(QMainWindow):
         geometry = s.value("geometry")
         if geometry is not None:
             self.restoreGeometry(geometry)
-        self.profile_combo.setCurrentText(s.value("profile", "(default)"))
+        # Applied once the project's own [profiles] are in the list.
+        self._wanted_profile = s.value("profile", "(default)")
+        self.profile_combo.setCurrentText(self._wanted_profile)
         self.compiler_edit.setText(s.value("compiler", ""))
         self.flag_edit.setText(s.value("flags", ""))
         self.extra_edit.setText(s.value("extra", ""))
@@ -440,6 +507,7 @@ class MainWindow(QMainWindow):
             self.graph_view.update_packages(self.graph)
         self.show_package(self.graph.root)
         self._set_project_enabled(True)
+        self._load_features_and_profiles()
         missing = sum(1 for p in self.graph.packages.values() if p.kind == m.MISSING)
         msg = f"{len(self.graph.packages) - 1} dependencies"
         if missing:
@@ -507,7 +575,9 @@ class MainWindow(QMainWindow):
                         program_args: bool = True) -> list[str]:
         args = list(sub)
         if uses_options:
-            if self.profile_combo.currentIndex() > 0:
+            if self.selected_features:  # fpm rejects --features together with --profile
+                args += ["--features", ",".join(self.selected_features)]
+            elif self.profile_combo.currentIndex() > 0:
                 args += ["--profile", self.profile_combo.currentText()]
             if self.compiler_edit.text().strip():
                 args += ["--compiler", self.compiler_edit.text().strip()]
@@ -527,9 +597,111 @@ class MainWindow(QMainWindow):
             args.append("--verbose")
         return args
 
+    # ------------------------------------------------------------ features
+    def _load_features_and_profiles(self):
+        """Read [features] and [profiles] from the project's fpm.toml."""
+        try:
+            data = m.load_toml(self.manifest_path)
+        except (OSError, tomllib.TOMLDecodeError):
+            data = {}
+        self.project_features = m.project_features(data)
+        profiles = m.project_profiles(data)
+
+        # Profile list: built-in ones plus the project's feature profiles.
+        current = self.profile_combo.currentText() if self.profile_combo.count() else self._wanted_profile
+        self.profile_combo.blockSignals(True)
+        self.profile_combo.clear()
+        self.profile_combo.addItems(BUILTIN_PROFILES)
+        for name, features in profiles.items():
+            if name not in BUILTIN_PROFILES:
+                self.profile_combo.addItem(name)
+                index = self.profile_combo.count() - 1
+                self.profile_combo.setItemData(
+                    index, f"Feature profile: {', '.join(features) or '(no features)'}", Qt.ToolTipRole)
+        if self.profile_combo.findText(current) >= 0:
+            self.profile_combo.setCurrentText(current)
+        self.profile_combo.blockSignals(False)
+
+        saved = self.settings.value(self._features_key(), [], type=list) or []
+        self.selected_features = [f for f in saved if f in self.project_features]
+        self._rebuild_features_menu()
+
+    def _features_key(self) -> str:
+        digest = hashlib.sha1(str(self.manifest_path).encode()).hexdigest()[:16]
+        return f"features/{digest}"
+
+    def _rebuild_features_menu(self):
+        menu = self.features_menu
+        menu.clear()
+        if not self.project_features:
+            none = menu.addAction("No features defined in fpm.toml")
+            none.setEnabled(False)
+        self.feature_actions: dict[str, QAction] = {}
+        for name, props in self.project_features.items():
+            action = menu.addAction(name)
+            action.setCheckable(True)
+            action.setChecked(name in self.selected_features)
+            self.feature_actions[name] = action
+            shown = ", ".join(props[:8]) + (" …" if len(props) > 8 else "")
+            action.setToolTip(f"Sets: {shown}" if props else name)
+            action.setStatusTip(f"Feature {name} — sets {shown}" if props else f"Feature {name}")
+            action.toggled.connect(lambda on, n=name: self._toggle_feature(n, on))
+        menu.setToolTipsVisible(True)
+        self.clear_features_action = None
+        if self.project_features:
+            menu.addSeparator()
+            self.clear_features_action = menu.addAction("Clear all features")
+            self.clear_features_action.triggered.connect(self._clear_features)
+        self._update_features_ui()
+
+    def _toggle_feature(self, name: str, on: bool):
+        if on and name not in self.selected_features:
+            # Keep the order they're declared in fpm.toml.
+            chosen = set(self.selected_features) | {name}
+            self.selected_features = [f for f in self.project_features if f in chosen]
+        elif not on and name in self.selected_features:
+            self.selected_features.remove(name)
+        self._save_features()
+        # Only update the existing actions: rebuilding the menu here would
+        # delete the action whose signal is being handled.
+        self._update_features_ui()
+
+    def _clear_features(self):
+        self.selected_features = []
+        self._save_features()
+        self._update_features_ui()
+
+    def _save_features(self):
+        if self.manifest_path:
+            self.settings.setValue(self._features_key(), self.selected_features)
+
+    def _update_features_ui(self):
+        """Show the selection, and disable Profile while features are on."""
+        for name, action in getattr(self, "feature_actions", {}).items():
+            if action.isChecked() != (name in self.selected_features):
+                action.blockSignals(True)
+                action.setChecked(name in self.selected_features)
+                action.blockSignals(False)
+        if getattr(self, "clear_features_action", None) is not None:
+            self.clear_features_action.setEnabled(bool(self.selected_features))
+        if self.selected_features:
+            self.features_label.setText(", ".join(self.selected_features))
+        elif self.project_features:
+            self.features_label.setText("<span style='color:gray'>none (see Features menu)</span>")
+        else:
+            self.features_label.setText("<span style='color:gray'>none defined</span>")
+        using = bool(self.selected_features)
+        self.profile_combo.setEnabled(not using)
+        self.profile_combo.setToolTip(
+            "<b><code>--profile PROF</code></b><br>"
+            + ("Disabled while features are selected: fpm can't combine --profile and --features."
+               if using else "Build profile: debug, release, or a feature profile from fpm.toml."))
+
     def _build_description(self) -> str:
-        profile = self.profile_combo.currentText() if self.profile_combo.currentIndex() > 0 else "debug"
         compiler = self.compiler_edit.text().strip() or "gfortran"
+        if self.selected_features:
+            return f"features: {', '.join(self.selected_features)} · {compiler}"
+        profile = self.profile_combo.currentText() if self.profile_combo.currentIndex() > 0 else "debug"
         return f"{profile} · {compiler}"
 
     def run_fpm(self, sub: list[str], uses_options: bool, refresh: bool,
@@ -570,7 +742,7 @@ class MainWindow(QMainWindow):
 
         self._append(f"\n$ cd {shlex.quote(str(self.manifest_path.parent))}\n"
                      f"$ {shlex.join([program] + args)}\n", bold=True)
-        self.stop_button.setEnabled(True)
+        self.stop_action.setEnabled(True)
         self._set_project_enabled(True)
         self.statusBar().showMessage(f"Running fpm {' '.join(sub)}…")
         self.process.start(program, args)
@@ -676,7 +848,7 @@ class MainWindow(QMainWindow):
             return
         self.process.deleteLater()
         self.process = None
-        self.stop_button.setEnabled(False)
+        self.stop_action.setEnabled(False)
         self._set_project_enabled(self.graph is not None)
         if self._refresh_after:
             self.reload()
