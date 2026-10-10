@@ -10,13 +10,36 @@ from __future__ import annotations
 from bisect import bisect_right
 
 from pygments import lex
-from pygments.lexers import TOMLLexer
+from pygments.lexers import (
+    FortranFixedLexer, FortranLexer, TextLexer, TOMLLexer, get_lexer_for_filename,
+)
+from pygments.util import ClassNotFound
 from pygments.styles import get_style_by_name
 from pygments.token import Name
+from qtpy.QtCore import QTimer
 from qtpy.QtGui import QColor, QFont, QPalette, QSyntaxHighlighter, QTextCharFormat
 
 LIGHT_STYLE = "default"
 DARK_STYLE = "monokai"
+
+
+# Fortran extensions Pygments doesn't know (or maps to another language).
+_FIXED_FORM = {".for", ".ftn", ".f77"}
+_FREE_FORM = {".f95", ".f03", ".f08", ".fpp", ".inc"}
+
+
+def lexer_for_path(path) -> object:
+    """A Pygments lexer chosen from the file name (plain text if unknown)."""
+    name = str(path)
+    suffix = ("." + name.rsplit(".", 1)[-1].lower()) if "." in name else ""
+    if suffix in _FIXED_FORM:
+        return FortranFixedLexer()
+    if suffix in _FREE_FORM:
+        return FortranLexer()
+    try:
+        return get_lexer_for_filename(name)
+    except ClassNotFound:
+        return TextLexer()
 
 
 def is_dark(palette: QPalette) -> bool:
@@ -31,8 +54,21 @@ class PygmentsHighlighter(QSyntaxHighlighter):
         self._starts: list[int] = []
         self._formats: dict = {}
         self._busy = False
+        # While typing, wait for a short pause before re-lexing the document.
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(120)
+        self._timer.timeout.connect(self._relex)
         self.set_style(style or LIGHT_STYLE)
-        document.contentsChange.connect(self._relex)
+        document.contentsChange.connect(self._schedule)
+
+    def _schedule(self, *_):
+        if not self._busy:
+            self._timer.start()
+
+    def set_lexer(self, lexer):
+        self.lexer = lexer
+        self._relex()
 
     def set_style(self, name: str):
         self.style = get_style_by_name(name)

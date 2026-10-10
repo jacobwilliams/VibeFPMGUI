@@ -28,10 +28,11 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NamedTuple
 
-from qtpy.QtCore import QEvent, QRectF, QSize, Qt, QTimer, QUrl, Signal
+from qtpy.QtCore import QEvent, QRectF, QSize, Qt, QTimer, Signal
 from qtpy.QtGui import (
-    QColor, QDesktopServices, QFont, QFontDatabase, QFontMetricsF, QLinearGradient, QPainter,
+    QColor, QFont, QFontDatabase, QFontMetricsF, QLinearGradient, QPainter,
     QPalette, QPen,
 )
 from qtpy.QtWidgets import (
@@ -91,27 +92,33 @@ def scaled(pixels: float) -> int:
 FLASH_SECONDS = 0.6  # a row briefly glows in its status colour when it finishes
 
 
+class Diagnostic(NamedTuple):
+    file: str      # as the compiler printed it
+    line: int
+    severity: str  # "error", "fatal error", "warning" or "remark"
+    message: str   # one-line summary including the location
+
+
 class DiagnosticParser:
-    """Turns compiler output, one line at a time, into
-    ``(file, severity, message)`` tuples."""
+    """Turns compiler output, one line at a time, into :class:`Diagnostic`."""
 
     def __init__(self):
-        self._location: str | None = None  # gfortran prints severity lines later
+        self._location: tuple[str, int] | None = None  # gfortran prints the severity later
 
-    def feed(self, line: str) -> tuple[str, str, str] | None:
+    def feed(self, line: str) -> Diagnostic | None:
         match = INTEL_LOC_RE.match(line)
         if match:
-            return match.group(1), match.group(3).lower(), line
+            return Diagnostic(match.group(1), int(match.group(2)), match.group(3).lower(), line)
         match = GNU_LOC_RE.match(line)
         if match and Path(match.group(1)).suffix.lower() in SOURCE_EXTS:
             if match.group(4):  # severity on the same line (gcc/clang style)
-                return match.group(1), match.group(4).lower(), line
-            self._location = f"{match.group(1)}:{match.group(2)}"
+                return Diagnostic(match.group(1), int(match.group(2)), match.group(4).lower(), line)
+            self._location = (match.group(1), int(match.group(2)))
             return None
         match = GNU_SEVERITY_RE.match(line)
         if match and self._location:
-            location, self._location = self._location, None
-            return location.split(":")[0], match.group(1).lower(), f"{location}: {line}"
+            (file, number), self._location = self._location, None
+            return Diagnostic(file, number, match.group(1).lower(), f"{file}:{number}: {line}")
         return None
 
 
@@ -137,6 +144,7 @@ class Target:
     candidates: list[tuple[str, Path]] = field(default_factory=list)  # (package, source)
     path: Path | None = None  # resolved source file
     log_text: str = ""  # the compiler's full output (fpm's .o.log)
+    diagnostics: list[Diagnostic] = field(default_factory=list)
     package: str = ""
     package_kind: str = LIBRARY
 
@@ -384,6 +392,8 @@ class BuildMonitor(QWidget):
     COLUMNS = ["FILE", "PACKAGE", "STATUS", "TIME"]
     # Row clicked: show that file's compiler messages (-1: show all output).
     details_requested = Signal(int)
+    # Double-click: open (path, [Diagnostic]) in an editor.
+    open_file_requested = Signal(str, list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -609,9 +619,9 @@ class BuildMonitor(QWidget):
     def _parse_diagnostic(self, line: str):
         found = self.diagnostics.feed(line)
         if found:
-            target = self._find(Path(found[0]).name, running=False)
+            target = self._find(Path(found.file).name, running=False)
             if target:
-                self._record(target, found[1], found[2])
+                self._record(target, found)
 
     def _read_log(self, target: Target):
         """Pick up diagnostics for a finished source file from fpm's log."""
@@ -645,7 +655,7 @@ class BuildMonitor(QWidget):
             found = parser.feed(line.rstrip())
             if found:
                 # Diagnostics in included files still belong to this target.
-                self._record(target, found[1], found[2])
+                self._record(target, found)
 
     def _resolve_owner(self, target: Target, log_name: str):
         """Several packages may have a file of this name; fpm names the log
@@ -662,10 +672,12 @@ class BuildMonitor(QWidget):
                 self._set_owner(target, package, path)
                 return
 
-    def _record(self, target: Target, severity: str, message: str):
-        if message in target.messages:  # fpm echoes the log on failure
+    def _record(self, target: Target, diag: Diagnostic):
+        if diag.message in target.messages:  # fpm echoes the log on failure
             return
-        target.messages.append(message)
+        target.messages.append(diag.message)
+        target.diagnostics.append(diag)
+        severity = diag.severity
         if severity in ("error", "fatal error"):
             target.errors += 1
             self._mark_failed(target)
@@ -896,6 +908,13 @@ class BuildMonitor(QWidget):
         return "No compiler messages for this file."
 
     def _open_row(self, row: int, _column: int):
+        """Double-click: open the source, at its first error or warning."""
         path = self.table.item(row, 0).data(Qt.UserRole)
         if path:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+            self.open_file_requested.emit(path, self.diagnostics_for(row))
+
+    def diagnostics_for(self, row: int) -> list[Diagnostic]:
+        """Diagnostics that point into the row's own source file (errors first)."""
+        t = self.targets[row]
+        own = [d for d in t.diagnostics if Path(d.file).name == t.name]
+        return sorted(own, key=lambda d: (d.severity == "warning", d.line))

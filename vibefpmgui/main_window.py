@@ -19,7 +19,7 @@ from qtpy.QtCore import QEvent, QProcess, QProcessEnvironment, QSettings, QSize,
 from qtpy.QtGui import QAction, QActionGroup, QColor, QPalette, QDesktopServices, QFont, QFontDatabase, QKeySequence, QTextCursor
 from qtpy.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
-    QLabel, QLineEdit, QMainWindow, QMenu, QStackedWidget, QMessageBox, QPlainTextEdit, QPushButton, QSplitter,
+    QLabel, QLineEdit, QMainWindow, QMenu, QStackedWidget, QTabBar, QMessageBox, QPlainTextEdit, QPushButton, QSplitter,
     QTabWidget, QTextBrowser, QToolBar, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -27,6 +27,7 @@ from . import __version__
 from . import manifest as m
 from .build_monitor import BuildMonitor, set_ui_scale
 from .test_monitor import MARKER_RE, TestMonitor, parse_test_list
+from .editor import EditorTab, monospace_font
 from .icons import make_icon
 from .highlighter import DARK_STYLE, LIGHT_STYLE, PygmentsHighlighter, is_dark
 from .graph_view import EDGE_STYLES, KIND_LABELS, LAYOUTS, THEME_CHOICES, DependencyGraphView
@@ -73,6 +74,7 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._restore_settings()
+        self._update_editor_actions()
 
         start = manifest_path or self.settings.value("last_manifest", "")
         if start and Path(start).is_file():
@@ -90,10 +92,26 @@ class MainWindow(QMainWindow):
         file_menu.addAction(open_action)
         file_menu.addAction(reload_action)
         file_menu.addSeparator()
+        open_file_action = QAction("Open File in Editor…", self)
+        open_file_action.setShortcut(QKeySequence("Ctrl+Shift+O"))
+        open_file_action.triggered.connect(self.browse_file)
+        self.save_action = QAction("Save", self)
+        self.save_action.setShortcut(QKeySequence.Save)
+        self.save_action.triggered.connect(lambda: self._with_editor(lambda e: e.save()))
+        self.save_as_action = QAction("Save As…", self)
+        self.save_as_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        self.save_as_action.triggered.connect(lambda: self._with_editor(lambda e: e.save_as()))
+        self.close_tab_action = QAction("Close Tab", self)
+        self.close_tab_action.setShortcut(QKeySequence.Close)
+        self.close_tab_action.triggered.connect(lambda: self.close_editor(self.tabs.currentIndex()))
+        file_menu.addActions([open_file_action, self.save_action, self.save_as_action,
+                              self.close_tab_action])
+        file_menu.addSeparator()
         quit_action = QAction("Quit", self)
         quit_action.setShortcut(QKeySequence.Quit)
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
+        self._build_edit_menu()
 
         # View menu: text size for the whole window.
         # The system font, recorded once: later windows would otherwise see the
@@ -113,6 +131,13 @@ class MainWindow(QMainWindow):
         self.reset_font_action = QAction("Actual Size", self)  # (Ctrl+0 is Graph → Fit to window)
         self.reset_font_action.triggered.connect(lambda: self.set_font_delta(0))
         view_menu.addActions([self.bigger_action, self.smaller_action, self.reset_font_action])
+        view_menu.addSeparator()
+        self.use_editor_action = QAction("Open Files in Built-in Editor", self, checkable=True)
+        self.use_editor_action.setChecked(self.settings.value("use_editor", True, type=bool))
+        self.use_editor_action.toggled.connect(lambda on: self.settings.setValue("use_editor", on))
+        self.use_editor_action.setStatusTip(
+            "Double-clicked files open in a tab here; turn off to use your default application")
+        view_menu.addAction(self.use_editor_action)
 
         # --- left: build options + commands
         options = QGroupBox("Build options")
@@ -222,8 +247,17 @@ class MainWindow(QMainWindow):
         self._apply_highlight_style()
 
         self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(True)
         self.tabs.addTab(graph_tab, "Dependency graph")
         self.tabs.addTab(self.manifest_view, "fpm.toml")
+        # Files opened in the built-in editor get their own closable tabs.
+        self.tabs.setTabsClosable(True)
+        self.tabs.setMovable(True)
+        for index in (0, 1):
+            for side in (QTabBar.LeftSide, QTabBar.RightSide):
+                self.tabs.tabBar().setTabButton(index, side, None)
+        self.tabs.tabCloseRequested.connect(self.close_editor)
+        self.tabs.currentChanged.connect(self._update_editor_actions)
 
         self.console = QPlainTextEdit()
         self.console.setReadOnly(True)
@@ -257,6 +291,7 @@ class MainWindow(QMainWindow):
         self.test_monitor = TestMonitor()
         self.test_monitor.test_selected.connect(self.show_test_output)
         self.build_monitor.details_requested.connect(self.show_build_details)
+        self.build_monitor.open_file_requested.connect(self.open_file)
         self.monitor_tabs = QTabWidget()
         self.monitor_tabs.setDocumentMode(True)
         self.monitor_tabs.addTab(self.build_monitor, "Build")
@@ -299,6 +334,8 @@ class MainWindow(QMainWindow):
             self._update_legend()
             self.build_monitor.refresh_palette()
             self.test_monitor.refresh_palette()
+            for editor in self.editors():
+                editor.refresh_style()
             self._update_command_icons()
             self.build_monitor.set_package_colors(self.graph_view.package_colors())
         super().changeEvent(event)
@@ -324,7 +361,7 @@ class MainWindow(QMainWindow):
                 self.graph_style_actions[key][value] = action
         menu.addSeparator()
         for text, slot, shortcut in [("Fit to window", lambda: self.graph_view.fit(), "Ctrl+0"),
-                                     ("Re-layout", lambda: self.graph_view.relayout(), "Ctrl+L"),
+                                     ("Re-layout", lambda: self.graph_view.relayout(), "Ctrl+Shift+L"),
                                      ("Export image…", self.export_graph, "Ctrl+E")]:
             action = QAction(text, self)
             action.setShortcut(QKeySequence(shortcut))
@@ -378,6 +415,8 @@ class MainWindow(QMainWindow):
         mono.setPointSizeF(mono.pointSizeF() * factor)
         for view in (self.manifest_view, self.console, self.test_output):
             view.setFont(mono)
+        for editor in self.editors():
+            editor.set_font(mono)
         self.command_toolbar.setIconSize(QSize(round(22 * factor), round(22 * factor)))
         self.build_monitor.refresh_fonts()
         self.test_monitor.refresh_fonts()
@@ -481,6 +520,11 @@ class MainWindow(QMainWindow):
         self._set_graph_edges(s.value("graph_edges", next(iter(EDGE_STYLES))))
 
     def closeEvent(self, event):
+        for editor in self.editors():
+            self.tabs.setCurrentWidget(editor)
+            if not editor.maybe_save():
+                event.ignore()
+                return
         if self.process is not None:
             answer = QMessageBox.question(self, "fpm is running",
                                           "An fpm command is still running. Stop it and quit?")
@@ -608,7 +652,131 @@ class MainWindow(QMainWindow):
     def open_package_manifest(self, name: str):
         pkg = self.graph.packages.get(name) if self.graph else None
         if pkg and pkg.manifest:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(pkg.manifest)))
+            self.open_file(str(pkg.manifest))
+
+    # -------------------------------------------------------------- editor
+    def editors(self) -> list[EditorTab]:
+        return [w for i in range(self.tabs.count())
+                if isinstance(w := self.tabs.widget(i), EditorTab)]
+
+    def current_editor(self) -> EditorTab | None:
+        widget = self.tabs.currentWidget()
+        return widget if isinstance(widget, EditorTab) else None
+
+    def _with_editor(self, action):
+        editor = self.current_editor()
+        if editor is not None:
+            action(editor)
+
+    def browse_file(self):
+        start = str(self.manifest_path.parent) if self.manifest_path else str(Path.home())
+        filename, _ = QFileDialog.getOpenFileName(self, "Open file in editor", start)
+        if filename:
+            self.open_file(filename, force_editor=True)
+
+    def open_file(self, path: str, diagnostics: list | None = None, force_editor: bool = False):
+        """Open a file in the built-in editor (or the default application),
+        marking any compiler diagnostics and jumping to the first one."""
+        file = Path(path).resolve()
+        use_editor = force_editor or self.use_editor_action.isChecked()
+        if not use_editor or not file.is_file() or not EditorTab.is_probably_text(file):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(file)))
+            return
+        editor = next((e for e in self.editors() if e.path == file), None)
+        if editor is None:
+            try:
+                editor = EditorTab(file)
+            except OSError as exc:
+                QMessageBox.warning(self, "Can't open file", f"{file}:\n{exc}")
+                return
+            editor.set_font(self._mono_font())
+            editor.dirty_changed.connect(lambda _dirty, e=editor: self._update_editor_title(e))
+            editor.path_changed.connect(lambda _p, e=editor: self._update_editor_title(e))
+            editor.saved.connect(self._editor_saved)
+            self.tabs.addTab(editor, file.name)
+            self._update_editor_title(editor)
+        self.tabs.setCurrentWidget(editor)
+        if diagnostics:
+            editor.show_diagnostics(diagnostics)
+            editor.editor.go_to_line(diagnostics[0].line)
+        else:
+            editor.editor.setFocus()
+
+    def _mono_font(self) -> QFont:
+        base = self._base_font.pointSizeF()
+        return monospace_font((base + self.font_delta) / base)
+
+    def _update_editor_title(self, editor: EditorTab):
+        index = self.tabs.indexOf(editor)
+        if index >= 0:
+            self.tabs.setTabText(index, ("• " if editor.is_dirty() else "") + editor.path.name)
+            self.tabs.setTabToolTip(index, str(editor.path))
+        self._update_editor_actions()
+
+    def _editor_saved(self, path: str):
+        self.statusBar().showMessage(f"Saved {path}", 4000)
+        if self.manifest_path and Path(path) == self.manifest_path:
+            self.reload()  # graph, features and profiles may have changed
+
+    def close_editor(self, index: int):
+        widget = self.tabs.widget(index)
+        if not isinstance(widget, EditorTab):
+            return
+        self.tabs.setCurrentIndex(index)
+        if widget.maybe_save():
+            self.tabs.removeTab(index)
+            widget.deleteLater()
+
+    def _update_editor_actions(self, *_):
+        has_editor = self.current_editor() is not None
+        for action in (self.save_action, self.save_as_action, self.close_tab_action,
+                       self.find_action, self.replace_action, self.find_next_action,
+                       self.find_previous_action, self.goto_action):
+            action.setEnabled(has_editor)
+
+    def _build_edit_menu(self):
+        menu = self.menuBar().addMenu("&Edit")
+
+        def focused(method):
+            """Apply to the widget with focus (an editor, a text field…)."""
+            def run():
+                widget = QApplication.focusWidget()
+                if widget is not None and hasattr(widget, method):
+                    getattr(widget, method)()
+                elif self.current_editor() is not None:
+                    getattr(self.current_editor().editor, method)()
+            return run
+
+        for item in [("Undo", QKeySequence.Undo, "undo"),
+                     ("Redo", QKeySequence.Redo, "redo"), None,
+                     ("Cut", QKeySequence.Cut, "cut"),
+                     ("Copy", QKeySequence.Copy, "copy"),
+                     ("Paste", QKeySequence.Paste, "paste"),
+                     ("Select All", QKeySequence.SelectAll, "selectAll")]:
+            if item is None:
+                menu.addSeparator()
+                continue
+            text, key, method = item
+            action = menu.addAction(text)
+            action.setShortcut(QKeySequence(key))
+            action.triggered.connect(focused(method))
+        menu.addSeparator()
+
+        def editor_action(text, key, slot):
+            action = menu.addAction(text)
+            action.setShortcut(QKeySequence(key))
+            action.triggered.connect(lambda: self._with_editor(slot))
+            return action
+
+        self.find_action = editor_action("Find…", QKeySequence.Find, lambda e: e.find_bar.open_bar())
+        self.replace_action = editor_action("Find and Replace…", "Ctrl+Alt+F",
+                                            lambda e: e.find_bar.open_bar(replace=True))
+        self.find_next_action = editor_action("Find Next", QKeySequence.FindNext,
+                                              lambda e: e.find_bar.find_next())
+        self.find_previous_action = editor_action("Find Previous", QKeySequence.FindPrevious,
+                                                  lambda e: e.find_bar.find_previous())
+        menu.addSeparator()
+        self.goto_action = editor_action("Go to Line…", "Ctrl+L", lambda e: e.go_to_line_dialog())
 
     def export_graph(self):
         if not self.graph:

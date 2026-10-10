@@ -27,6 +27,14 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   runs weight the bar by expected time and estimate the time left. Click a
   test to see only its output. A `--runner` you put in *Extra args* (e.g.
   `mpirun -np 4`) still wraps each test.
+* Built-in editor: double-clicking a file (a row in the Build tab, or a
+  package in the graph for its `fpm.toml`) opens it in a tab with syntax
+  highlighting chosen by file extension, line numbers, find/replace, go to
+  line, undo/redo and save. Files opened from the Build tab show the last
+  build's warnings and errors as markers in the gutter (hover for the
+  message) and open at the first one. Saving the project's `fpm.toml`
+  reloads the project. *View → Open Files in Built-in Editor* switches back
+  to your default application.
 * Dependency diagram (drawn with [pyqtgraph](https://www.pyqtgraph.org)) built
   from the main `fpm.toml` and the `fpm.toml` of every downloaded dependency
   (git, local path, registry and metapackages; dashed edges are dev/test
