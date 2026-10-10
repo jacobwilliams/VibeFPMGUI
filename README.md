@@ -42,6 +42,11 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   shows them in Finder). Double-click a file to open it in the editor; right-click for Open
   in Default App, Show in Finder and Copy Path. Files with errors or warnings
   in the last build are shown in red / orange.
+* *Run* tab: **Run** (toolbar) and the **Run** buttons in the *Build outputs*
+  tab show each program running (spinner, time, exit code, output per
+  program), like the Tests tab. Toolbar Run builds first (shown in the Build
+  tab), then runs every program — or those matching *Target* — through the
+  same marker wrapper as Test; run times are remembered for estimates.
 * Built-in editor: double-clicking a file (a row in the Build tab, or a
   package in the graph for its `fpm.toml`) opens it in a tab with syntax
   highlighting chosen by file extension, line numbers, find/replace, go to

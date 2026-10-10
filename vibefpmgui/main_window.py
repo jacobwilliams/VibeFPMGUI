@@ -35,6 +35,7 @@ from .editor import EditorTab, monospace_font
 from . import build_outputs as bo
 from .project_tree import ProjectTree, reveal_in_file_manager
 from .review_monitor import ReviewMonitor
+from .run_monitor import RunMonitor
 from .icons import app_icon, make_icon
 from .highlighter import DARK_STYLE, LIGHT_STYLE, PygmentsHighlighter, is_dark
 from .graph_view import EDGE_STYLES, KIND_LABELS, LAYOUTS, THEME_CHOICES, DependencyGraphView
@@ -73,7 +74,9 @@ class MainWindow(QMainWindow):
         self._refresh_after = False
         self._monitoring = False
         self._partial = ""  # output text after the last newline
-        self._phase: str | None = None  # None, "list" or "tests" while running Test
+        # None, or while running Test/Run: "list" (fpm ... --list), "marked"
+        # (fpm ... --runner <wrapper>) or "direct" (a built program, via the wrapper)
+        self._phase: str | None = None
         self._captured: list[str] = []  # output of "fpm test --list"
         self._held_blank = False  # blank line that may precede a test marker
         self._test_args: tuple = ()
@@ -342,6 +345,11 @@ class MainWindow(QMainWindow):
         self.monitor_tabs.setDocumentMode(True)
         self.monitor_tabs.addTab(self.build_monitor, "Build")
         self.monitor_tabs.addTab(self.test_monitor, "Tests")
+        self.run_monitor = RunMonitor()
+        self.run_monitor.test_selected.connect(
+            lambda name: self._show_marked_output(self.run_monitor, name))
+        self.run_monitor.build_percent = lambda: self.build_monitor._percent
+        self.monitor_tabs.addTab(self.run_monitor, "Run")
         self.review_monitor = ReviewMonitor()
         self.review_monitor.finding_selected.connect(self._go_to_finding)
         self.monitor_tabs.addTab(self.review_monitor, "Review")
@@ -383,6 +391,7 @@ class MainWindow(QMainWindow):
             self._update_legend()
             self.build_monitor.refresh_palette()
             self.test_monitor.refresh_palette()
+            self.run_monitor.refresh_palette()
             self.review_monitor.refresh_palette()
             for editor in self.editors():
                 editor.refresh_style()
@@ -471,6 +480,7 @@ class MainWindow(QMainWindow):
         self.command_toolbar.setIconSize(QSize(round(22 * factor), round(22 * factor)))
         self.build_monitor.refresh_fonts()
         self.test_monitor.refresh_fonts()
+        self.run_monitor.refresh_fonts()
         self.review_monitor.refresh_fonts()
         self.graph_view.refresh_fonts()
         if self.graph:
@@ -504,6 +514,8 @@ class MainWindow(QMainWindow):
         for label, args, uses_options, refresh, icon, shortcut, description in COMMANDS:
             if args == ["test"]:
                 slot = self.run_tests
+            elif args == ["run"]:
+                slot = self.run_programs
             else:
                 slot = lambda _=False, a=args, o=uses_options, r=refresh: self.run_fpm(a, o, r)
             actions[icon] = make(label, icon, shortcut, description, slot)
@@ -750,19 +762,29 @@ class MainWindow(QMainWindow):
         self.process.errorOccurred.connect(self._process_error)
         self._refresh_after = False
         self._partial = ""
-        self._phase = None
+        self._held_blank = False
+        # Through the same marker wrapper as Test, so the Run tab can follow it.
+        self._phase = "direct"
+        self._marker_kind = "run"
         self._monitoring = False
         self._test_building = False
         self._folder_snapshot = None
-        self._process_label = Path(path).name
+        name = Path(path).name
+        if name.lower().endswith(".exe"):
+            name = name[:-4]
+        self._process_label = name
         self.show_all_output()
+        self.run_monitor.begin_listing(f"{Path(path).parent.parent.name} · run directly, no rebuild")
+        self.run_monitor.start([name], self._load_durations("run"))
+        self.monitor_tabs.setCurrentWidget(self.run_monitor)
         rel = os.path.relpath(path, self.manifest_path.parent)
         self._append(f"\n$ cd {quote_arg(str(self.manifest_path.parent))}\n"
                      f"$ {join_args([rel] + args)}\n", bold=True)
         self.stop_action.setEnabled(True)
         self._set_project_enabled(True)
-        self.statusBar().showMessage(f"Running {Path(path).name}…")
-        self.process.start(path, args)
+        self.statusBar().showMessage(f"Running {name}…")
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_runner.py")
+        self.process.start(sys.executable, ["-I", script, path] + args)
 
     def show_compile_command(self, source: str):
         """The exact compiler command fpm used for a source file."""
@@ -834,6 +856,7 @@ class MainWindow(QMainWindow):
         self.test_output.clear()
         self.build_monitor.reset()
         self.test_monitor.reset()
+        self.run_monitor.reset()
         self.stop_review()
         self._ai_editor = None
         self.review_monitor.reset()
@@ -1102,8 +1125,8 @@ class MainWindow(QMainWindow):
             if sub[0] in ("run", "test") and self.target_edit.text().strip():
                 args += split_args(self.target_edit.text())
             extra = split_args(self.extra_edit.text())
-            if sub[0] == "test":
-                extra, _ = split_runner(extra)  # the test runner is handled by run_tests
+            if sub[0] in ("test", "run"):
+                extra, _ = split_runner(extra)  # our runner wraps the user's  # the test runner is handled by run_tests
             args += extra
             if program_args and sub[0] in ("run", "test") and self.runner_args_edit.text().strip():
                 args += ["--"] + split_args(self.runner_args_edit.text())
@@ -1250,7 +1273,7 @@ class MainWindow(QMainWindow):
         # doesn't build; "fpm test" builds first, so its output goes to the
         # build grid until the first test starts (see _test_line).
         self._monitoring = sub[0] in ("build", "run", "test") and phase != "list"
-        self._test_building = phase == "tests"
+        self._test_building = phase == "marked"  # fpm builds before running
         self._process_label = "fpm"
         # Note which build folders exist now, to record which ones this
         # build writes (see _record_build_folders).
@@ -1292,7 +1315,7 @@ class MainWindow(QMainWindow):
         # fpm redraws progress lines with \r; keep only the final state of each line.
         data = ANSI_RE.sub("", data).replace("\r\n", "\n")
         data = "\n".join(line.rsplit("\r", 1)[-1] for line in data.split("\n"))
-        if self._phase == "tests":
+        if self._phase in ("marked", "direct"):
             # Line-buffered so the test markers can be taken out of the output.
             lines = (self._partial + data).split("\n")
             self._partial = lines.pop()
@@ -1321,12 +1344,12 @@ class MainWindow(QMainWindow):
         if self._held_blank:
             self._held_blank = False
             if not MARKER_RE.search(line):  # the blank was real output
-                self.test_monitor.feed_line("")
+                self._marker_monitor().feed_line("")
                 text = "\n"
         if line == "":
             self._held_blank = True
             return text
-        shown = self.test_monitor.feed_line(line)
+        shown = self._marker_monitor().feed_line(line)
         return text + (shown + "\n" if shown is not None else "")
 
     def _build_part_done(self):
@@ -1336,11 +1359,11 @@ class MainWindow(QMainWindow):
             self.build_monitor.finish(0)
             self._update_tree_marks()
             self._monitoring = False
-        self.test_monitor.build_finished()
-        self.monitor_tabs.setCurrentWidget(self.test_monitor)
+        self._marker_monitor().build_finished()
+        self.monitor_tabs.setCurrentWidget(self._marker_monitor())
 
     def _flush_monitor(self, exit_code: int, stopped: bool):
-        if self._phase == "tests":
+        if self._phase in ("marked", "direct"):
             if self._partial:
                 self._append(self._test_line(self._partial))
             if self._held_blank:
@@ -1370,8 +1393,8 @@ class MainWindow(QMainWindow):
                                      ("Finished successfully" if code == 0 else f"Failed (exit code {code})"))
         if phase == "list":
             self._after_listing(code, crashed)
-        elif phase == "tests":
-            self._after_tests(code, crashed)
+        elif phase in ("marked", "direct"):
+            self._after_marked(code, crashed)
 
     def _process_error(self, error):
         if error == QProcess.FailedToStart:
@@ -1383,7 +1406,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"{getattr(self, '_process_label', 'fpm')} failed to start")
             self._flush_monitor(-1, True)
             if self._phase is not None:
-                self.test_monitor.finish(-1, stopped=True)
+                self._marker_monitor().finish(-1, stopped=True)
             self._phase = None
             self._cleanup_process()
 
@@ -1397,16 +1420,26 @@ class MainWindow(QMainWindow):
         if self._refresh_after:
             self.reload()
 
-    # --------------------------------------------------------------- tests
+    # ------------------------------------------------ tests and program runs
+    def _marker_monitor(self):
+        return self.run_monitor if getattr(self, "_marker_kind", "test") == "run" else self.test_monitor
+
     def run_tests(self):
-        """Test in two steps: "fpm test --list" (builds, and tells us the
-        test names), then "fpm test --runner <our wrapper>" so each test's
-        start, end and exit code can be followed."""
+        self._start_marked("test")
+
+    def run_programs(self):
+        self._start_marked("run")
+
+    def _start_marked(self, kind: str):
+        """Test or Run in two steps: "fpm <kind> --list" (the names), then
+        "fpm <kind> --runner <our wrapper>", which builds first (shown in the
+        Build tab) and then runs each one; the wrapper marks where each starts
+        and ends, so the Tests / Run tab can follow them."""
         if not self.manifest_path or self.process is not None:
             return
         try:
-            list_args = self.build_arguments(["test", "--list"], True, program_args=False)
-            run_args = self.build_arguments(["test"], True)
+            list_args = self.build_arguments([kind, "--list"], True, program_args=False)
+            run_args = self.build_arguments([kind], True)
             _, inner_runner = split_runner(split_args(self.extra_edit.text()))
         except ValueError as exc:
             QMessageBox.warning(self, "Invalid arguments", str(exc))
@@ -1416,86 +1449,105 @@ class MainWindow(QMainWindow):
         cut = run_args.index("--") if "--" in run_args else len(run_args)
         run_args = run_args[:cut] + ["--runner", runner] + run_args[cut:]
         patterns = split_args(self.target_edit.text())
+        self._marker_kind = kind
         self._test_args = (run_args, inner_runner, patterns)
         description = self._build_description()
         if inner_runner:
             description += f" · runner: {inner_runner}"
         self.build_monitor.reset()  # the build progress shown next is this run's
-        self.test_monitor.begin_listing(description)
-        self.show_test_output("")
-        self.run_fpm(["test"], True, False, phase="list", args=list_args)
+        self._marker_monitor().begin_listing(description)
+        self.show_all_output()
+        self.run_fpm([kind], True, False, phase="list", args=list_args)
 
     def _after_listing(self, code: int, stopped: bool):
+        monitor = self._marker_monitor()
         output = "".join(self._captured)
         names = parse_test_list(output)
         if stopped or code != 0:
-            self.test_monitor.finish(code, stopped=stopped)
+            monitor.finish(code, stopped=stopped)
             self.monitor_tabs.setCurrentWidget(self.build_monitor)
             return
         if names == []:
-            self.test_monitor.finish(0, no_tests=True)
-            self.monitor_tabs.setCurrentWidget(self.test_monitor)
-            self.statusBar().showMessage("No tests to run")
+            monitor.finish(0, no_tests=True)
+            self.monitor_tabs.setCurrentWidget(monitor)
+            self.statusBar().showMessage(monitor.word("none"))
             return
         run_args, inner_runner, patterns = self._test_args
         if names and patterns:
-            # "fpm test --list" lists every test regardless of the names given,
-            # so apply the Target names/globs ourselves, as fpm will.
+            # "--list" lists every name regardless of the names given, so apply
+            # the Target names/globs ourselves, as fpm will.
             names = [n for n in names if any(fnmatch.fnmatchcase(n, p) for p in patterns)]
-        # fpm builds first (the Build tab shows it), then runs the tests.
-        self.test_monitor.start(names or [], self._load_test_durations(), building=True)
+        # fpm builds first (the Build tab shows it), then runs them.
+        monitor.start(names or [], self._load_durations(self._marker_kind), building=True)
         env = {"VIBEFPM_INNER_RUNNER": inner_runner} if inner_runner else {}
-        self.run_fpm(["test"], True, True, phase="tests", args=run_args, env_extra=env)
+        self.run_fpm([self._marker_kind], True, True, phase="marked", args=run_args, env_extra=env)
 
-    def _after_tests(self, code: int, stopped: bool):
-        self.test_monitor.finish(code, stopped=stopped)
-        self._save_test_durations(self.test_monitor.durations())
-        counts = self.test_monitor.counts()
-        total = len(self.test_monitor.tests)
+    def _after_marked(self, code: int, stopped: bool):
+        monitor = self._marker_monitor()
+        monitor.finish(code, stopped=stopped)
+        self._save_durations(self._marker_kind, monitor.durations())
+        counts = monitor.counts()
+        total = len(monitor.tests)
+        title = monitor.word("title")
         if stopped:
-            message = "Tests stopped"
-        elif self.test_monitor._result == "buildfailed":
-            message = "Tests: the build failed (see the Build tab)"
+            message = f"{title}: stopped"
+        elif monitor._result == "buildfailed":
+            message = f"{title}: the build failed (see the Build tab)"
         elif counts["Failed"]:
-            message = f"Tests: {counts['Failed']} of {total} failed"
+            failed = [t for t in monitor.tests if t.status == "Failed"]
+            if self._marker_kind == "run" and len(failed) == 1 and failed[0].exit_code is not None:
+                message = f"{title}: {failed[0].name} failed (exit code {failed[0].exit_code})"
+            else:
+                message = f"{title}: {counts['Failed']} of {total} failed"
         elif counts["Not run"]:
-            message = f"Tests: {counts['Passed']} passed, {counts['Not run']} not run"
+            message = f"{title}: {counts['Passed']} {monitor.word('passed')}, {counts['Not run']} not run"
+        elif total == 1:
+            message = f"{title}: {monitor.tests[0].name} {monitor.word('passed')}"
         else:
-            message = f"Tests: all {total} passed"
+            message = f"{title}: all {total} {monitor.word('passed')}"
         self.statusBar().showMessage(message)
 
-    def _durations_key(self) -> str:
+    def _durations_key(self, kind: str = "test") -> str:
         digest = hashlib.sha1(str(self.manifest_path).encode()).hexdigest()[:16]
-        return f"test_durations/{digest}"
+        return f"{kind}_durations/{digest}"
 
-    def _load_test_durations(self) -> dict[str, float]:
+    def _load_durations(self, kind: str = "test") -> dict[str, float]:
         try:
-            data = json.loads(self.settings.value(self._durations_key(), "{}"))
+            data = json.loads(self.settings.value(self._durations_key(kind), "{}"))
             return {str(k): float(v) for k, v in data.items()}
         except (TypeError, ValueError, AttributeError):
             return {}
 
-    def _save_test_durations(self, durations: dict[str, float]):
+    def _save_durations(self, kind: str, durations: dict[str, float]):
         if durations and self.manifest_path:
-            merged = {**self._load_test_durations(), **durations}
-            self.settings.setValue(self._durations_key(), json.dumps(merged))
+            merged = {**self._load_durations(kind), **durations}
+            self.settings.setValue(self._durations_key(kind), json.dumps(merged))
 
-    def show_test_output(self, name: str):
-        """Show one test's output (or everything when name is empty)."""
+    def _show_marked_output(self, monitor, name: str):
+        """Show one test's or program's output (or everything when empty)."""
         if not name:
             self.show_all_output()
             return
         self.build_monitor.clear_selection()
-        self._show_single_output(name, self.test_monitor.output_for(name) or "(no output)")
+        other = self.test_monitor if monitor is self.run_monitor else self.run_monitor
+        if other.selected:
+            other.selected = ""
+            other.table.viewport().update()
+        self._show_single_output(name, monitor.output_for(name) or "(no output)")
+
+    def show_test_output(self, name: str):
+        """Show one test's output (or everything when name is empty)."""
+        self._show_marked_output(self.test_monitor, name)
 
     def show_build_details(self, row: int):
         """Show one file's compiler messages (or everything when row is -1)."""
         if row < 0:
             self.show_all_output()
             return
-        if self.test_monitor.selected:
-            self.test_monitor.selected = ""
-            self.test_monitor.table.viewport().update()
+        for monitor in (self.test_monitor, self.run_monitor):
+            if monitor.selected:
+                monitor.selected = ""
+                monitor.table.viewport().update()
         self._show_single_output(self.build_monitor.details_title(row),
                                  self.build_monitor.details_text(row))
 
@@ -1510,9 +1562,10 @@ class MainWindow(QMainWindow):
         self.output_stack.setCurrentWidget(self.console)
         self.show_all_button.hide()
         self.build_monitor.clear_selection()
-        if self.test_monitor.selected:
-            self.test_monitor.selected = ""
-            self.test_monitor.table.viewport().update()
+        for monitor in (self.test_monitor, self.run_monitor):
+            if monitor.selected:
+                monitor.selected = ""
+                monitor.table.viewport().update()
 
     # ------------------------------------------------------------ AI review
     def _build_ai_menu(self):

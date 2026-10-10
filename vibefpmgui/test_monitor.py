@@ -73,6 +73,7 @@ class TestCase:
     finished: float | None = None
     seconds: float | None = None  # as measured by the runner
     exit_code: int | None = None
+    stopped: bool = False  # was running when Stop was pressed
     output: list[str] = field(default_factory=list)
 
     def elapsed(self) -> float:
@@ -127,6 +128,8 @@ class TestDelegate(QStyledItemDelegate):
         bold = QFont(font)
         bold.setWeight(QFont.DemiBold)
         detail = {RUNNING: "running…", NOT_RUN: "not run"}.get(test.status, "")
+        if test.stopped:
+            detail = f"stopped after {test.elapsed():.1f} s"
         if test.status == FAILED_T and test.exit_code is not None:
             detail = f"exit code {test.exit_code}"
         lines = len(test.output)
@@ -149,7 +152,7 @@ class TestDelegate(QStyledItemDelegate):
     def _paint_status(self, p, r, test, small, color):
         font = QFont(small)
         font.setWeight(QFont.DemiBold)
-        text = test.status
+        text = "Stopped" if test.stopped else self.monitor.word(test.status)
         pill = QRectF(r.left() + 8, r.center().y() - 11,
                       QFontMetricsF(font).horizontalAdvance(text) + 36, 22)
         p.setPen(Qt.NoPen)
@@ -209,6 +212,22 @@ class TestMonitor(SortableTable, QWidget):
 
     COLUMNS = ["TEST", "STATUS", "TIME"]
     test_selected = Signal(str)
+    # Everything the panel says, so a "Run" version can reuse it (see run_monitor).
+    WORDS = {
+        "title": "Tests", "item": "test", "items": "tests",
+        PASSED: "Passed", "passed": "passed",
+        "idle": "Run Test to see each test's progress here.",
+        "idle_label": "Run Test to see progress",
+        "collecting": "Building and collecting tests… (per-file progress is in the Build tab)",
+        "collecting_label": "collecting tests",
+        "after_build": "tests start after the build",
+        "none": "This project has no tests.", "none_label": "No tests",
+        "unlisted": "The tests could not be built or listed — see the build panel and output.",
+        "row_tip": "Click to show only this test's output",
+    }
+
+    def word(self, key: str) -> str:
+        return self.WORDS.get(key, key)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -230,7 +249,7 @@ class TestMonitor(SortableTable, QWidget):
 
         self.setObjectName("TestMonitor")
         self.setAttribute(Qt.WA_StyledBackground, True)
-        self.title = QLabel("Tests")
+        self.title = QLabel(self.word("title"))
         title_font = self.title.font()
         title_font.setPointSizeF(title_font.pointSizeF() + 2)
         title_font.setWeight(QFont.Bold)
@@ -247,7 +266,8 @@ class TestMonitor(SortableTable, QWidget):
             chip = QPushButton()
             chip.setCheckable(True)
             chip.setCursor(Qt.PointingHandCursor)
-            chip.setToolTip(f"Show only “{status}” tests (click again to show all)")
+            chip.setToolTip(f"Show only “{self.word(status)}” {self.word('items')} "
+                            "(click again to show all)")
             chip.clicked.connect(lambda checked, s=status: self.set_filter(s if checked else None))
             chip.hide()
             header.addWidget(chip)
@@ -305,7 +325,7 @@ class TestMonitor(SortableTable, QWidget):
         self._timer.setInterval(50)
         self._timer.timeout.connect(self._tick)
         self.refresh_palette()
-        self._show_empty("Run Test to see each test's progress here.")
+        self._show_empty(self.word("idle"))
         self._update_header()
 
     # ------------------------------------------------------------- styling
@@ -339,7 +359,7 @@ class TestMonitor(SortableTable, QWidget):
         self._active = False
         self.set_filter(None)
         self.progress.set(0, "running")
-        self._show_empty("Run Test to see each test's progress here.")
+        self._show_empty(self.word("idle"))
         self._update_header()
 
     def begin_listing(self, description: str = ""):
@@ -354,7 +374,7 @@ class TestMonitor(SortableTable, QWidget):
         self._active = True
         self.set_filter(None)
         self.progress.set_busy(True)  # the build's length is unknown here
-        self._show_empty("Building and collecting tests… (per-file progress is in the Build tab)")
+        self._show_empty(self.word("collecting"))
         self._timer.start()
         self._update_header()
 
@@ -371,7 +391,7 @@ class TestMonitor(SortableTable, QWidget):
             self.progress.set_busy(True)
         else:
             self.progress.set(0, "running")
-        self._show_empty(None if names else "This project has no tests.")
+        self._show_empty(None if names else self.word("none"))
         self._timer.start()
         self._update_header()
 
@@ -393,12 +413,13 @@ class TestMonitor(SortableTable, QWidget):
         for test in self.tests:
             if test.status == RUNNING:
                 test.status = FAILED_T if not stopped else NOT_RUN
+                test.stopped = stopped
                 test.finished = now
             elif test.status == QUEUED:
                 test.status = NOT_RUN
         if no_tests:
             self._result = "none"
-            self._show_empty("This project has no tests.")
+            self._show_empty(self.word("none"))
         elif stopped:
             self._result = "stopped"
         elif exit_code != 0 or any(t.status == FAILED_T for t in self.tests):
@@ -408,7 +429,7 @@ class TestMonitor(SortableTable, QWidget):
         if build_failed:
             self._result = "buildfailed"
         if self._result == "failed" and not self.tests:
-            self._show_empty("The tests could not be built or listed — see the build panel and output.")
+            self._show_empty(self.word("unlisted"))
         state = {"ok": "ok", "failed": "failed", "stopped": "stopped", "none": "ok",
                  "buildfailed": "failed"}[self._result]
         self.progress.set(1.0 if self._result in ("ok", "none") else self.fraction(), state)
@@ -466,7 +487,7 @@ class TestMonitor(SortableTable, QWidget):
         for column in range(len(self.COLUMNS)):
             self.table.setItem(row, column, QTableWidgetItem())
         self.table.item(row, 0).setText(name)
-        self.table.item(row, 0).setToolTip("Click to show only this test's output")
+        self.table.item(row, 0).setToolTip(self.word("row_tip"))
         test = TestCase(name, row, expected, seq=len(self.tests))
         self.tests.append(test)
         self.by_name[name] = test
@@ -482,7 +503,7 @@ class TestMonitor(SortableTable, QWidget):
     def _sync_row(self, row: int):
         item = self.table.item(row, 0)
         item.setText(self.tests[row].name)
-        item.setToolTip("Click to show only this test's output")
+        item.setToolTip(self.word("row_tip"))
 
     def _reapply_filter(self):
         for t in self.tests:
@@ -573,6 +594,8 @@ class TestMonitor(SortableTable, QWidget):
         counts = self.counts()
         for status, chip in self.chips.items():
             chip.setText(f"{ICONS[status]} {counts[status]}")
+            chip.setToolTip(f"Show only “{self.word(status)}” {self.word('items')} "
+                            "(click again to show all)")
             chip.setVisible(counts[status] > 0)
         if self.filter_status and counts[self.filter_status] == 0:
             self.set_filter(None)
@@ -586,17 +609,18 @@ class TestMonitor(SortableTable, QWidget):
         if self._result in ("listing", "building"):
             pct = self.build_percent() if self.build_percent else None
             done = f" {pct}%" if pct else ""
-            what = "collecting tests" if self._result == "listing" else "tests start after the build"
+            what = self.word("collecting_label" if self._result == "listing" else "after_build")
             text = f"<b>Building…{done}</b> {muted}· {what} · {seconds}</span>"
         elif self._result == "buildfailed":
             text = f"<b>Build failed</b> {muted}· see the Build tab</span>"
         elif self._result == "none":
-            text = "<b>No tests</b>"
+            text = f"<b>{self.word('none_label')}</b>"
         elif self._result == "ok" and counts[NOT_RUN]:
-            text = (f"<b>{counts[PASSED]} passed</b> {muted}· {counts[NOT_RUN]} not run"
+            text = (f"<b>{counts[PASSED]} {self.word('passed')}</b> {muted}· {counts[NOT_RUN]} not run"
                     f" · {seconds}</span>")
         elif self._result == "ok":
-            text = f"<b>All {n} passed</b> {muted}· {seconds}</span>"
+            done = self.word(PASSED) if n == 1 else f"All {n} {self.word('passed')}"
+            text = f"<b>{done}</b> {muted}· {seconds}</span>"
         elif self._result == "failed":
             text = f"<b>{counts[FAILED_T]} of {n} failed</b> {muted}· {seconds}</span>" if n \
                 else "<b>Failed</b>"
@@ -605,9 +629,9 @@ class TestMonitor(SortableTable, QWidget):
         elif self._active:
             left = self.remaining()
             eta = f" · ~{left:.0f} s left" if left is not None and left >= 1 else ""
-            text = f"<b>{finished} of {n}</b> {muted}tests{failed} · {seconds}{eta}</span>"
+            text = f"<b>{finished} of {n}</b> {muted}{self.word('items')}{failed} · {seconds}{eta}</span>"
         else:
-            text = f"{muted}Run Test to see progress</span>"
+            text = f"{muted}{self.word('idle_label')}</span>"
         self.progress_label.setText(text)
 
     def _tick(self):
