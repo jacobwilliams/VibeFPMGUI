@@ -13,7 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from qtpy.QtCore import QFileInfo, QSortFilterProxyModel, Qt, QUrl, Signal
+from qtpy.QtCore import QFileInfo, QSortFilterProxyModel, Qt, QTimer, QUrl, Signal
 from qtpy.QtGui import (
     QColor,
     QDesktopServices,
@@ -25,7 +25,9 @@ from qtpy.QtGui import (
 from qtpy.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QCheckBox,
     QFileIconProvider,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QMenu,
@@ -175,21 +177,29 @@ def reveal_in_file_manager(path: str):
 
 
 class _Filter(QSortFilterProxyModel):
-    """Case-insensitive name filter that keeps the parents of matches."""
+    """Case-insensitive name filter that keeps the parents of matches.
+    Files ignored by git and greyed-out entries only match when
+    ``include_ignored`` is set (they are most of a big project's files)."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setRecursiveFilteringEnabled(True)
-        self.setFilterCaseSensitivity(Qt.CaseInsensitive)
+        self.needle = ""
+        self.include_ignored = False
+
+    def set_filter(self, needle: str, include_ignored: bool):
+        self.needle, self.include_ignored = needle.lower(), include_ignored
+        self.invalidateRowsFilter()
 
     def filterAcceptsRow(self, row, parent):
-        pattern = self.filterRegularExpression().pattern()
-        if not pattern:
+        if not self.needle:
             return True
-        index = self.sourceModel().index(row, 0, parent)
-        if self.sourceModel().data(index, KIND_ROLE) != "file":
+        item = self.sourceModel().itemFromIndex(self.sourceModel().index(row, 0, parent))
+        if item is None or item.data(KIND_ROLE) != "file":
             return False  # folders are shown when something inside matches
-        return super().filterAcceptsRow(row, parent)
+        if not self.include_ignored and (item.data(IGNORED_ROLE) or item.data(HIDDEN_ROLE)):
+            return False
+        return self.needle in item.text().lower()
 
 
 class ProjectTree(QWidget):
@@ -211,12 +221,21 @@ class ProjectTree(QWidget):
         self._roles: dict[str, str] = {}  # folder -> fpm role
         self._ignores: dict[str, GitIgnore] = {}  # package folder -> its rules
         self._role_icons: dict = {}
-        self._all_loaded = False
+        self._all_loaded: bool | None = None  # None, or whether ignored folders were loaded too
 
         self.filter_edit = QLineEdit()
         self.filter_edit.setPlaceholderText("Filter files…")
         self.filter_edit.setClearButtonEnabled(True)
-        self.filter_edit.textChanged.connect(self._apply_filter)
+        # Filter once typing pauses, not on every keystroke.
+        self._filter_timer = QTimer(self)
+        self._filter_timer.setSingleShot(True)
+        self._filter_timer.setInterval(200)
+        self._filter_timer.timeout.connect(lambda: self._apply_filter(self.filter_edit.text()))
+        self.filter_edit.textChanged.connect(self._filter_timer.start)
+        self.include_ignored = QCheckBox("Ignored")
+        self.include_ignored.setToolTip("Also match files ignored by git and greyed-out files "
+                                        "(hidden, compiled, build/) — slower on big projects")
+        self.include_ignored.toggled.connect(lambda: self._apply_filter(self.filter_edit.text()))
 
         self.model = QStandardItemModel(self)
         self.proxy = _Filter(self)
@@ -238,7 +257,11 @@ class ProjectTree(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
-        layout.addWidget(self.filter_edit)
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(6)
+        filter_row.addWidget(self.filter_edit, 1)
+        filter_row.addWidget(self.include_ignored)
+        layout.addLayout(filter_row)
         layout.addWidget(self.view, 1)
         layout.addWidget(self.empty)
         self._update_empty()
@@ -257,7 +280,7 @@ class ProjectTree(QWidget):
         selected = self._selected_path() if keep_state else None
         self.model.clear()
         self._items.clear()
-        self._all_loaded = False
+        self._all_loaded = None
         if self.project_dir is None:
             self._update_empty()
             return
@@ -455,9 +478,10 @@ class ProjectTree(QWidget):
     def _grey(self) -> QColor:
         return QApplication.palette().color(QPalette.Disabled, QPalette.Text)
 
-    def _load_all(self):
-        """Load every folder (for filtering, which must see all files)."""
-        if self._all_loaded:
+    def _load_all(self, include_ignored: bool = False):
+        """Load every folder (for filtering, which must see all files);
+        folders ignored by git only if ``include_ignored``."""
+        if self._all_loaded or self._all_loaded == include_ignored:
             return
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
@@ -467,10 +491,12 @@ class ProjectTree(QWidget):
                 if item is None:
                     continue
                 if item.data(KIND_ROLE) in ("package", "dir"):
+                    if item.data(IGNORED_ROLE) and not include_ignored:
+                        continue
                     self._load(item)
                 for r in range(item.rowCount()):
                     stack.append(item.child(r))
-            self._all_loaded = True
+            self._all_loaded = include_ignored
         finally:
             QApplication.restoreOverrideCursor()
 
@@ -528,10 +554,16 @@ class ProjectTree(QWidget):
 
     # -------------------------------------------------------------- filter
     def _apply_filter(self, text: str):
-        if text.strip():
-            self._load_all()
-        self.proxy.setFilterFixedString(text.strip())
-        if text.strip():
+        self._filter_timer.stop()
+        needle = text.strip()
+        include = self.include_ignored.isChecked()
+        if needle:
+            self._load_all(include)
+            # Re-filtering a fully expanded tree of thousands of rows is slow
+            # in QTreeView (seconds); everything is expanded again below.
+            self.view.collapseAll()
+        self.proxy.set_filter(needle, include)
+        if needle:
             self.view.expandAll()
         self._update_empty()
 
@@ -540,8 +572,13 @@ class ProjectTree(QWidget):
         if self.project_dir is None:
             self.empty.setText("Open an fpm.toml to see its files.")
         elif not has_rows:
-            self.empty.setText("No files match the filter." if self.filter_edit.text().strip()
-                               else "No files found.")
+            if not self.filter_edit.text().strip():
+                self.empty.setText("No files found.")
+            elif self.include_ignored.isChecked():
+                self.empty.setText("No files match the filter.")
+            else:
+                self.empty.setText("No files match the filter (tick Ignored to also "
+                                   "search files ignored by git and greyed-out files).")
         self.empty.setVisible(not has_rows)
         self.view.setVisible(has_rows)
 

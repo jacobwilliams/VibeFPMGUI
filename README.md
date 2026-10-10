@@ -34,7 +34,8 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   `mpirun -np 4`) still wraps each test.
 * *Project files* panel (below the build options): the project's files and
   those of every dependency (including git downloads in `build/dependencies`),
-  with a filter box. fpm's standard folders get a badge on their icon
+  with a filter box (files ignored by git and greyed-out files are left out
+  of the matches unless *Ignored* is ticked). fpm's standard folders get a badge on their icon
   (library sources, include, programs, tests, examples — following any
   `source-dir`/`include-dir` set in `fpm.toml`), and `fpm.toml` gets its own
   icon. Hidden files and folders, `build/`, compiled files and nested
