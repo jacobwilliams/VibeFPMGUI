@@ -1676,6 +1676,9 @@ class MainWindow(QMainWindow):
         self.monitor_tabs.setCurrentWidget(self.review_monitor)
         self.review_monitor.begin(f"{editor.path.name} · {self.ai_model} · {focus.lower()}", "Thinking")
         self._show_single_output(f"AI review of {editor.path.name} ({self.ai_model})", "")
+        self._review_text = ""
+        self._review_keys = []
+        editor.clear_review()  # markers from an earlier review would be misleading
         worker = ai.ReviewWorker(ai.DEFAULT_HOST, self.ai_model, prompt)
         worker.chunk.connect(self._review_chunk)
         worker.finished.connect(self._review_finished)
@@ -1713,6 +1716,18 @@ class MainWindow(QMainWindow):
         self.test_output.setTextCursor(cursor)
         self.test_output.ensureCursorVisible()
         self.review_monitor.add_text(text)
+        # Text arrives a line at a time: re-read the answer so far and show
+        # the findings found so far (the list and the editor's markers).
+        self._review_text += text
+        editor = self._ai_editor
+        max_line = editor.editor.blockCount() if editor in self.editors() else None
+        findings, _summary = ai.parse_findings(self._review_text, max_line)
+        keys = [(f.line, f.end_line, f.category, f.comment) for f in findings]
+        if keys != self._review_keys:
+            self._review_keys = keys
+            self.review_monitor.set_findings(findings, final=False)
+            if editor in self.editors():
+                editor.show_review(findings)
 
     def _review_finished(self, text: str, stats: dict):
         editor = self._ai_editor

@@ -263,11 +263,20 @@ class ReviewMonitor(SortableTable, QWidget):
 
     def add_text(self, text: str):
         self._tokens += 1  # streamed pieces are roughly tokens
-        if self._tokens == 1:
-            self.show_message("Reviewing… (findings appear when the model has finished)")
+        if self._tokens == 1 and not self.findings:
+            self.show_message("Reviewing… (findings appear here as the model writes them)")
         self._status = "Reviewing"
 
-    def set_findings(self, findings: list[Finding], summary: str):
+    @staticmethod
+    def _key(f: Finding) -> tuple:
+        return (f.line, f.end_line, f.category)
+
+    def set_findings(self, findings: list[Finding], summary: str = "", final: bool = True):
+        """Show findings. While the model is still writing (``final=False``)
+        this is called again with the answer so far: the selection stays on
+        the same finding and no "no findings" message or summary is shown."""
+        selected = self._selected_object()
+        selected_key = self._key(selected) if selected is not None else None
         self.findings = sorted(findings, key=lambda f: (f.line, _category_rank(f.category)))
         for seq, f in enumerate(self.findings):
             f.seq = seq  # original order (by line), for "unsorted"
@@ -276,8 +285,16 @@ class ReviewMonitor(SortableTable, QWidget):
             for column in range(len(self.COLUMNS)):
                 self.table.setItem(row, column, QTableWidgetItem())
             self._sync_row(row)
+        self.selected_row = -1
         self.apply_sort()  # keep the user's chosen order
+        if selected_key is not None:
+            self.selected_row = next((i for i, f in enumerate(self.findings)
+                                      if self._key(f) == selected_key), -1)
         self._update_chips()
+        if not final:
+            if self.findings:
+                self.show_message(None)
+            return
         self.summary.setText(f"<b>Summary:</b> {summary}" if summary else "")
         self.show_message(None if self.findings else
                           "No specific findings." + ("" if summary else
@@ -289,7 +306,11 @@ class ReviewMonitor(SortableTable, QWidget):
         self.progress.set(1.0, "ok" if ok else "failed")
         self._status = message
         if not ok:
-            self.show_message(message)
+            # Keep findings that already arrived; the error goes in the label.
+            if self.findings:
+                self.show_message(None)
+            else:
+                self.show_message(message)
         self._update_label()
 
     # ------------------------------------------------------------- display
