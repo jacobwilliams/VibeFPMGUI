@@ -20,7 +20,8 @@ from pathlib import Path
 from qtpy.QtCore import QEvent, QProcess, QProcessEnvironment, QSettings, QSize, Qt, QTimer, QUrl
 from qtpy.QtGui import QAction, QActionGroup, QColor, QPalette, QDesktopServices, QFont, QFontDatabase, QKeySequence, QTextCursor
 from qtpy.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QInputDialog,
+    QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
+    QInputDialog,
     QLabel, QLineEdit, QMainWindow, QMenu, QSizePolicy, QStackedWidget, QTabBar, QMessageBox, QPlainTextEdit, QPushButton, QSplitter,
     QTabWidget, QTextBrowser, QToolBar, QToolButton, QVBoxLayout, QWidget,
 )
@@ -31,7 +32,8 @@ from .build_monitor import BuildMonitor, set_ui_scale
 from .test_monitor import MARKER_RE, TestMonitor, parse_test_list
 from . import ai_review as ai
 from .editor import EditorTab, monospace_font
-from .project_tree import ProjectTree
+from . import build_outputs as bo
+from .project_tree import ProjectTree, reveal_in_file_manager
 from .review_monitor import ReviewMonitor
 from .icons import make_icon
 from .highlighter import DARK_STYLE, LIGHT_STYLE, PygmentsHighlighter, is_dark
@@ -219,6 +221,7 @@ class MainWindow(QMainWindow):
         # Project files below the build options (drag the divider to resize).
         self.project_tree = ProjectTree()
         self.project_tree.open_requested.connect(lambda path: self.open_file(path))
+        self.project_tree.compile_command_requested.connect(self.show_compile_command)
         files_box = QGroupBox("Project files")
         files_layout = QVBoxLayout(files_box)
         files_layout.setContentsMargins(6, 6, 6, 6)
@@ -267,15 +270,23 @@ class MainWindow(QMainWindow):
         self.tabs.setDocumentMode(True)
         self.tabs.addTab(graph_tab, "Dependency graph")
         self.tabs.addTab(self.manifest_view, "fpm.toml")
+        self.outputs_view = bo.BuildOutputsView()
+        self.outputs_view.run_requested.connect(self.run_program)
+        self.outputs_view.reveal_requested.connect(reveal_in_file_manager)
+        self.outputs_view.delete_requested.connect(self.delete_configurations)
+        self.outputs_view.refresh_requested.connect(self.refresh_build_outputs)
+        self.tabs.addTab(self.outputs_view, "Build outputs")
         # Files opened in the built-in editor get their own closable tabs.
         self.tabs.setTabsClosable(True)
         self.tabs.setMovable(True)
-        for index in (0, 1):
+        for index in (0, 1, 2):  # graph, fpm.toml and build outputs stay open
             for side in (QTabBar.LeftSide, QTabBar.RightSide):
                 self.tabs.tabBar().setTabButton(index, side, None)
         self.tabs.tabCloseRequested.connect(self.close_editor)
         self.tabs.currentChanged.connect(self._update_editor_actions)
         self.tabs.currentChanged.connect(self._reveal_current_file)
+        self.tabs.currentChanged.connect(
+            lambda _i: self.tabs.currentWidget() is self.outputs_view and self.refresh_build_outputs())
 
         self.console = QPlainTextEdit()
         self.console.setReadOnly(True)
@@ -326,6 +337,7 @@ class MainWindow(QMainWindow):
         self.test_monitor.build_percent = lambda: self.build_monitor._percent
         self.build_monitor.details_requested.connect(self.show_build_details)
         self.build_monitor.open_file_requested.connect(self.open_file)
+        self.build_monitor.compile_command_requested.connect(self.show_compile_command)
         self.monitor_tabs = QTabWidget()
         self.monitor_tabs.setDocumentMode(True)
         self.monitor_tabs.addTab(self.build_monitor, "Build")
@@ -669,6 +681,139 @@ class MainWindow(QMainWindow):
     def clear_recent_manifests(self):
         self.settings.setValue("recent_manifests", [])
 
+    # -------------------------------------------------------- build outputs
+    def _config_records(self) -> bo.ConfigRecords:
+        digest = hashlib.sha1(str(self.manifest_path).encode()).hexdigest()[:16]
+        return bo.ConfigRecords(self.settings, f"build_configs/{digest}")
+
+    def _record_build_folders(self):
+        """Remember which build folders the finished build wrote, and with
+        which settings, so the Build outputs tab can label them."""
+        before, self._folder_snapshot = getattr(self, "_folder_snapshot", None), None
+        if before is None or not self.manifest_path:
+            return
+        changed = bo.changed_folders(before, bo.snapshot(self.manifest_path.parent))
+        flags = " ".join(x for x in (self.flag_edit.text().strip(),
+                                     " ".join(split_runner(shlex.split(self.extra_edit.text()))[0]))
+                         if x)
+        if changed:
+            self._config_records().record_build(self._build_description(), flags, changed)
+        else:  # up to date: these settings are still the current configuration
+            self._config_records().mark_used(self._build_description(), flags)
+        self.refresh_build_outputs()
+
+    def refresh_build_outputs(self):
+        if not self.manifest_path:
+            self.outputs_view.set_configurations([], None)
+            return
+        records = self._config_records()
+        configs = bo.configurations(self.manifest_path.parent, records.load(), records.last_used())
+        self.outputs_view.set_configurations(configs, self.manifest_path.parent)
+
+    def delete_configurations(self, configs: list):
+        if not configs:
+            return
+        if self.process is not None:
+            QMessageBox.information(self, "Build outputs", "Wait for the running command to finish first.")
+            return
+        size = bo.human_size(sum(c.size for c in configs))
+        names = "\n".join(f"• {c.label} ({bo.human_size(c.size)})" for c in configs)
+        answer = QMessageBox.question(
+            self, "Delete build outputs",
+            f"Delete {len(configs)} configuration{'s' * (len(configs) != 1)} ({size})?\n\n{names}\n\n"
+            "They are rebuilt automatically when needed.")
+        if answer != QMessageBox.Yes:
+            return
+        folders = [f.path for c in configs for f in c.folders]
+        errors = bo.delete_folders(folders)
+        self._config_records().forget([f.name for f in folders])
+        self.refresh_build_outputs()
+        if errors:
+            QMessageBox.warning(self, "Build outputs", "Some folders could not be deleted:\n" + "\n".join(errors))
+        else:
+            self.statusBar().showMessage(f"Deleted {size} of build outputs", 5000)
+
+    def run_program(self, path: str):
+        """Run an already-built program directly (no fpm, no rebuild)."""
+        if self.process is not None or not self.manifest_path:
+            return
+        try:
+            args = shlex.split(self.runner_args_edit.text())
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid arguments", str(exc))
+            return
+        self.process = QProcess(self)
+        self.process.setWorkingDirectory(str(self.manifest_path.parent))
+        self.process.setProcessChannelMode(QProcess.MergedChannels)
+        self.process.readyReadStandardOutput.connect(self._read_output)
+        self.process.finished.connect(self._finished)
+        self.process.errorOccurred.connect(self._process_error)
+        self._refresh_after = False
+        self._partial = ""
+        self._phase = None
+        self._monitoring = False
+        self._test_building = False
+        self._folder_snapshot = None
+        self._process_label = Path(path).name
+        self.show_all_output()
+        rel = os.path.relpath(path, self.manifest_path.parent)
+        self._append(f"\n$ cd {shlex.quote(str(self.manifest_path.parent))}\n"
+                     f"$ {shlex.join([rel] + args)}\n", bold=True)
+        self.stop_action.setEnabled(True)
+        self._set_project_enabled(True)
+        self.statusBar().showMessage(f"Running {Path(path).name}…")
+        self.process.start(path, args)
+
+    def show_compile_command(self, source: str):
+        """The exact compiler command fpm used for a source file."""
+        if not self.manifest_path:
+            return
+        commands, _folder = bo.read_compile_commands(self.manifest_path.parent)
+        args = commands.get(str(Path(source).resolve()))
+        name = Path(source).name
+        if args is None:
+            QMessageBox.information(
+                self, "Compile command",
+                f"No compile command for {name} in build/compile_commands.json.\n\n"
+                "That file lists the files of the most recent build; build the "
+                "project (with this file in it) and try again.")
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Compile command — {name}")
+        layout = QVBoxLayout(dialog)
+        note = QLabel("From <code>build/compile_commands.json</code>, which fpm writes when "
+                      "it compiles something — so this is the last build that compiled files, "
+                      "which may have used other settings than the current ones. "
+                      "Run from the project folder.")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        text = QPlainTextEdit(bo.format_command(args))
+        text.setReadOnly(True)
+        text.setFont(self._mono_font())
+        text.setLineWrapMode(QPlainTextEdit.NoWrap)
+        layout.addWidget(text, 1)
+        repeated = sorted({a for a in args if a.startswith("-") and args.count(a) > 1})
+        if repeated:
+            hint = QLabel("<span style='color:gray'>fpm passes some flags more than once: "
+                          + ", ".join(f"<code>{html.escape(r)}</code> ×{args.count(r)}" for r in repeated)
+                          + " (harmless).</span>")
+            hint.setWordWrap(True)
+            layout.addWidget(hint)
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        copy = QPushButton("Copy")
+        copy.setToolTip("Copy as one line")
+        copy.clicked.connect(lambda: (QApplication.clipboard().setText(shlex.join(args)),
+                                      copy.setText("Copied")))
+        close = QPushButton("Close")
+        close.setDefault(True)
+        close.clicked.connect(dialog.accept)
+        buttons.addWidget(copy)
+        buttons.addWidget(close)
+        layout.addLayout(buttons)
+        dialog.resize(720, 420)
+        dialog.exec()
+
     def _reveal_current_file(self, *_):
         editor = self.current_editor()
         if editor is not None:
@@ -718,6 +863,7 @@ class MainWindow(QMainWindow):
             self.graph_view.update_packages(self.graph)
         self.show_package(self.graph.root)
         self.project_tree.set_project(self.graph, self.manifest_path.parent)
+        self.refresh_build_outputs()
         self._set_project_enabled(True)
         self._load_features_and_profiles()
         missing = sum(1 for p in self.graph.packages.values() if p.kind == m.MISSING)
@@ -733,10 +879,21 @@ class MainWindow(QMainWindow):
         e = html.escape
         rows = [("Type", KIND_LABELS[pkg.kind])]
         for label, value in [("Version", pkg.version), ("License", pkg.license),
-                             ("Author", pkg.author), ("Git", pkg.git),
-                             ("Requested", pkg.git_ref), ("Revision", pkg.git_rev)]:
+                             ("Author", pkg.author)]:
             if value:
                 rows.append((label, e(value)))
+        if pkg.git:
+            web = repo_web_url(pkg.git)
+            rows.append(("Git", f'<a href="{e(web)}">{e(pkg.git)}</a>' if web else e(pkg.git)))
+        if pkg.git_ref:
+            rows.append(("Requested", e(pkg.git_ref)))
+        if pkg.git_rev:
+            # The exact commit fpm checked out (from build/cache.toml).
+            commit_url = commit_web_url(pkg.git, pkg.git_rev)
+            short = e(pkg.git_rev[:7])
+            rows.append(("Commit", (f'<a href="{e(commit_url)}" title="{e(pkg.git_rev)}">{short}</a>'
+                                    if commit_url else f'<span title="{e(pkg.git_rev)}">{short}</span>')
+                         + f' <span style="color:gray">({e(pkg.git_rev)})</span>'))
         if pkg.homepage:
             rows.append(("Homepage", f'<a href="{e(pkg.homepage)}">{e(pkg.homepage)}</a>'))
         if pkg.directory:
@@ -1094,6 +1251,11 @@ class MainWindow(QMainWindow):
         # build grid until the first test starts (see _test_line).
         self._monitoring = sub[0] in ("build", "run", "test") and phase != "list"
         self._test_building = phase == "tests"
+        self._process_label = "fpm"
+        # Note which build folders exist now, to record which ones this
+        # build writes (see _record_build_folders).
+        self._folder_snapshot = (bo.snapshot(self.manifest_path.parent)
+                                 if self._monitoring else None)
         if self._monitoring:
             self.build_monitor.start(self.graph, self.manifest_path.parent, self._build_description())
             if phase is None:
@@ -1200,7 +1362,8 @@ class MainWindow(QMainWindow):
         if crashed:
             self._append("\n[process was stopped]\n", bold=True)
         else:
-            self._append(f"\n[fpm exited with code {code}]\n", bold=True)
+            self._append(f"\n[{self._process_label} exited with code {code}]\n", bold=True)
+        self._record_build_folders()
         phase, self._phase = self._phase, None
         self._cleanup_process()
         self.statusBar().showMessage("Stopped" if crashed else
@@ -1212,9 +1375,12 @@ class MainWindow(QMainWindow):
 
     def _process_error(self, error):
         if error == QProcess.FailedToStart:
-            self._append(f"\nCould not start '{self._fpm_executable()}'. "
-                         "Set the fpm executable in Build options.\n", bold=True)
-            self.statusBar().showMessage("fpm failed to start")
+            if getattr(self, "_process_label", "fpm") == "fpm":
+                self._append(f"\nCould not start '{self._fpm_executable()}'. "
+                             "Set the fpm executable in Build options.\n", bold=True)
+            else:
+                self._append(f"\nCould not start '{self._process_label}'.\n", bold=True)
+            self.statusBar().showMessage(f"{getattr(self, '_process_label', 'fpm')} failed to start")
             self._flush_monitor(-1, True)
             if self._phase is not None:
                 self.test_monitor.finish(-1, stopped=True)
@@ -1588,6 +1754,33 @@ class MainWindow(QMainWindow):
         if self._ollama_process is not None:  # only a server we started ourselves
             self._ollama_process.terminate()
             self._ollama_process.waitForFinished(3000)
+
+
+def repo_web_url(git_url: str) -> str | None:
+    """The web page of a GitHub/GitLab/Codeberg/Bitbucket repository."""
+    url = git_url.strip()
+    match = re.match(r"^git@([^:]+):(.+?)(?:\.git)?/?$", url)
+    if match:
+        host, path = match.groups()
+    else:
+        match = re.match(r"^(?:https?|git|ssh)://(?:[^@/]+@)?([^/:]+)(?::\d+)?/(.+?)(?:\.git)?/?$", url)
+        if not match:
+            return None
+        host, path = match.groups()
+    if not any(h in host for h in ("github.", "gitlab.", "codeberg.", "bitbucket.")):
+        return None
+    return f"https://{host}/{path}"
+
+
+def commit_web_url(git_url: str, rev: str) -> str | None:
+    base = repo_web_url(git_url)
+    if not base or not re.fullmatch(r"[0-9a-fA-F]{7,40}", rev or ""):
+        return None
+    if "bitbucket." in base:
+        return f"{base}/commits/{rev}"
+    if "gitlab." in base:
+        return f"{base}/-/commit/{rev}"
+    return f"{base}/commit/{rev}"
 
 
 def kill_process_tree(process: QProcess):

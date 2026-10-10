@@ -36,7 +36,7 @@ from qtpy.QtGui import (
     QPalette, QPen,
 )
 from qtpy.QtWidgets import (
-    QAbstractItemView, QApplication, QHBoxLayout, QHeaderView, QLabel, QPushButton,
+    QAbstractItemView, QApplication, QHBoxLayout, QHeaderView, QLabel, QMenu, QPushButton,
     QStyledItemDelegate, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -532,6 +532,8 @@ class BuildMonitor(SortableTable, QWidget):
     details_requested = Signal(int)
     # Double-click: open (path, [Diagnostic]) in an editor.
     open_file_requested = Signal(str, list)
+    # Right-click → Show Compile Command (source path).
+    compile_command_requested = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -605,6 +607,8 @@ class BuildMonitor(SortableTable, QWidget):
         self.table.viewport().installEventFilter(self)
         self.table.cellClicked.connect(self._row_clicked)
         self.table.cellDoubleClicked.connect(self._open_row)
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._context_menu)
         hh = self.table.horizontalHeader()
         hh.setHighlightSections(False)
         hh.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
@@ -1079,6 +1083,22 @@ class BuildMonitor(SortableTable, QWidget):
         path = self.table.item(row, 0).data(Qt.UserRole)
         if path:
             self.open_file_requested.emit(path, self.diagnostics_for(row))
+
+    def _context_menu(self, pos):
+        row = self.table.rowAt(pos.y())
+        if not 0 <= row < len(self.targets):
+            return
+        target = self.targets[row]
+        menu = QMenu(self)
+        if target.path is not None:
+            path = str(target.path)
+            menu.addAction("Show Compile Command…", lambda: self.compile_command_requested.emit(path))
+            menu.addAction("Open in Editor",
+                           lambda: self.open_file_requested.emit(path, self.diagnostics_for(row)))
+        menu.addAction("Show Compiler Messages", lambda: self._row_clicked(row, 0)
+                       if self.selected_row != row else None)
+        if menu.actions():
+            menu.exec(self.table.viewport().mapToGlobal(pos))
 
     def diagnostics_for(self, row: int) -> list[Diagnostic]:
         """Diagnostics that point into the row's own source file (errors first)."""

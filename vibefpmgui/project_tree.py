@@ -21,6 +21,7 @@ from qtpy.QtWidgets import (
 )
 
 from . import manifest as m
+from .build_monitor import SOURCE_EXTS
 from .icons import badged_icon
 
 PATH_ROLE = Qt.UserRole + 1
@@ -108,6 +109,7 @@ class ProjectTree(QWidget):
     """The file tree. Emits :attr:`open_requested` with a file path."""
 
     open_requested = Signal(str)
+    compile_command_requested = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -465,6 +467,9 @@ class ProjectTree(QWidget):
             menu.addAction("Open", lambda: self.open_requested.emit(path))
             menu.addAction("Open in Default App",
                            lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(path)))
+            if Path(path).suffix.lower() in SOURCE_EXTS:
+                menu.addAction("Show Compile Command…",
+                               lambda: self.compile_command_requested.emit(path))
         if path:
             label = {"darwin": "Show in Finder", "win32": "Show in Explorer"}.get(
                 sys.platform, "Open Containing Folder")

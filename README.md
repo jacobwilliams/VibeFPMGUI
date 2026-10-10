@@ -60,6 +60,19 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   Small local models are helpful but fallible — treat findings as hints.
   See [AI code review](#ai-code-review) below for setup and where models
   are stored.
+* *Build outputs* tab: what fpm keeps in `build/`, one card per
+  configuration (fpm writes a separate set of `<compiler>_<hash>` folders for
+  every combination of settings and never removes old ones). Each card shows
+  the settings it was built with (recorded when the GUI runs the build;
+  older folders are grouped as "built outside the app"), when it was built,
+  its size, the library and module counts, and its programs, tests and
+  examples with a **Run** button (runs them directly, without rebuilding).
+  Delete a configuration, or all except the current one, to free space.
+* *Show Compile Command* (right-click a file in the Build tab or a source in
+  the Project files tree): the exact compiler command from
+  `build/compile_commands.json`, with a Copy button.
+* Selecting a git dependency in the graph shows the exact commit fpm checked
+  out (from `build/cache.toml`), linked to it on GitHub/GitLab.
 * Dependency diagram (drawn with [pyqtgraph](https://www.pyqtgraph.org)) built
   from the main `fpm.toml` and the `fpm.toml` of every downloaded dependency
   (git, local path, registry and metapackages; dashed edges are dev/test
