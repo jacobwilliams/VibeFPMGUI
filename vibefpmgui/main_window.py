@@ -20,7 +20,7 @@ from qtpy.QtCore import QEvent, QProcess, QProcessEnvironment, QSettings, QSize,
 from qtpy.QtGui import QAction, QActionGroup, QColor, QPalette, QDesktopServices, QFont, QFontDatabase, QKeySequence, QTextCursor
 from qtpy.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QInputDialog,
-    QLabel, QLineEdit, QMainWindow, QMenu, QStackedWidget, QTabBar, QMessageBox, QPlainTextEdit, QPushButton, QSplitter,
+    QLabel, QLineEdit, QMainWindow, QMenu, QSizePolicy, QStackedWidget, QTabBar, QMessageBox, QPlainTextEdit, QPushButton, QSplitter,
     QTabWidget, QTextBrowser, QToolBar, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -569,6 +569,10 @@ class MainWindow(QMainWindow):
     def open_manifest(self, filename: str | Path):
         path = Path(filename).resolve()
         if path != self.manifest_path:
+            # The open files belong to the old project: ask about unsaved
+            # changes first (Cancel keeps the current project open).
+            if not self.close_all_editors():
+                return
             if self.process is not None:
                 answer = QMessageBox.question(
                     self, "fpm is running",
@@ -591,6 +595,9 @@ class MainWindow(QMainWindow):
         self.test_output.clear()
         self.build_monitor.reset()
         self.test_monitor.reset()
+        self.stop_review()
+        self._ai_editor = None
+        self.review_monitor.reset()
         self.monitor_tabs.setCurrentWidget(self.build_monitor)
 
     def reload(self):
@@ -728,6 +735,20 @@ class MainWindow(QMainWindow):
         if self.manifest_path and Path(path) == self.manifest_path:
             self.reload()  # graph, features and profiles may have changed
 
+    def close_all_editors(self) -> bool:
+        """Close every editor tab. Unsaved files are asked about first; if
+        any answer is Cancel, nothing is closed and False is returned."""
+        editors = self.editors()
+        for editor in editors:
+            if editor.is_dirty():
+                self.tabs.setCurrentWidget(editor)
+                if not editor.maybe_save():
+                    return False
+        for editor in editors:
+            self.tabs.removeTab(self.tabs.indexOf(editor))
+            editor.deleteLater()
+        return True
+
     def close_editor(self, index: int):
         widget = self.tabs.widget(index)
         if not isinstance(widget, EditorTab):
@@ -743,6 +764,13 @@ class MainWindow(QMainWindow):
                        self.find_action, self.replace_action, self.find_next_action,
                        self.find_previous_action, self.goto_action):
             action.setEnabled(has_editor)
+        self._update_review_actions()
+
+    def _update_review_actions(self):
+        """AI review needs an editor tab in front (and no review running)."""
+        has_editor = self.current_editor() is not None
+        self.review_action.setEnabled(has_editor and self._ai_thread is None)
+        self.clear_review_action.setEnabled(has_editor)
 
     def _build_edit_menu(self):
         menu = self.menuBar().addMenu("&Edit")
@@ -1216,6 +1244,17 @@ class MainWindow(QMainWindow):
         self.review_action.setShortcut(QKeySequence("Ctrl+Alt+R"))
         self.review_action.setStatusTip("Ask a local AI model (via Ollama) to review the file in the editor")
         self.review_action.triggered.connect(self.start_review)
+        # Also on the toolbar, at the far right.
+        self.review_action.setIconText("AI Review")
+        keys = self.review_action.shortcut().toString(QKeySequence.NativeText)
+        self.review_action.setToolTip(f"AI Review ({keys}) — review the file in the editor "
+                                      "with a local AI model")
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.command_toolbar.addWidget(spacer)
+        self.command_toolbar.addAction(self.review_action)
+        self.command_icons[self.review_action] = "robot"
+        self._update_command_icons()
         self.stop_review_action = menu.addAction("Stop Review")
         self.stop_review_action.setEnabled(False)
         self.stop_review_action.triggered.connect(self.stop_review)
@@ -1363,13 +1402,13 @@ class MainWindow(QMainWindow):
         self._ai_worker = worker
         self._ai_thread = ai.start_worker(worker, self)
         self._ai_thread.finished.connect(self._ai_thread_done)
-        self.review_action.setEnabled(False)
+        self._update_review_actions()
         self.stop_review_action.setEnabled(True)
 
     def _ai_thread_done(self):
         self._ai_thread = None
         self._ai_worker = None
-        self.review_action.setEnabled(True)
+        self._update_review_actions()
         self.stop_review_action.setEnabled(False)
 
     def _ai_done(self, then=None):

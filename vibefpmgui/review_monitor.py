@@ -217,6 +217,23 @@ class ReviewMonitor(SortableTable, QWidget):
         self.empty.setVisible(bool(message))
         self.table.setVisible(not message)
 
+    def reset(self):
+        """Back to the empty state (e.g. when another project is opened)."""
+        self._timer.stop()
+        self.running = False
+        self.findings = []
+        self.table.setRowCount(0)
+        self.selected_row = -1
+        self.summary.clear()
+        self.subtitle.clear()
+        self.set_filter(None)
+        self._update_chips()
+        self._started = 0.0
+        self._status = ""
+        self.progress.set(0, "running")
+        self._update_label()
+        self.show_message("Open a file in the editor and choose AI → Review Current File.")
+
     def begin(self, description: str, status: str = "Starting…"):
         """A review (or model download) is starting."""
         self.findings = []

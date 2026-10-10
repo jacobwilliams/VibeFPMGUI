@@ -121,6 +121,30 @@ def _stop(p: QPainter, c: QColor):
     p.drawRoundedRect(QRectF(6, 6, 12, 12), 2.5, 2.5)
 
 
+def _robot(p: QPainter, c: QColor):
+    p.setPen(_pen(c, 1.7))
+    p.setBrush(Qt.NoBrush)
+    # Antenna with a ball on top.
+    p.drawLine(QPointF(12, 4.6), QPointF(12, 7.2))
+    p.setPen(Qt.NoPen)
+    p.setBrush(c)
+    p.drawEllipse(QPointF(12, 3.4), 1.6, 1.6)
+    # Head.
+    p.setPen(_pen(c, 1.7))
+    p.setBrush(Qt.NoBrush)
+    p.drawRoundedRect(QRectF(4.5, 7.2, 15, 12.3), 3.6, 3.6)
+    # Ears.
+    p.drawLine(QPointF(2.6, 11.6), QPointF(2.6, 15.0))
+    p.drawLine(QPointF(21.4, 11.6), QPointF(21.4, 15.0))
+    # Eyes and mouth.
+    p.setPen(Qt.NoPen)
+    p.setBrush(c)
+    p.drawEllipse(QPointF(9.0, 12.3), 1.7, 1.7)
+    p.drawEllipse(QPointF(15.0, 12.3), 1.7, 1.7)
+    p.setPen(_pen(c, 1.5))
+    p.drawLine(QPointF(9.6, 16.2), QPointF(14.4, 16.2))
+
+
 DRAWERS = {
     "build": _hammer,
     "run": _play,
@@ -129,6 +153,7 @@ DRAWERS = {
     "clean": _broom,
     "clean-all": _trash,
     "stop": _stop,
+    "robot": _robot,
 }
 
 
