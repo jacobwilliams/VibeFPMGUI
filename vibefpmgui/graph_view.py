@@ -116,14 +116,22 @@ class NodeItem(pg.GraphicsObject):
         self.dimmed = False
         self._drag_offset = QPointF()
         self._last_click = 0.0
-        self.title_font = QFont()
-        self.title_font.setBold(True)
-        self.title_font.setPointSizeF(self.title_font.pointSizeF() + 1)
-        self.sub_font = QFont()
-        self.sub_font.setPointSizeF(max(self.title_font.pointSizeF() - 3, 7))
+        self._make_fonts()
         self.set_package(package)
         self.setZValue(10)
         self.setCursor(Qt.PointingHandCursor)
+
+    def _make_fonts(self):
+        """Fonts based on the current application font (follows View → text size)."""
+        self.title_font = QFont(QApplication.font())
+        self.title_font.setBold(True)
+        self.title_font.setPointSizeF(self.title_font.pointSizeF() + 1)
+        self.sub_font = QFont(QApplication.font())
+        self.sub_font.setPointSizeF(max(self.title_font.pointSizeF() - 3, 7))
+
+    def refresh_fonts(self):
+        self._make_fonts()
+        self.set_package(self.package)  # recomputes the box size
 
     def set_package(self, package: m.Package):
         self.package = package
@@ -600,12 +608,26 @@ class DependencyGraphView(QWidget):
     def _apply_theme_colors(self):
         self.plot.setBackground(self.theme["background"])
         self.message.setStyleSheet(
-            f"background:{self.theme['background']}; color:{self.theme['subtext']}; font-size:14px;")
+            f"background:{self.theme['background']}; color:{self.theme['subtext']};")
 
     def package_colors(self) -> dict[str, str]:
         """The colour that identifies each package kind in the current theme."""
         return {k: (node_border(self.theme, k).name() if self.theme["border"] else self.theme["fill"][k])
                 for k in KIND_ORDER}
+
+    def refresh_fonts(self):
+        """Resize the package boxes after the text size changed, keeping each
+        box centred where it was, then tidy overlaps by re-running the layout
+        only if boxes now collide."""
+        for node in self.nodes.values():
+            center = node.center()
+            node.refresh_fonts()
+            node.set_center(center)
+        rects = [n.scene_rect() for n in self.nodes.values()]
+        if any(a.intersects(b) for i, a in enumerate(rects) for b in rects[i + 1:]):
+            self.relayout(animate=False)
+        else:
+            self._update_edges()
 
     def legend_html(self) -> str:
         theme = self.theme

@@ -21,13 +21,13 @@ from dataclasses import dataclass, field
 from qtpy.QtCore import QEvent, QRectF, QSize, Qt, QTimer, Signal
 from qtpy.QtGui import QColor, QFont, QFontDatabase, QFontMetricsF, QPainter, QPen
 from qtpy.QtWidgets import (
-    QAbstractItemView, QHBoxLayout, QHeaderView, QLabel, QPushButton, QStyledItemDelegate,
+    QAbstractItemView, QApplication, QHBoxLayout, QHeaderView, QLabel, QPushButton, QStyledItemDelegate,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from .build_monitor import (
     ABORTED, COMPILING, DONE, FAILED, PALETTES, ROW_HEIGHT, ProgressLine, _tint, app_is_light,
-    chip_stylesheet, panel_stylesheet,
+    chip_stylesheet, panel_stylesheet, scaled,
 )
 
 MARKER_RE = re.compile(r"@@vibefpm:(start|end):([^:@]+)(?::(-?\d+):([\d.]+))?@@")
@@ -87,7 +87,7 @@ class TestDelegate(QStyledItemDelegate):
         self.monitor = monitor
 
     def sizeHint(self, option, index):
-        return QSize(100, ROW_HEIGHT)
+        return QSize(100, scaled(ROW_HEIGHT))
 
     def paint(self, p: QPainter, option, index):
         mon = self.monitor
@@ -258,7 +258,7 @@ class TestMonitor(QWidget):
         self.table.setHorizontalHeaderLabels(self.COLUMNS)
         self.table.setItemDelegate(TestDelegate(self))
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(ROW_HEIGHT)
+        self.table.verticalHeader().setDefaultSectionSize(scaled(ROW_HEIGHT))
         self.table.setShowGrid(False)
         self.table.setFrameShape(QTableWidget.NoFrame)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -577,5 +577,15 @@ class TestMonitor(QWidget):
 
     def _fit_columns(self):
         width = self.table.viewport().width()
-        self.table.setColumnWidth(1, 140 if width >= 520 else 120)
-        self.table.setColumnWidth(2, 170 if width >= 640 else 120)
+        self.table.setColumnWidth(1, scaled(140 if width >= scaled(520) else 120))
+        self.table.setColumnWidth(2, scaled(170 if width >= scaled(640) else 120))
+
+    def refresh_fonts(self):
+        """Re-apply sizes after the application font changed."""
+        title_font = QFont(QApplication.font())
+        title_font.setPointSizeF(title_font.pointSizeF() + 2)
+        title_font.setWeight(QFont.Bold)
+        self.title.setFont(title_font)
+        self.table.verticalHeader().setDefaultSectionSize(scaled(ROW_HEIGHT))
+        self.refresh_palette()
+        self._fit_columns()

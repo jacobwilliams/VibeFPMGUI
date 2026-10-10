@@ -25,7 +25,7 @@ from qtpy.QtWidgets import (
 
 from . import __version__
 from . import manifest as m
-from .build_monitor import BuildMonitor
+from .build_monitor import BuildMonitor, set_ui_scale
 from .test_monitor import MARKER_RE, TestMonitor, parse_test_list
 from .icons import make_icon
 from .highlighter import DARK_STYLE, LIGHT_STYLE, PygmentsHighlighter, is_dark
@@ -94,6 +94,25 @@ class MainWindow(QMainWindow):
         quit_action.setShortcut(QKeySequence.Quit)
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
+
+        # View menu: text size for the whole window.
+        # The system font, recorded once: later windows would otherwise see the
+        # already-enlarged application font as "normal".
+        app = QApplication.instance()
+        if app.property("vibefpm_base_font") is None:
+            app.setProperty("vibefpm_base_font", QFont(app.font()))
+        self._base_font = QFont(app.property("vibefpm_base_font"))
+        self.font_delta = 0
+        view_menu = self.menuBar().addMenu("&View")
+        self.bigger_action = QAction("Bigger Text", self)
+        self.bigger_action.setShortcuts([QKeySequence(QKeySequence.ZoomIn), QKeySequence("Ctrl+=")])
+        self.bigger_action.triggered.connect(lambda: self.set_font_delta(self.font_delta + 1))
+        self.smaller_action = QAction("Smaller Text", self)
+        self.smaller_action.setShortcut(QKeySequence(QKeySequence.ZoomOut))
+        self.smaller_action.triggered.connect(lambda: self.set_font_delta(self.font_delta - 1))
+        self.reset_font_action = QAction("Actual Size", self)  # (Ctrl+0 is Graph → Fit to window)
+        self.reset_font_action.triggered.connect(lambda: self.set_font_delta(0))
+        view_menu.addActions([self.bigger_action, self.smaller_action, self.reset_font_action])
 
         # --- left: build options + commands
         options = QGroupBox("Build options")
@@ -225,7 +244,7 @@ class MainWindow(QMainWindow):
         header.addWidget(self.output_title)
         header.addStretch(1)
         self.show_all_button = QPushButton("Show all output")
-        self.show_all_button.clicked.connect(lambda: self.show_test_output(""))
+        self.show_all_button.clicked.connect(self.show_all_output)
         self.show_all_button.hide()
         header.addWidget(self.show_all_button)
         clear = QPushButton("Clear")
@@ -237,6 +256,7 @@ class MainWindow(QMainWindow):
         self.build_monitor = BuildMonitor()
         self.test_monitor = TestMonitor()
         self.test_monitor.test_selected.connect(self.show_test_output)
+        self.build_monitor.details_requested.connect(self.show_build_details)
         self.monitor_tabs = QTabWidget()
         self.monitor_tabs.setDocumentMode(True)
         self.monitor_tabs.addTab(self.build_monitor, "Build")
@@ -337,6 +357,41 @@ class MainWindow(QMainWindow):
     def _update_legend(self):
         self.legend.setText(self.graph_view.legend_html())
 
+    # ------------------------------------------------------------ text size
+    FONT_DELTA_RANGE = (-4, 12)  # points relative to the system size
+
+    def set_font_delta(self, delta: int, announce: bool = True):
+        """Make all text in the window ``delta`` points bigger (or smaller)
+        than the system size."""
+        lo, hi = self.FONT_DELTA_RANGE
+        self.font_delta = max(lo, min(hi, int(delta)))
+        base = self._base_font.pointSizeF()
+        size = base + self.font_delta
+        factor = size / base
+        set_ui_scale(factor)
+
+        font = QFont(self._base_font)
+        font.setPointSizeF(size)
+        QApplication.setFont(font)
+        # Widgets with their own fonts don't follow the application font.
+        mono = QFontDatabase.systemFont(QFontDatabase.FixedFont)
+        mono.setPointSizeF(mono.pointSizeF() * factor)
+        for view in (self.manifest_view, self.console, self.test_output):
+            view.setFont(mono)
+        self.command_toolbar.setIconSize(QSize(round(22 * factor), round(22 * factor)))
+        self.build_monitor.refresh_fonts()
+        self.test_monitor.refresh_fonts()
+        self.graph_view.refresh_fonts()
+        if self.graph:
+            self.show_package(self.graph_view.selected or self.graph.root)
+
+        self.bigger_action.setEnabled(self.font_delta < hi)
+        self.smaller_action.setEnabled(self.font_delta > lo)
+        self.reset_font_action.setEnabled(self.font_delta != 0)
+        self.settings.setValue("font_delta", self.font_delta)
+        if announce:
+            self.statusBar().showMessage(f"Text size {round(factor * 100)}%", 3000)
+
     def _build_commands(self):
         """The fpm commands as actions, shown in a toolbar and a Commands menu."""
         self.command_icons: dict[QAction, str] = {}
@@ -420,6 +475,7 @@ class MainWindow(QMainWindow):
         self.extra_edit.setText(s.value("extra", ""))
         self.fpm_edit.setText(s.value("fpm", ""))
         self.verbose_check.setChecked(s.value("verbose", False, type=bool))
+        self.set_font_delta(s.value("font_delta", 0, type=int), announce=False)
         self._set_graph_layout(s.value("graph_layout", next(iter(LAYOUTS))))
         self._set_graph_theme(s.value("graph_theme", next(iter(THEME_CHOICES))))
         self._set_graph_edges(s.value("graph_edges", next(iter(EDGE_STYLES))))
@@ -738,6 +794,7 @@ class MainWindow(QMainWindow):
         if self._monitoring:
             self.build_monitor.start(self.graph, self.manifest_path.parent, self._build_description())
             if phase is None:
+                self.show_all_output()  # any file shown on its own is gone
                 self.monitor_tabs.setCurrentWidget(self.build_monitor)
 
         self._append(f"\n$ cd {shlex.quote(str(self.manifest_path.parent))}\n"
@@ -935,19 +992,37 @@ class MainWindow(QMainWindow):
 
     def show_test_output(self, name: str):
         """Show one test's output (or everything when name is empty)."""
-        if name:
-            text = self.test_monitor.output_for(name)
-            self.test_output.setPlainText(text or "(no output)")
-            self.output_title.setText(f"<b>Output</b> — {html.escape(name)}")
-            self.output_stack.setCurrentWidget(self.test_output)
-            self.show_all_button.show()
-        else:
-            self.output_title.setText("<b>Output</b>")
-            self.output_stack.setCurrentWidget(self.console)
-            self.show_all_button.hide()
-            if self.test_monitor.selected:
-                self.test_monitor.selected = ""
-                self.test_monitor.table.viewport().update()
+        if not name:
+            self.show_all_output()
+            return
+        self.build_monitor.clear_selection()
+        self._show_single_output(name, self.test_monitor.output_for(name) or "(no output)")
+
+    def show_build_details(self, row: int):
+        """Show one file's compiler messages (or everything when row is -1)."""
+        if row < 0:
+            self.show_all_output()
+            return
+        if self.test_monitor.selected:
+            self.test_monitor.selected = ""
+            self.test_monitor.table.viewport().update()
+        self._show_single_output(self.build_monitor.details_title(row),
+                                 self.build_monitor.details_text(row))
+
+    def _show_single_output(self, title: str, text: str):
+        self.test_output.setPlainText(text)
+        self.output_title.setText(f"<b>Output</b> — {html.escape(title)}")
+        self.output_stack.setCurrentWidget(self.test_output)
+        self.show_all_button.show()
+
+    def show_all_output(self):
+        self.output_title.setText("<b>Output</b>")
+        self.output_stack.setCurrentWidget(self.console)
+        self.show_all_button.hide()
+        self.build_monitor.clear_selection()
+        if self.test_monitor.selected:
+            self.test_monitor.selected = ""
+            self.test_monitor.table.viewport().update()
 
 
 def split_runner(args: list[str]) -> tuple[list[str], str]:

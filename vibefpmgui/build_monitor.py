@@ -29,7 +29,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from qtpy.QtCore import QEvent, QRectF, QSize, Qt, QTimer, QUrl
+from qtpy.QtCore import QEvent, QRectF, QSize, Qt, QTimer, QUrl, Signal
 from qtpy.QtGui import (
     QColor, QDesktopServices, QFont, QFontDatabase, QFontMetricsF, QLinearGradient, QPainter,
     QPalette, QPen,
@@ -74,7 +74,20 @@ DEFAULT_PACKAGE_COLORS = {m.ROOT: "#f6c85f", m.GIT: "#74c0fc", m.PATH: "#8ce99a"
                           m.REGISTRY: "#d7b8f3", m.META: "#f3c6a5", m.MISSING: "#ced4da",
                           LIBRARY: "#ced4da"}
 
-ROW_HEIGHT = 44
+ROW_HEIGHT = 44  # at the normal text size; see scaled()
+
+# Text-size factor set by the main window's View menu (1.0 = normal).
+_ui_scale = 1.0
+
+
+def set_ui_scale(factor: float):
+    global _ui_scale
+    _ui_scale = factor
+
+
+def scaled(pixels: float) -> int:
+    """A pixel size adjusted for the current text size."""
+    return round(pixels * _ui_scale)
 FLASH_SECONDS = 0.6  # a row briefly glows in its status colour when it finishes
 
 
@@ -123,6 +136,7 @@ class Target:
     errors: int = 0
     candidates: list[tuple[str, Path]] = field(default_factory=list)  # (package, source)
     path: Path | None = None  # resolved source file
+    log_text: str = ""  # the compiler's full output (fpm's .o.log)
     package: str = ""
     package_kind: str = LIBRARY
 
@@ -177,7 +191,7 @@ def panel_stylesheet(object_name: str, pal: dict) -> str:
         {n} QHeaderView::section {{
             background: {pal['bg']}; color: {pal['muted']}; border: none;
             border-bottom: 1px solid {pal['line']}; padding: 6px 12px;
-            font-size: 10px; font-weight: 600; }}
+            font-size: {scaled(10)}px; font-weight: 600; }}
     """
 
 
@@ -205,7 +219,7 @@ class RowDelegate(QStyledItemDelegate):
         self.monitor = monitor
 
     def sizeHint(self, option, index):
-        return QSize(100, ROW_HEIGHT)
+        return QSize(100, scaled(ROW_HEIGHT))
 
     def paint(self, p: QPainter, option, index):
         mon = self.monitor
@@ -218,7 +232,11 @@ class RowDelegate(QStyledItemDelegate):
         p.setRenderHint(QPainter.Antialiasing)
         status_color = QColor(pal["status"][target.status])
 
-        if index.row() == mon.hover_row:
+        if index.row() == mon.selected_row:
+            p.fillRect(r, _tint(QColor(pal["accent1"]), 28))
+            if index.column() == 0:
+                p.fillRect(QRectF(r.left(), r.top() + 6, 3, r.height() - 12), QColor(pal["accent1"]))
+        elif index.row() == mon.hover_row:
             p.fillRect(r, QColor(pal["hover"]))
         if target.finished is not None:  # fade-out flash when a file finishes
             age = time.monotonic() - target.finished
@@ -364,6 +382,8 @@ class BuildMonitor(QWidget):
     and a custom-drawn table."""
 
     COLUMNS = ["FILE", "PACKAGE", "STATUS", "TIME"]
+    # Row clicked: show that file's compiler messages (-1: show all output).
+    details_requested = Signal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -374,6 +394,7 @@ class BuildMonitor(QWidget):
         self.diagnostics = DiagnosticParser()
         self.project_dir: Path | None = None
         self.hover_row = -1
+        self.selected_row = -1
         self.spinner_angle = 0.0
         self.peak_parallel = 0
         self.filter_status: str | None = None
@@ -424,7 +445,7 @@ class BuildMonitor(QWidget):
         self.table.setHorizontalHeaderLabels(self.COLUMNS)
         self.table.setItemDelegate(RowDelegate(self))
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(ROW_HEIGHT)
+        self.table.verticalHeader().setDefaultSectionSize(scaled(ROW_HEIGHT))
         self.table.setShowGrid(False)
         self.table.setFrameShape(QTableWidget.NoFrame)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -434,6 +455,7 @@ class BuildMonitor(QWidget):
         self.table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.table.cellEntered.connect(self._set_hover)
         self.table.viewport().installEventFilter(self)
+        self.table.cellClicked.connect(self._row_clicked)
         self.table.cellDoubleClicked.connect(self._open_row)
         hh = self.table.horizontalHeader()
         hh.setHighlightSections(False)
@@ -483,6 +505,7 @@ class BuildMonitor(QWidget):
     # ----------------------------------------------------------- lifecycle
     def start(self, graph: m.DependencyGraph | None, project_dir: Path, description: str = ""):
         self.targets.clear()
+        self.selected_row = -1
         self.table.setRowCount(0)
         self.sources = index_sources(graph)
         self.package_kinds = {n: p.kind for n, p in graph.packages.items()} if graph else {}
@@ -505,6 +528,7 @@ class BuildMonitor(QWidget):
         """Back to the empty state (e.g. when another project is opened)."""
         self._timer.stop()
         self.targets.clear()
+        self.selected_row = -1
         self.table.setRowCount(0)
         self.project_dir = None
         self.description = ""
@@ -615,6 +639,7 @@ class BuildMonitor(QWidget):
             text = log.read_text(errors="replace")
         except OSError:
             return
+        target.log_text = text
         parser = DiagnosticParser()
         for line in text.splitlines():
             found = parser.feed(line.rstrip())
@@ -823,11 +848,52 @@ class BuildMonitor(QWidget):
         """Share the width out without a horizontal scrollbar; drop the
         package column when space is tight (the file tooltip still has it)."""
         width = self.table.viewport().width()
-        narrow = width < 520
+        narrow = width < scaled(520)
         self.table.setColumnHidden(1, narrow)
-        self.table.setColumnWidth(1, 130)
-        self.table.setColumnWidth(2, 140 if width >= 600 else 128)
-        self.table.setColumnWidth(3, 150 if width >= 700 else 112)
+        self.table.setColumnWidth(1, scaled(130))
+        self.table.setColumnWidth(2, scaled(140 if width >= scaled(600) else 128))
+        self.table.setColumnWidth(3, scaled(150 if width >= scaled(700) else 112))
+
+    def refresh_fonts(self):
+        """Re-apply sizes after the application font changed."""
+        title_font = QFont(QApplication.font())
+        title_font.setPointSizeF(title_font.pointSizeF() + 2)
+        title_font.setWeight(QFont.Bold)
+        self.title.setFont(title_font)
+        self.table.verticalHeader().setDefaultSectionSize(scaled(ROW_HEIGHT))
+        self.refresh_palette()  # the stylesheet has pixel sizes
+        self._fit_columns()
+
+    def _row_clicked(self, row: int, _column: int):
+        """Click a file to see its compiler messages; click again for all output."""
+        if row >= len(self.targets):
+            return
+        self.selected_row = -1 if self.selected_row == row else row
+        self.table.viewport().update()
+        self.details_requested.emit(self.selected_row)
+
+    def clear_selection(self):
+        if self.selected_row != -1:
+            self.selected_row = -1
+            self.table.viewport().update()
+
+    def details_title(self, row: int) -> str:
+        t = self.targets[row]
+        what = {WARNING: f"{t.warnings} warning{'s' * (t.warnings != 1)}",
+                FAILED: "errors"}.get(t.status, t.status.lower())
+        package = f" ({t.package})" if t.package else ""
+        return f"{t.name}{package} — {what}"
+
+    def details_text(self, row: int) -> str:
+        """The compiler output for one file, as fpm logged it."""
+        t = self.targets[row]
+        if t.status == COMPILING:
+            return "(still compiling)"
+        if t.log_text.strip():
+            return t.log_text
+        if t.messages:
+            return "\n".join(t.messages)
+        return "No compiler messages for this file."
 
     def _open_row(self, row: int, _column: int):
         path = self.table.item(row, 0).data(Qt.UserRole)
