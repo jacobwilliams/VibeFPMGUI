@@ -191,7 +191,7 @@ class TestDelegate(QStyledItemDelegate):
             p.setPen(QPen(QColor(pal["muted"]), 1, Qt.DotLine))
             p.drawLine(x, track.top() - 3, x, track.bottom() + 3)
             p.setPen(Qt.NoPen)
-        p.setBrush(color if test.status in (RUNNING, FAILED_T) else QColor(pal["muted"]))
+        p.setBrush(color if test.status == RUNNING else QColor(pal["muted"]))
         fraction = elapsed / scale if scale > 0 else 0
         p.drawRoundedRect(QRectF(track.left(), track.top(), max(track.width() * min(fraction, 1), 3), 6), 3, 3)
         p.setPen(QColor(pal["text"] if test.status == RUNNING else pal["muted"]))
@@ -315,6 +315,22 @@ class TestMonitor(QWidget):
         self.table.setVisible(not message)
 
     # ----------------------------------------------------------- lifecycle
+    def reset(self):
+        """Back to the empty state (e.g. when another project is opened)."""
+        self._timer.stop()
+        self.tests, self.by_name, self.current = [], {}, None
+        self.table.setRowCount(0)
+        self.selected = ""
+        self.description = ""
+        self._started = 0.0
+        self._finished_at = None
+        self._result = ""
+        self._active = False
+        self.set_filter(None)
+        self.progress.set(0, "running")
+        self._show_empty("Run Test to see each test's progress here.")
+        self._update_header()
+
     def begin_listing(self, description: str = ""):
         """Phase 1: fpm is building and listing the tests."""
         self.tests, self.by_name, self.current = [], {}, None

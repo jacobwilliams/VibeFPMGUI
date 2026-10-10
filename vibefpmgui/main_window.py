@@ -369,11 +369,31 @@ class MainWindow(QMainWindow):
             self.fpm_edit.setText(filename)
 
     def open_manifest(self, filename: str | Path):
-        self.manifest_path = Path(filename).resolve()
+        path = Path(filename).resolve()
+        if path != self.manifest_path:
+            if self.process is not None:
+                answer = QMessageBox.question(
+                    self, "fpm is running",
+                    "An fpm command is still running for the current project. Stop it and open the new one?")
+                if answer != QMessageBox.Yes:
+                    return
+                self.process.kill()
+                self.process.waitForFinished(3000)
+            self._clear_run_panels()
+        self.manifest_path = path
         self.settings.setValue("last_manifest", str(self.manifest_path))
         self.setWindowFilePath(str(self.manifest_path))  # macOS title-bar proxy icon
         self.setWindowTitle(f"VibeFPMGUI — {self.manifest_path.parent.name}")
         self.reload()
+
+    def _clear_run_panels(self):
+        """Empty the output console and the build/test panels."""
+        self.show_test_output("")
+        self.console.clear()
+        self.test_output.clear()
+        self.build_monitor.reset()
+        self.test_monitor.reset()
+        self.monitor_tabs.setCurrentWidget(self.build_monitor)
 
     def reload(self):
         if not self.manifest_path:

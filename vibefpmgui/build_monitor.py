@@ -300,12 +300,8 @@ class RowDelegate(QStyledItemDelegate):
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(pal["track"]))
         p.drawRoundedRect(track, 3, 3)
-        if target.status == COMPILING:
-            bar_color = color
-        elif not self.monitor.running and elapsed >= slowest and len(self.monitor.targets) > 1:
-            bar_color = QColor(pal["status"][WARNING])  # the bottleneck, once the build is over
-        else:
-            bar_color = QColor(pal["muted"])
+        # Live bars use the status colour; finished ones are grey.
+        bar_color = color if target.status == COMPILING else QColor(pal["muted"])
         fraction = elapsed / slowest if slowest > 0 else 0
         p.setBrush(bar_color)
         p.drawRoundedRect(QRectF(track.left(), track.top(), max(track.width() * fraction, 3), 6), 3, 3)
@@ -498,6 +494,23 @@ class BuildMonitor(QWidget):
         self.set_filter(None)
         self.progress.set(0, "running")
         self._timer.start()
+        self._update_header()
+
+    def reset(self):
+        """Back to the empty state (e.g. when another project is opened)."""
+        self._timer.stop()
+        self.targets.clear()
+        self.table.setRowCount(0)
+        self.project_dir = None
+        self.description = ""
+        self.peak_parallel = 0
+        self._started = 0.0
+        self._finished_at = None
+        self._percent = 0
+        self._result = ""
+        self._active = False
+        self.set_filter(None)
+        self.progress.set(0, "running")
         self._update_header()
 
     def finish(self, exit_code: int, stopped: bool = False):
@@ -721,10 +734,6 @@ class BuildMonitor(QWidget):
                 text += f"\n… {len(target.messages) - 10} more"
             self.table.item(target.row, 2).setToolTip(text)
 
-    @property
-    def running(self) -> bool:
-        return self._active
-
     def slowest(self) -> float:
         return max((t.elapsed() for t in self.targets), default=0.0)
 
@@ -769,7 +778,7 @@ class BuildMonitor(QWidget):
         seconds = f"{end - self._started:.1f} s" if self._started else ""
         finished = counts[DONE] + counts[WARNING]
         muted = f"<span style='color:{pal['muted']}'>"
-        if self._result == "uptodate" and not self.targets:
+        if self._result in ("uptodate", "ok") and not self.targets:  # nothing needed compiling
             text = "<b>Up to date</b>"
         elif self._result == "ok":
             text = f"<b>Finished</b> {muted}· {finished} built · {seconds}</span>"
