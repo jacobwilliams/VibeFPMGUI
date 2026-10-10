@@ -81,7 +81,13 @@ class PygmentsHighlighter(QSyntaxHighlighter):
     def _format(self, ttype) -> QTextCharFormat:
         fmt = self._formats.get(ttype)
         if fmt is None:
-            spec = self.style.style_for_token(ttype)
+            # Some lexers make their own token types (e.g. YAML's
+            # Literal.Scalar.Plain) that styles don't list: use the nearest
+            # parent type the style knows, as Pygments' own formatters do.
+            styled = ttype
+            while not self.style.styles_token(styled) and styled.parent is not None:
+                styled = styled.parent
+            spec = self.style.style_for_token(styled)
             if ttype is Name and not spec["color"]:
                 # The TOML lexer marks keys as plain Name, which most styles
                 # leave uncoloured; borrow the attribute-name colour instead.
@@ -107,6 +113,9 @@ class PygmentsHighlighter(QSyntaxHighlighter):
         self._busy = True
         try:
             self._lex_and_highlight()
+        except Exception:  # noqa: BLE001 - never let highlighting break the editor
+            self._spans, self._starts = [], []  # show it as plain text
+            self.rehighlight()
         finally:
             self._busy = False
 

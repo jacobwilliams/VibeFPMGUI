@@ -31,6 +31,7 @@ from .build_monitor import BuildMonitor, set_ui_scale
 from .test_monitor import MARKER_RE, TestMonitor, parse_test_list
 from . import ai_review as ai
 from .editor import EditorTab, monospace_font
+from .project_tree import ProjectTree
 from .review_monitor import ReviewMonitor
 from .icons import make_icon
 from .highlighter import DARK_STYLE, LIGHT_STYLE, PygmentsHighlighter, is_dark
@@ -215,11 +216,19 @@ class MainWindow(QMainWindow):
         self._rebuild_features_menu()
         self._build_ai_menu()
 
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.addWidget(options)
-        left_layout.addStretch(1)
+        # Project files below the build options (drag the divider to resize).
+        self.project_tree = ProjectTree()
+        self.project_tree.open_requested.connect(lambda path: self.open_file(path))
+        files_box = QGroupBox("Project files")
+        files_layout = QVBoxLayout(files_box)
+        files_layout.setContentsMargins(6, 6, 6, 6)
+        files_layout.addWidget(self.project_tree)
+        left = QSplitter(Qt.Vertical)
+        left.addWidget(options)
+        left.addWidget(files_box)
+        left.setStretchFactor(0, 0)
+        left.setStretchFactor(1, 1)
+        left.setCollapsible(0, False)
 
         # --- right: tabs (graph / manifest) over the output console
         self.graph_view = DependencyGraphView()
@@ -266,6 +275,7 @@ class MainWindow(QMainWindow):
                 self.tabs.tabBar().setTabButton(index, side, None)
         self.tabs.tabCloseRequested.connect(self.close_editor)
         self.tabs.currentChanged.connect(self._update_editor_actions)
+        self.tabs.currentChanged.connect(self._reveal_current_file)
 
         self.console = QPlainTextEdit()
         self.console.setReadOnly(True)
@@ -364,6 +374,7 @@ class MainWindow(QMainWindow):
             self.review_monitor.refresh_palette()
             for editor in self.editors():
                 editor.refresh_style()
+            self.project_tree._apply_marks()
             self._update_command_icons()
             self.build_monitor.set_package_colors(self.graph_view.package_colors())
         super().changeEvent(event)
@@ -658,6 +669,19 @@ class MainWindow(QMainWindow):
     def clear_recent_manifests(self):
         self.settings.setValue("recent_manifests", [])
 
+    def _reveal_current_file(self, *_):
+        editor = self.current_editor()
+        if editor is not None:
+            self.project_tree.reveal(str(editor.path))
+
+    def _update_tree_marks(self):
+        """Colour files in the tree that had errors/warnings in the last build."""
+        marks = {}
+        for t in self.build_monitor.targets:
+            if t.path is not None and t.status in ("Failed", "Warnings"):
+                marks[str(t.path)] = "error" if t.status == "Failed" else "warning"
+        self.project_tree.set_marks(marks)
+
     def _clear_run_panels(self):
         """Empty the output console and the build/test panels."""
         self.show_test_output("")
@@ -693,6 +717,7 @@ class MainWindow(QMainWindow):
         else:
             self.graph_view.update_packages(self.graph)
         self.show_package(self.graph.root)
+        self.project_tree.set_project(self.graph, self.manifest_path.parent)
         self._set_project_enabled(True)
         self._load_features_and_profiles()
         missing = sum(1 for p in self.graph.packages.values() if p.kind == m.MISSING)
@@ -1147,6 +1172,7 @@ class MainWindow(QMainWindow):
         self._test_building = False
         if self._monitoring:
             self.build_monitor.finish(0)
+            self._update_tree_marks()
             self._monitoring = False
         self.test_monitor.build_finished()
         self.monitor_tabs.setCurrentWidget(self.test_monitor)
@@ -1164,6 +1190,7 @@ class MainWindow(QMainWindow):
                 self.build_monitor.feed_line(self._partial)
             self._partial = ""
             self.build_monitor.finish(exit_code, stopped)
+            self._update_tree_marks()
             self._monitoring = False
 
     def _finished(self, code: int, status):

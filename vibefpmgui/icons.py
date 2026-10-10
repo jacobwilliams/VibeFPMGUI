@@ -169,3 +169,80 @@ def make_icon(name: str, color: QColor | str) -> QIcon:
         icon.addPixmap(pixmap)
     return icon
 
+
+# ------------------------------------------------------------ folder badges
+def _badge_code(p: QPainter, c: QColor):
+    p.setPen(_pen(c, 2.6))
+    p.drawPolyline([QPointF(8.5, 7), QPointF(4, 12), QPointF(8.5, 17)])
+    p.drawPolyline([QPointF(15.5, 7), QPointF(20, 12), QPointF(15.5, 17)])
+    p.drawLine(QPointF(13.6, 5.5), QPointF(10.4, 18.5))
+
+
+def _badge_bulb(p: QPainter, c: QColor):
+    p.setPen(Qt.NoPen)
+    p.setBrush(c)
+    p.drawEllipse(QPointF(12, 9.5), 6, 6)
+    p.drawRoundedRect(QRectF(9, 14, 6, 4.5), 1, 1)
+    p.drawRoundedRect(QRectF(9.8, 19.2, 4.4, 2), 1, 1)
+
+
+def _badge_hash(p: QPainter, c: QColor):
+    p.setPen(_pen(c, 2.4))
+    p.drawLine(QPointF(9.5, 4.5), QPointF(8, 19.5))
+    p.drawLine(QPointF(16, 4.5), QPointF(14.5, 19.5))
+    p.drawLine(QPointF(5, 9.5), QPointF(19.5, 9.5))
+    p.drawLine(QPointF(4.5, 14.5), QPointF(19, 14.5))
+
+
+def _badge_cube(p: QPainter, c: QColor):
+    p.setPen(_pen(c, 2.0))
+    p.setBrush(Qt.NoBrush)
+    top = [QPointF(12, 3.5), QPointF(20, 7.5), QPointF(12, 11.5), QPointF(4, 7.5), QPointF(12, 3.5)]
+    p.drawPolyline(top)
+    p.drawPolyline([QPointF(4, 7.5), QPointF(4, 16.5), QPointF(12, 20.5), QPointF(20, 16.5),
+                    QPointF(20, 7.5)])
+    p.drawLine(QPointF(12, 11.5), QPointF(12, 20.5))
+
+
+BADGES = {
+    "code": _badge_code,
+    "run": _play,
+    "test": _flask,
+    "example": _badge_bulb,
+    "include": _badge_hash,
+    "manifest": _badge_cube,
+}
+# Badge background colours by fpm folder role.
+BADGE_COLORS = {
+    "code": "#1c7ed6", "run": "#2f9e44", "test": "#7048e8", "example": "#e8590c",
+    "include": "#868e96", "manifest": "#e8590c",
+}
+
+
+def badged_icon(base: QIcon, badge: str, sizes=(16, 20, 32)) -> QIcon:
+    """``base`` (e.g. the system folder icon) with a small coloured badge in
+    its lower-right corner showing ``badge`` (see ``BADGES``)."""
+    color = QColor(BADGE_COLORS.get(badge, "#868e96"))
+    icon = QIcon()
+    for size in sizes:
+        for ratio in (1, 2):
+            pixmap = QPixmap(int(size * ratio), int(size * ratio))
+            pixmap.setDevicePixelRatio(ratio)
+            pixmap.fill(Qt.transparent)
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.Antialiasing)
+            base.paint(painter, 0, 0, size, size)
+            d = size * 0.62  # badge diameter
+            x, y = size - d, size - d
+            painter.setPen(QPen(QColor(255, 255, 255, 230), max(1.0, size / 16)))
+            painter.setBrush(color)
+            painter.drawEllipse(QRectF(x, y, d, d))
+            painter.save()
+            painter.translate(x + d * 0.18, y + d * 0.18)
+            painter.scale(d * 0.64 / SIZE, d * 0.64 / SIZE)
+            BADGES[badge](painter, QColor("white"))
+            painter.restore()
+            painter.end()
+            icon.addPixmap(pixmap)
+    return icon
+

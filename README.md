@@ -32,6 +32,14 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   runs weight the bar by expected time and estimate the time left. Click a
   test to see only its output. A `--runner` you put in *Extra args* (e.g.
   `mpirun -np 4`) still wraps each test.
+* *Project files* panel (below the build options): the project's files and
+  those of every dependency (including git downloads in `build/dependencies`),
+  with a filter box. fpm's standard folders get a badge on their icon
+  (library sources, include, programs, tests, examples — following any
+  `source-dir`/`include-dir` set in `fpm.toml`), and `fpm.toml` gets its own
+  icon. Double-click to open in the editor; right-click for Open
+  in Default App, Show in Finder and Copy Path. Files with errors or warnings
+  in the last build are shown in red / orange.
 * Built-in editor: double-clicking a file (a row in the Build tab, or a
   package in the graph for its `fpm.toml`) opens it in a tab with syntax
   highlighting chosen by file extension, line numbers, find/replace, go to
