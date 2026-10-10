@@ -50,8 +50,9 @@ are done. Effort is a rough guess: small / medium / large.
 
 ## Dependencies
 
-- [ ] **Check for updates** — each git dependency's pinned tag next to its
+- [x] **Check for updates** — each git dependency's pinned tag next to its
   latest tag, with "update to latest", and what changed after Update deps.
+  *(Commands → Check for Dependency Updates…)*
 - [ ] **License summary** — the licenses of all dependencies in one table (the
   graph already reads them).
 - [ ] **Module dependency graph** — which Fortran modules use which (from

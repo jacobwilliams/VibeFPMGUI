@@ -14,6 +14,7 @@ missing (run ``fpm update`` or ``fpm build`` to fetch them).
 
 from __future__ import annotations
 
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -201,7 +202,9 @@ def _locate(name, spec, parent: Package, root_dir: Path, cached: dict):
         else:
             directory = root_dir / "build" / "dependencies" / name
         pkg.git = pkg.git or str(cached.get("git", ""))
-        pkg.git_rev = str(cached.get("rev", ""))
+        # The commit actually checked out; build/cache.toml's "rev" can be
+        # stale (fpm update leaves the old one there).
+        pkg.git_rev = checked_out_commit(directory) or str(cached.get("rev", ""))
     if cached.get("version") and not pkg.version:
         pkg.version = str(cached["version"])
 
@@ -224,6 +227,31 @@ def _locate(name, spec, parent: Package, root_dir: Path, cached: dict):
         return pkg, None
     _fill_from_manifest(pkg, data)
     return pkg, data
+
+
+def checked_out_commit(directory: Path) -> str:
+    """The commit a git checkout is at, read from .git/HEAD (no git needed);
+    "" if it isn't a git checkout."""
+    git = directory / ".git"
+    try:
+        head = (git / "HEAD").read_text().strip()
+    except OSError:
+        return ""
+    if not head.startswith("ref:"):
+        return head if re.fullmatch(r"[0-9a-f]{40,64}", head) else ""
+    ref = head[4:].strip()
+    try:
+        return (git / ref).read_text().strip()
+    except OSError:
+        pass
+    try:  # packed refs: "<sha> <ref>" lines
+        for line in (git / "packed-refs").read_text().splitlines():
+            sha, _, name = line.partition(" ")
+            if name.strip() == ref:
+                return sha
+    except OSError:
+        pass
+    return ""
 
 
 def project_features(data: dict) -> dict[str, list[str]]:

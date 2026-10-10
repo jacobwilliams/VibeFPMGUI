@@ -33,6 +33,7 @@ from . import ai_review as ai
 from .compat import join_args, quote_arg, set_windows_app_id, split_args
 from .editor import EditorTab, monospace_font
 from . import build_outputs as bo
+from . import dep_updates
 from .project_tree import ProjectTree, reveal_in_file_manager
 from .review_monitor import ReviewMonitor
 from .run_monitor import RunMonitor
@@ -540,6 +541,11 @@ class MainWindow(QMainWindow):
                 menu.addSeparator()
             toolbar.addActions(group)
             menu.addActions(group)
+        menu.addSeparator()
+        self.check_updates_action = menu.addAction("Check for Dependency Updates…")
+        self.check_updates_action.setStatusTip(
+            "Ask each git dependency's repository for newer tags and commits")
+        self.check_updates_action.triggered.connect(self.check_dependency_updates)
         self.addToolBar(Qt.TopToolBarArea, toolbar)
         self.setUnifiedTitleAndToolBarOnMac(True)
         self.command_toolbar = toolbar
@@ -835,6 +841,65 @@ class MainWindow(QMainWindow):
         layout.addLayout(buttons)
         dialog.resize(720, 420)
         dialog.exec()
+
+    # --------------------------------------------------- dependency updates
+    def check_dependency_updates(self):
+        """Commands → Check for Dependency Updates… (only runs when asked)."""
+        if not self.graph:
+            return
+        checks = dep_updates.git_dependencies(self.graph)
+        dialog = dep_updates.UpdatesDialog(checks, repo_web_url, commit_web_url, compare_web_url, self)
+        dialog.update_tag_requested.connect(lambda c: self._update_dependency_tag(c, dialog))
+        dialog.update_deps_requested.connect(lambda: (dialog.accept(), self.run_fpm(["update"], False, True)))
+        if checks:
+            self._update_check_thread = dep_updates.start_check(checks, dialog, self)
+        dialog.exec()
+
+    def _update_dependency_tag(self, check, dialog):
+        """Point one dependency at its newest tag in its fpm.toml."""
+        if self.process is not None:
+            QMessageBox.information(dialog, "Update dependency", "Wait for the running command to finish first.")
+            return
+        # A tag pin moves to the newest tag; a commit pin becomes that tag.
+        if not dep_updates.set_ref(check.declared_in, check.name, check.ref_kind, check.ref,
+                                   "tag", check.latest_tag):
+            QMessageBox.warning(
+                dialog, "Update dependency",
+                f"Couldn't find {check.ref_kind} = \"{check.ref}\" for {check.name} in "
+                f"{check.declared_in} to change it automatically; it is opened in the editor instead.")
+            dialog.accept()
+            self.open_file(str(check.declared_in), force_editor=True)
+            return
+        was = check.ref if check.ref_kind == "tag" else f"commit {check.ref[:7]}"
+        self.statusBar().showMessage(f"{check.name}: {was} → tag {check.latest_tag} in "
+                                     f"{Path(check.declared_in).name}", 6000)
+        answer = QMessageBox.question(
+            dialog, "Update dependency",
+            f"{check.name} now asks for tag {check.latest_tag} (was {was}) in {check.declared_in}.\n\n"
+            "Run Update deps now to download it?")
+        dialog.accept()
+        self.reload()  # fpm.toml changed
+        if answer == QMessageBox.Yes:
+            self.run_fpm(["update"], False, True)
+
+    def _report_dependency_changes(self):
+        """After "fpm update": which dependencies moved to another commit."""
+        before, self._revs_before = getattr(self, "_revs_before", None), None
+        if before is None or not self.manifest_path:
+            return
+        after = dep_updates.read_cache_revs(self.manifest_path.parent)
+        changed = {n: (before.get(n), rev) for n, rev in after.items() if before.get(n) != rev}
+        if not changed:
+            self._append("\nNo dependency changed commit.\n")
+            return
+        lines = ["\nDependency changes:"]
+        for name, (old, new) in sorted(changed.items()):
+            pkg = self.graph.packages.get(name) if self.graph else None
+            url = compare_web_url(pkg.git, old, new) if pkg and pkg.git and old else None
+            lines.append(f"  {name}: {(old or 'new')[:7]} → {new[:7]}" + (f"  {url}" if url else ""))
+        self._append("\n".join(lines) + "\n", bold=False)
+        self.statusBar().showMessage(f"Update deps: {len(changed)} dependenc"
+                                     f"{'ies' if len(changed) != 1 else 'y'} changed", 6000)
 
     def _reveal_current_file(self, *_):
         editor = self.current_editor()
@@ -1275,6 +1340,8 @@ class MainWindow(QMainWindow):
         self._monitoring = sub[0] in ("build", "run", "test") and phase != "list"
         self._test_building = phase == "marked"  # fpm builds before running
         self._process_label = "fpm"
+        self._revs_before = (dep_updates.read_cache_revs(self.manifest_path.parent)
+                             if sub[0] == "update" else None)
         # Note which build folders exist now, to record which ones this
         # build writes (see _record_build_folders).
         self._folder_snapshot = (bo.snapshot(self.manifest_path.parent)
@@ -1391,6 +1458,7 @@ class MainWindow(QMainWindow):
         self._cleanup_process()
         self.statusBar().showMessage("Stopped" if crashed else
                                      ("Finished successfully" if code == 0 else f"Failed (exit code {code})"))
+        self._report_dependency_changes()  # after the generic message, so it shows
         if phase == "list":
             self._after_listing(code, crashed)
         elif phase in ("marked", "direct"):
@@ -1849,6 +1917,18 @@ def commit_web_url(git_url: str, rev: str) -> str | None:
     if "gitlab." in base:
         return f"{base}/-/commit/{rev}"
     return f"{base}/commit/{rev}"
+
+
+def compare_web_url(git_url: str, old: str, new: str) -> str | None:
+    """A page listing the commits between two revisions (GitHub/GitLab)."""
+    base = repo_web_url(git_url)
+    if not base or not old or not new:
+        return None
+    if "gitlab." in base:
+        return f"{base}/-/compare/{old}...{new}"
+    if "github." in base or "codeberg." in base:
+        return f"{base}/compare/{old}...{new}"
+    return None
 
 
 def kill_process_tree(process: QProcess):

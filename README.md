@@ -80,6 +80,16 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   `build/compile_commands.json`, with a Copy button.
 * Selecting a git dependency in the graph shows the exact commit fpm checked
   out (from `build/cache.toml`), linked to it on GitHub/GitLab.
+* *Commands → Check for Dependency Updates…* (only when you ask): asks
+  each git dependency's repository for its tags and branches
+  (`git ls-remote`, nothing downloaded) and shows, per dependency, what is
+  requested, the commit you have, the newest tag / branch commit and a
+  status. A dependency pinned to an older tag gets **Update to vX** (changes
+  just that tag in the `fpm.toml` that declares it, then offers Update deps)
+  and **Compare** (the commits in between on GitHub/GitLab); one pinned to a
+  commit (`rev = "…"`) can be switched to the newest tag the same way. After
+  **Update deps**, the Output panel lists which dependencies moved to another
+  commit.
 * Dependency diagram (drawn with [pyqtgraph](https://www.pyqtgraph.org)) built
   from the main `fpm.toml` and the `fpm.toml` of every downloaded dependency
   (git, local path, registry and metapackages; dashed edges are dev/test
