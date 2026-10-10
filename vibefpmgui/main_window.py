@@ -1064,8 +1064,6 @@ class MainWindow(QMainWindow):
         self._phase = phase
         self._captured = []
         self._held_blank = False
-        # Commands that compile get the per-file status grid (the test run
-        # itself doesn't: "fpm test --list" already built everything).
         # Commands that compile get the per-file build grid. "fpm test --list"
         # doesn't build; "fpm test" builds first, so its output goes to the
         # build grid until the first test starts (see _test_line).
