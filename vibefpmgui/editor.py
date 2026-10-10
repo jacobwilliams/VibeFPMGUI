@@ -794,6 +794,22 @@ class EditorTab(QWidget):
         self.editor.set_markers(merged)
         self._update_status()
 
+    def replace_text(self, text: str):
+        """Replace the whole text as one undoable edit, keeping the cursor
+        on the same line and column and the view where it was."""
+        cursor = self.editor.textCursor()
+        line, column = cursor.blockNumber(), cursor.positionInBlock()
+        scroll = self.editor.verticalScrollBar().value()
+        cursor.beginEditBlock()
+        cursor.select(QTextCursor.Document)
+        cursor.insertText(text)
+        cursor.endEditBlock()
+        block = self.editor.document().findBlockByNumber(min(line, self.editor.blockCount() - 1))
+        cursor = QTextCursor(block)
+        cursor.setPosition(block.position() + min(column, max(0, block.length() - 1)))
+        self.editor.setTextCursor(cursor)
+        self.editor.verticalScrollBar().setValue(scroll)
+
     def go_to_line_dialog(self):
         line, ok = QInputDialog.getInt(
             self, "Go to Line", f"Line (1–{self.editor.blockCount()}):",

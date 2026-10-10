@@ -66,7 +66,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from . import __version__, ansi, dep_updates, lint
+from . import __version__, ansi, dep_updates, formatter, lint
 from . import ai_review as ai
 from . import build_outputs as bo
 from . import manifest as m
@@ -1146,6 +1146,7 @@ class MainWindow(QMainWindow):
             editor.set_font(self._mono_font())
             editor.dirty_changed.connect(lambda _dirty, e=editor: self._update_editor_title(e))
             editor.path_changed.connect(lambda _p, e=editor: self._update_editor_title(e))
+            editor.path_changed.connect(self._update_editor_actions)
             editor.saved.connect(self._editor_saved)
             self.tabs.addTab(editor, file.name)
             self._update_editor_title(editor)
@@ -1203,7 +1204,31 @@ class MainWindow(QMainWindow):
                        self.find_action, self.replace_action, self.find_next_action,
                        self.find_previous_action, self.goto_action):
             action.setEnabled(has_editor)
+        editor = self.current_editor()
+        self.format_action.setEnabled(editor is not None and formatter.can_format(editor.path)
+                                      and formatter.executable() is not None)
         self._update_review_actions()
+
+    def format_file(self, editor: EditorTab):
+        """Format the editor's (Fortran) text with fprettify."""
+        if not formatter.can_format(editor.path):
+            return
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            text = editor.editor.toPlainText()
+            formatted, error = formatter.format_text(text, editor.path)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if formatted is None:
+            QMessageBox.warning(self, "fprettify failed",
+                                f"{editor.path.name} could not be formatted:\n\n{error}")
+            return
+        if formatted == text:
+            self.statusBar().showMessage(f"{editor.path.name} is already formatted", 4000)
+            return
+        editor.replace_text(formatted)
+        self.statusBar().showMessage(f"Formatted {editor.path.name} with fprettify "
+                                     "(Undo to revert; not saved yet)", 6000)
 
     def _update_review_actions(self):
         """AI review needs an editor tab in front (and no review running)."""
@@ -1254,6 +1279,14 @@ class MainWindow(QMainWindow):
                                                   lambda e: e.find_bar.find_previous())
         menu.addSeparator()
         self.goto_action = editor_action("Go to Line…", "Ctrl+L", lambda e: e.go_to_line_dialog())
+        menu.addSeparator()
+        self.format_action = editor_action("Format with fprettify", "Ctrl+Shift+I", self.format_file)
+        self.format_action.setIconText("Format")
+        keys = self.format_action.shortcut().toString(QKeySequence.NativeText)
+        self.format_action.setToolTip(f"Format ({keys}) — tidy the Fortran file in the editor "
+                                      "with fprettify (undo to revert)")
+        self.format_action.setStatusTip("Re-indent and re-space the Fortran file in the editor "
+                                        "with fprettify")
 
     def export_graph(self):
         if not self.graph:
@@ -1761,6 +1794,8 @@ class MainWindow(QMainWindow):
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.command_toolbar.addWidget(spacer)
+        self.command_toolbar.addAction(self.format_action)
+        self.command_icons[self.format_action] = "format"
         self.command_toolbar.addAction(self.review_action)
         self.command_icons[self.review_action] = "robot"
         self._update_command_icons()

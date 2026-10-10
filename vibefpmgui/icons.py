@@ -155,6 +155,21 @@ def _robot(p: QPainter, c: QColor):
     p.drawLine(QPointF(9.6, 16.2), QPointF(14.4, 16.2))
 
 
+def _format(p: QPainter, c: QColor):
+    # Lines of code, indented as a formatter would.
+    p.setPen(_pen(c, 2.0))
+    for y, x0, x1 in ((5.5, 3.5, 14), (10, 8, 20.5), (14.5, 8, 17), (19, 3.5, 12)):
+        p.drawLine(QPointF(x0, y), QPointF(x1, y))
+    # A small sparkle.
+    path = QPainterPath(QPointF(19.5, 14.5))
+    for x, y in ((20.4, 17.1), (23, 18), (20.4, 18.9), (19.5, 21.5), (18.6, 18.9), (16, 18), (18.6, 17.1)):
+        path.lineTo(x, y)
+    path.closeSubpath()
+    p.setPen(Qt.NoPen)
+    p.setBrush(c)
+    p.drawPath(path)
+
+
 DRAWERS = {
     "build": _hammer,
     "run": _play,
@@ -164,6 +179,7 @@ DRAWERS = {
     "clean-all": _trash,
     "stop": _stop,
     "robot": _robot,
+    "format": _format,
 }
 
 

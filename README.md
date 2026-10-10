@@ -71,6 +71,13 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   `fortitude.toml`) apply. *View → Lint Fortran Files* turns it off.
   fortitude is part of the pixi environment; for a pip install, add it
   with `pip install fortitude-lint`.
+* Formatting: **Format** (toolbar, or *Edit → Format with fprettify*,
+  ⇧⌘I) re-indents and re-spaces the free-form Fortran file in the editor
+  with [fprettify](https://github.com/fortran-lang/fprettify). Unsaved text
+  is formatted too; the change is one Undo step and isn't saved until you
+  save. A `.fprettify.rc` in the file's folder, a parent folder or your home
+  folder sets the style. fprettify is part of the pixi environment
+  (`pip install fprettify` otherwise).
 * AI code review, fully local: *AI → Review Current File* (⌥⌘R) sends the
   file in the editor (plus its compiler messages) to a model running on
   your machine through [Ollama](https://ollama.com) — nothing leaves the
