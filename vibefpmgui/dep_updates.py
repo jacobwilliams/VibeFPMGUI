@@ -289,9 +289,17 @@ class UpdatesDialog(QDialog):
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionMode(QAbstractItemView.NoSelection)
-        self.table.setWordWrap(True)
+        # Compact: one line per row (long text is elided; tooltips have it all),
+        # fixed row height, no grid, alternating shading.
+        self.table.setWordWrap(False)
+        self.table.setTextElideMode(Qt.ElideRight)
+        self.table.setShowGrid(False)
+        self.table.setAlternatingRowColors(True)
+        self.row_height = self.table.fontMetrics().height() + 12
+        self.table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
+        self.table.verticalHeader().setDefaultSectionSize(self.row_height)
         hh = self.table.horizontalHeader()
-        for col in range(len(self.COLUMNS)):
+        for col in range(len(self.COLUMNS) - 1):
             hh.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         hh.setSectionResizeMode(4, QHeaderView.Stretch)
         for row, c in enumerate(checks):
@@ -311,7 +319,8 @@ class UpdatesDialog(QDialog):
         layout.addWidget(note)
         layout.addWidget(self.table, 1)
         layout.addLayout(buttons)
-        self.resize(980, 120 + 44 * max(3, min(len(checks), 10)))
+        header = self.table.horizontalHeader().sizeHint().height()
+        self.resize(1120, 150 + header + self.row_height * max(3, min(len(checks), 12)))
         self._done = 0
         self._update_summary()
 
@@ -339,17 +348,18 @@ class UpdatesDialog(QDialog):
         cell(4, c.message, c.message, STATUS_COLORS.get(c.status))
         actions = QWidget()
         row_layout = QHBoxLayout(actions)
-        row_layout.setContentsMargins(2, 0, 2, 0)
+        row_layout.setContentsMargins(4, 0, 4, 0)
+        row_layout.setSpacing(4)
         new_commit = c.latest_tag_commit if c.status in (UPDATE, TAG_AVAILABLE) else c.branch_commit
         compare = self._compare_url(c.git, c.current, new_commit) if c.current and new_commit else None
         if c.status == UPDATE and c.editable:
-            button = QPushButton(f"Update to {c.latest_tag}")
+            button = self._small_button(f"Update to {c.latest_tag}")
             button.setToolTip(f"Change tag = \"{c.ref}\" to \"{c.latest_tag}\" in {c.declared_in}")
             button.clicked.connect(lambda _=False, ch=c: self.update_tag_requested.emit(ch))
             row_layout.addWidget(button)
         elif c.status == TAG_AVAILABLE and c.editable:
             same = c.latest_tag_commit and (c.latest_tag_commit.startswith(c.ref) or c.ref.startswith(c.latest_tag_commit))
-            button = QPushButton(f"{'Use' if same else 'Switch to'} tag {c.latest_tag}")
+            button = self._small_button(f"{'Use' if same else 'Switch to'} tag {c.latest_tag}")
             button.setToolTip(f"Replace rev = \"{c.ref[:12]}…\" with tag = \"{c.latest_tag}\" in {c.declared_in}"
                               + ("" if same else "\n(Compare first: the tag may be older or newer than the pinned commit)"))
             button.clicked.connect(lambda _=False, ch=c: self.update_tag_requested.emit(ch))
@@ -359,17 +369,34 @@ class UpdatesDialog(QDialog):
             row_layout.addWidget(note)
         if compare and c.status in (UPDATE, NEW_COMMITS) or (
                 compare and c.status == TAG_AVAILABLE and not c.latest_tag_commit.startswith(c.current[:7])):
-            link = QPushButton("Compare")
+            link = self._small_button("Compare")
             link.setToolTip(compare)
             link.clicked.connect(lambda _=False, u=compare: QDesktopServices.openUrl(QUrl(u)))
             row_layout.addWidget(link)
+        row_layout.addStretch(1)  # buttons keep their natural width
         self.table.setCellWidget(row, 5, actions)
+
+    def _small_button(self, text: str) -> QPushButton:
+        """A button that fits a compact row (macOS buttons are tall by default)."""
+        button = QPushButton(text)
+        button.setAttribute(Qt.WA_MacSmallSize)
+        button.setAttribute(Qt.WA_LayoutUsesWidgetRect)
+        button.setFixedHeight(self.row_height - 4)
+        return button
 
     def show_result(self, row: int, check: DepCheck):
         self.checks[row] = check
         self._set_row(row, check)
         self._done += 1
-        self.table.resizeRowsToContents()
+        self.table.resizeColumnsToContents()
+        # Size the buttons column to its widest row (cell widgets aren't
+        # counted by resizeColumnsToContents); Status takes the rest.
+        widest = max((w.sizeHint().width() for w in
+                      (self.table.cellWidget(r, 5) for r in range(self.table.rowCount())) if w), default=0)
+        hh = self.table.horizontalHeader()
+        hh.setSectionResizeMode(5, QHeaderView.Fixed)
+        self.table.setColumnWidth(5, widest + 8)
+        hh.setSectionResizeMode(4, QHeaderView.Stretch)
         self._update_summary()
 
     def _update_summary(self):
