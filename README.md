@@ -78,6 +78,26 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   save. A `.fprettify.rc` in the file's folder, a parent folder or your home
   folder sets the style. fprettify is part of the pixi environment
   (`pip install fprettify` otherwise).
+* Fortran language server: for Fortran files the editor uses
+  [fortls](https://fortls.fortran-lang.org), which indexes the project and
+  its downloaded dependencies (unsaved edits included):
+  * Hover a name for its declaration (with argument types and any doc
+    comment), shown together with any fortitude message.
+  * *Go to Definition* (F12, or ⌘-click a name; Ctrl-click on Linux/Windows)
+    opens where it is defined, including in a dependency's sources. *Go Back*
+    / *Go Forward* (⌘[ / ⌘]; Alt+←/→ elsewhere) return.
+  * An outline drop-down above the editor lists the file's modules, types
+    and procedures, follows the cursor, and jumps to the one you pick.
+  * *Edit → Go to Symbol in Project…* (⌘T) finds a module, type or
+    procedure by name in the project and its dependencies.
+
+  Unless the project has its own fortls settings (`.fortlsrc`,
+  `.fortls.json` or `.fortls`), fortls indexes only the fpm folders (`src`,
+  `app`, `test`, `example`, `include`, any `source-dir`) of the project and of
+  each dependency, so e.g. a Python environment inside the project isn't
+  searched. *View → Fortran Language Server* turns it off. fortls is part of
+  the pixi environment; for a pip install, `pip install .[fortran]` adds
+  fortls, fortitude and fprettify.
 * AI code review, fully local: *AI → Review Current File* (⌥⌘R) sends the
   file in the editor (plus its compiler messages) to a model running on
   your machine through [Ollama](https://ollama.com) — nothing leaves the

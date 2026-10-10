@@ -1,6 +1,8 @@
 """A small built-in code editor: line numbers, syntax highlighting (Pygments,
 chosen by file extension), find/replace, go to line, and compiler warning /
-error markers in the gutter, and fortitude lint findings (see :mod:`.lint`).
+error markers in the gutter, fortitude lint findings (see :mod:`.lint`), and
+for Fortran files the language server's hover, go to definition and outline
+(see :mod:`.lsp`).
 
 :class:`EditorTab` wraps a :class:`CodeEditor` with a find bar and a status
 line, and takes care of loading and saving the file (keeping its encoding and
@@ -9,11 +11,24 @@ line endings) and of noticing when it changes on disk.
 
 from __future__ import annotations
 
+import html
+import re
+from collections.abc import Callable
 from pathlib import Path
 
-from qtpy.QtCore import QFileSystemWatcher, QProcess, QRect, QSize, Qt, QTimer, Signal
+from qtpy.QtCore import (
+    QFileSystemWatcher,
+    QPoint,
+    QProcess,
+    QRect,
+    QSize,
+    Qt,
+    QTimer,
+    Signal,
+)
 from qtpy.QtGui import (
     QColor,
+    QCursor,
     QFont,
     QFontDatabase,
     QPainter,
@@ -26,6 +41,7 @@ from qtpy.QtGui import (
 from qtpy.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
     QFileDialog,
     QHBoxLayout,
     QInputDialog,
@@ -41,6 +57,7 @@ from qtpy.QtWidgets import (
 )
 
 from . import lint
+from . import lsp as lsp_mod
 from .highlighter import (
     DARK_STYLE,
     LIGHT_STYLE,
@@ -57,6 +74,8 @@ MARKER_COLORS = {"error": "#e03131", "fatal error": "#e03131", "warning": "#f08c
 # Which marker colour wins when a line has several kinds of note.
 MARKER_PRIORITY = ["fatal error", "error", "lint error", "warning", "review", "lint", "remark"]
 LINT_DELAY_MS = 600  # lint once typing pauses this long
+LSP_SYNC_MS = 300    # send edits to the language server once typing pauses this long
+WORD_RE = re.compile(r"[A-Za-z0-9_]")
 
 
 def worst_severity(notes: list[tuple[str, str]]) -> str:
@@ -100,8 +119,15 @@ class CodeEditor(QPlainTextEdit):
     """Plain-text editor with a line-number gutter, current-line highlight,
     auto-indent and soft tabs."""
 
+    definition_requested = Signal()  # ⌘/Ctrl-click on a name
+
     def __init__(self, parent=None):
         super().__init__(parent)
+        # Set while a language server is attached: called with (line, column,
+        # global position, lint tooltip HTML) when the mouse rests on a name.
+        self.hover_provider: Callable | None = None
+        self._hover_word: tuple[int, int] | None = None
+        self.viewport().setMouseTracking(True)
         self.markers: dict[int, list[tuple[str, str]]] = {}  # line -> [(severity, message)]
         self.find_selections: list[QTextEdit.ExtraSelection] = []
         self.lint_issues: list[lint.LintIssue] = []  # underlined, with a tooltip
@@ -208,17 +234,79 @@ class CodeEditor(QPlainTextEdit):
             return None  # an empty line
         return block.position() + start, block.position() + end
 
+    def word_at(self, point: QPoint) -> tuple[int, int, str] | None:
+        """(1-based line, 0-based start column, word) of the name under a
+        viewport point, or None (whitespace, past the end of the line…)."""
+        cursor = self.cursorForPosition(point)
+        if abs(self.cursorRect(cursor).center().x() - point.x()) > self.fontMetrics().horizontalAdvance("M"):
+            return None  # the nearest text is too far away
+        text = cursor.block().text()
+        i = cursor.positionInBlock()
+        if not (i < len(text) and WORD_RE.match(text[i])):
+            if i > 0 and WORD_RE.match(text[i - 1]):
+                i -= 1
+            else:
+                return None
+        start, end = i, i
+        while start > 0 and WORD_RE.match(text[start - 1]):
+            start -= 1
+        while end < len(text) and WORD_RE.match(text[end]):
+            end += 1
+        word = text[start:end]
+        if word[0].isdigit():
+            return None  # a number
+        return cursor.blockNumber() + 1, start, word
+
     def viewportEvent(self, event):
-        if event.type() == event.Type.ToolTip and self.lint_issues:
+        if event.type() == event.Type.ToolTip:
             pos = self.cursorForPosition(event.pos()).position()
             notes = [i.describe() for i in self.lint_issues
                      if (span := self._lint_span(i)) and span[0] <= pos <= span[1]]
+            lint_html = "".join(f"<p style='margin:0'>{html.escape(n)}</p>" for n in notes)
+            word = self.word_at(event.pos()) if self.hover_provider is not None else None
+            self._hover_word = word[:2] if word else None
             if notes:
-                QToolTip.showText(event.globalPos(), "\n".join(notes), self.viewport())
+                QToolTip.showText(event.globalPos(), lint_html, self.viewport())
             else:
                 QToolTip.hideText()
+            if word:  # the language server's answer is added when it arrives
+                self.hover_provider(word[0], word[1], event.globalPos(), lint_html)
             return True
         return super().viewportEvent(event)
+
+    def show_hover(self, line: int, column: int, global_pos: QPoint, text_html: str):
+        """Show a hover answer, unless the mouse has moved off that name."""
+        if self._hover_word != (line, column):
+            return
+        word = self.word_at(self.viewport().mapFromGlobal(QCursor.pos()))
+        if word is None or word[:2] != (line, column):
+            return
+        QToolTip.showText(global_pos, text_html, self.viewport())
+
+    def mousePressEvent(self, event):
+        if (event.button() == Qt.LeftButton and event.modifiers() & Qt.ControlModifier
+                and self.hover_provider is not None):
+            # ⌘-click (Ctrl-click on Linux/Windows): go to the definition.
+            self.setTextCursor(self.cursorForPosition(event.position().toPoint()))
+            self.definition_requested.emit()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        super().mouseMoveEvent(event)
+        if self.hover_provider is not None and event.modifiers() & Qt.ControlModifier \
+                and self.word_at(event.position().toPoint()):
+            self.viewport().setCursor(Qt.PointingHandCursor)
+        else:
+            self.viewport().setCursor(Qt.IBeamCursor)
+
+    def go_to_position(self, line: int, column: int = 0):
+        """Put the cursor at a line (1-based) and column (0-based)."""
+        self.go_to_line(line)
+        cursor = self.textCursor()
+        cursor.setPosition(cursor.block().position() + min(column, max(0, cursor.block().length() - 1)))
+        self.setTextCursor(cursor)
+        self.centerCursor()
 
     # -------------------------------------------------------- highlights
     def _update_extra_selections(self):
@@ -517,6 +605,7 @@ class EditorTab(QWidget):
     dirty_changed = Signal(bool)
     saved = Signal(str)
     path_changed = Signal(str)
+    navigate_requested = Signal(str, int, int)  # go to file, line (1-based), column (0-based)
 
     def __init__(self, path: Path, parent=None):
         super().__init__(parent)
@@ -529,15 +618,31 @@ class EditorTab(QWidget):
         self._lint_markers: dict[int, list[tuple[str, str]]] = {}
         self._lint_process: QProcess | None = None
         self._lint_again = False  # the text changed while fortitude was running
+        self.lsp: lsp_mod.LspClient | None = None  # the language server, for Fortran files
+        self._outline: list[tuple[int, str, str, int, int]] = []
         self.editor = CodeEditor()
         self.highlighter = PygmentsHighlighter(self.editor.document(), lexer_for_path(self.path))
         self.find_bar = FindBar(self.editor)
         self.status = QLabel()
         self.status.setContentsMargins(8, 2, 8, 2)
 
+        # Outline of the file (modules, types, procedures), from the language server.
+        self.outline_box = QComboBox()
+        self.outline_box.setMinimumContentsLength(30)
+        self.outline_box.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.outline_box.setToolTip("Outline: jump to a module, type or procedure in this file")
+        self.outline_box.activated.connect(self._outline_chosen)
+        self.outline_bar = QWidget()
+        bar = QHBoxLayout(self.outline_bar)
+        bar.setContentsMargins(6, 3, 6, 3)
+        bar.addWidget(self.outline_box)
+        bar.addStretch(1)
+        self.outline_bar.hide()
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
+        layout.addWidget(self.outline_bar)
         layout.addWidget(self.editor, 1)
         layout.addWidget(self.find_bar)
         layout.addWidget(self.status)
@@ -553,13 +658,132 @@ class EditorTab(QWidget):
         self._lint_timer.setSingleShot(True)
         self._lint_timer.setInterval(LINT_DELAY_MS)
         self._lint_timer.timeout.connect(self.lint)
+        self._lsp_timer = QTimer(self)
+        self._lsp_timer.setSingleShot(True)
+        self._lsp_timer.setInterval(LSP_SYNC_MS)
+        self._lsp_timer.timeout.connect(self._lsp_sync)
+        self.editor.definition_requested.connect(self.go_to_definition)
 
         self.editor.document().modificationChanged.connect(self.dirty_changed)
         self.editor.cursorPositionChanged.connect(self._update_status)
         self.load()
         self.refresh_style()
         self.editor.textChanged.connect(self._lint_timer.start)
+        self.editor.textChanged.connect(lambda: self.lsp is not None and self._lsp_timer.start())
+        self.editor.cursorPositionChanged.connect(self._outline_follow_cursor)
         self.lint()
+
+    # ------------------------------------------------------ language server
+    def attach_lsp(self, client: lsp_mod.LspClient | None):
+        """Use a language server for this tab (Fortran files only; None detaches)."""
+        if client is self.lsp:
+            return
+        self.detach_lsp()
+        if client is None or not client.is_running() or not lsp_mod.is_fortran(self.path):
+            return
+        self.lsp = client
+        client.open_document(self.path, self.editor.toPlainText())
+        self.editor.hover_provider = self._request_hover
+        self.outline_bar.show()
+        self.refresh_outline()
+
+    def detach_lsp(self):
+        self._lsp_timer.stop()
+        if self.lsp is not None:
+            self.lsp.close_document(self.path)
+        self.lsp = None
+        self.editor.hover_provider = None
+        self._outline = []
+        self.outline_box.clear()
+        self.outline_bar.hide()
+
+    def _lsp_sync(self):
+        """Send the current text (once typing pauses), then refresh the outline."""
+        self._lsp_timer.stop()
+        if self.lsp is not None:
+            self.lsp.change_document(self.path, self.editor.toPlainText())
+            self.refresh_outline()
+
+    def _flush_lsp(self):
+        """Before a question: make sure the server has the latest text."""
+        if self._lsp_timer.isActive():
+            self._lsp_sync()
+
+    def _request_hover(self, line: int, column: int, global_pos, lint_html: str):
+        if self.lsp is None:
+            return
+        self._flush_lsp()
+
+        def answered(result):
+            text = lsp_mod.hover_html(result.get("contents")) if isinstance(result, dict) else ""
+            if text:
+                sep = "<hr>" if lint_html else ""
+                self.editor.show_hover(line, column, global_pos, lint_html + sep + text)
+
+        self.lsp.hover(self.path, line, column, answered)
+
+    def go_to_definition(self):
+        """Ask where the name at the cursor is defined, and go there."""
+        if self.lsp is None:
+            return
+        self._flush_lsp()
+        cursor = self.editor.textCursor()
+        line, column = cursor.blockNumber() + 1, cursor.positionInBlock()
+        rect = self.editor.cursorRect(cursor)
+        word = self.editor.word_at(QPoint(rect.center().x(), rect.center().y()))
+
+        def answered(result):
+            found = lsp_mod.first_location(result)
+            if found is None:
+                name = f"'{word[2]}'" if word else "the name at the cursor"
+                self._update_status(f"no definition found for {name}")
+                return
+            path, to_line, to_column = found
+            self.navigate_requested.emit(str(path), to_line, to_column)
+
+        self.lsp.definition(self.path, line, column, answered)
+
+    def refresh_outline(self):
+        if self.lsp is None:
+            return
+        self.lsp.document_symbols(self.path, self._show_outline)
+
+    def _show_outline(self, result):
+        if self.lsp is None:
+            return
+        document = self.editor.document()
+        self._outline = lsp_mod.outline(result, lambda n: document.findBlockByNumber(n - 1).text())
+        self.outline_box.blockSignals(True)
+        self.outline_box.clear()
+        for depth, kind, name, _first, _last in self._outline:
+            self.outline_box.addItem("    " * depth + f"{name}  ({kind})")
+        self.outline_box.setPlaceholderText(f"Outline ({len(self._outline)})" if self._outline
+                                            else "Outline (no procedures)")
+        self.outline_box.blockSignals(False)
+        self._outline_follow_cursor()
+
+    def _outline_chosen(self, index: int):
+        if 0 <= index < len(self._outline):
+            self.editor.go_to_line(self._outline[index][3])
+
+    def _outline_follow_cursor(self):
+        """Show the innermost module/procedure the cursor is in."""
+        if not self._outline:
+            return
+        line = self.editor.textCursor().blockNumber() + 1
+        best = -1
+        for i, (_depth, _kind, _name, first, last) in enumerate(self._outline):
+            if first <= line <= last:
+                best = i  # rows are in file order, so later = deeper
+        if best != self.outline_box.currentIndex():
+            self.outline_box.blockSignals(True)
+            self.outline_box.setCurrentIndex(best)
+            self.outline_box.blockSignals(False)
+
+    def close_down(self):
+        """Before the tab is closed: stop background work."""
+        self.stop_lint()
+        self.detach_lsp()
 
     # -------------------------------------------------------------- lint
     def can_lint(self) -> bool:
@@ -673,6 +897,9 @@ class EditorTab(QWidget):
         self._compiler_markers, self._review_markers = {}, {}
         self.editor.set_markers({})
         self._watch()
+        if self.lsp is not None:
+            self._flush_lsp()
+            self.lsp.save_document(self.path)
         self.saved.emit(str(self.path))
         return True
 
@@ -680,11 +907,14 @@ class EditorTab(QWidget):
         filename, _ = QFileDialog.getSaveFileName(self, "Save As", str(self.path))
         if not filename:
             return False
+        client = self.lsp
+        self.detach_lsp()  # (under the old name)
         self.path = Path(filename).resolve()
         self.highlighter.set_lexer(lexer_for_path(self.path))
         self.path_changed.emit(str(self.path))
         saved = self.save()
         self.lint()  # it may (no longer) be a Fortran file
+        self.attach_lsp(client)
         return saved
 
     def maybe_save(self) -> bool:

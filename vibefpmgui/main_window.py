@@ -66,7 +66,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from . import __version__, ansi, dep_updates, formatter, lint
+from . import __version__, ansi, dep_updates, formatter, lint, lsp
 from . import ai_review as ai
 from . import build_outputs as bo
 from . import manifest as m
@@ -86,6 +86,7 @@ from .icons import app_icon, make_icon
 from .project_tree import ProjectTree, reveal_in_file_manager
 from .review_monitor import ReviewMonitor
 from .run_monitor import RunMonitor
+from .symbol_search import SymbolSearchDialog
 from .test_monitor import MARKER_RE, TestMonitor, parse_test_list
 
 # (label, fpm sub-command, uses build options, refresh graph afterwards, icon, shortcut, description)
@@ -114,6 +115,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("VibeFPMGUI")
         self.resize(1300, 850)
         self.settings = make_settings()
+        self.lsp_client = lsp.LspClient(self)  # fortls, for the editor (see _update_language_server)
+        self.lsp_client.stopped.connect(self._language_server_stopped)
         self.manifest_path: Path | None = None
         self.graph: m.DependencyGraph | None = None
         self.process: QProcess | None = None
@@ -208,6 +211,15 @@ class MainWindow(QMainWindow):
         self.lint_action.setStatusTip("Check free-form Fortran files in the editor with fortitude "
                                       "as you type; findings are underlined and marked in the gutter")
         view_menu.addAction(self.lint_action)
+        self.fortls_action = QAction("Fortran Language Server (fortls)", self, checkable=True)
+        self.fortls_action.setChecked(self.settings.value("fortls", True, type=bool))
+        self.fortls_action.toggled.connect(self.set_fortls_enabled)
+        if lsp.executable() is None:
+            self.fortls_action.setEnabled(False)
+            self.fortls_action.setText("Fortran Language Server (fortls not found)")
+        self.fortls_action.setStatusTip("Hover information, Go to Definition, the outline and "
+                                        "Go to Symbol for Fortran files, from fortls")
+        view_menu.addAction(self.fortls_action)
 
         # --- left: build options + commands
         options = QGroupBox("Build options")
@@ -690,7 +702,8 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
         for editor in self.editors():
-            editor.stop_lint()
+            editor.close_down()
+        self.lsp_client.stop()
         if self.process is not None:
             answer = QMessageBox.question(self, "fpm is running",
                                           "An fpm command is still running. Stop it and quit?")
@@ -1049,6 +1062,7 @@ class MainWindow(QMainWindow):
             self.graph_view.update_packages(self.graph)
         self.show_package(self.graph.root)
         self.project_tree.set_project(self.graph, self.manifest_path.parent)
+        self._update_language_server()
         self.refresh_build_outputs()
         self._set_project_enabled(True)
         self._load_features_and_profiles()
@@ -1129,6 +1143,84 @@ class MainWindow(QMainWindow):
         if filename:
             self.open_file(filename, force_editor=True)
 
+    # ------------------------------------------------- language server
+    def _update_language_server(self):
+        """Run fortls for the open project (restarting it if the project or
+        its folders changed), and connect the open Fortran tabs to it."""
+        if not self.fortls_action.isChecked() or lsp.executable() is None or self.manifest_path is None:
+            self._stop_language_server()
+            return
+        root = self.manifest_path.parent.resolve()
+        args = lsp.server_args(self.graph, root)
+        client = self.lsp_client
+        if client.is_running() and client.root == root and client.args == args:
+            return
+        for editor in self.editors():
+            editor.detach_lsp()
+        client.start(root, args)
+        for editor in self.editors():
+            editor.attach_lsp(client)
+        self._update_editor_actions()
+
+    def _stop_language_server(self):
+        for editor in self.editors():
+            editor.detach_lsp()
+        self.lsp_client.stop()
+        self._update_editor_actions()
+
+    def _language_server_stopped(self, why: str):
+        for editor in self.editors():
+            editor.detach_lsp()
+        self.statusBar().showMessage(f"{why} — hover, Go to Definition and the outline are off "
+                                     "until the project is reloaded", 10000)
+        self._update_editor_actions()
+
+    def set_fortls_enabled(self, on: bool):
+        self.settings.setValue("fortls", on)
+        self._update_language_server()
+
+    def go_to_symbol(self):
+        if not self.lsp_client.is_running():
+            return
+        dialog = SymbolSearchDialog(self.lsp_client, self.manifest_path.parent if self.manifest_path else None,
+                                    self)
+        dialog.chosen.connect(self.navigate_to)
+        dialog.exec()
+
+    def _location(self) -> tuple[str, int, int] | None:
+        editor = self.current_editor()
+        if editor is None:
+            return None
+        cursor = editor.editor.textCursor()
+        return str(editor.path), cursor.blockNumber() + 1, cursor.positionInBlock()
+
+    def navigate_to(self, path: str, line: int, column: int, record: bool = True):
+        """Open a file at a line and column (Go to Definition / Symbol);
+        Go Back returns to where this was called from."""
+        here = self._location()
+        if record and here is not None and here != (path, line, column):
+            self._back.append(here)
+            del self._back[:-100]
+            self._forward.clear()
+        self.open_file(path, force_editor=True)
+        editor = self.current_editor()
+        if editor is not None and editor.path == Path(path).resolve():
+            editor.editor.go_to_position(line, column)
+            editor.editor.setFocus()
+        self._update_editor_actions()
+
+    def _go_history(self, back: bool):
+        source, target = (self._back, self._forward) if back else (self._forward, self._back)
+        while source:
+            path, line, column = source.pop()
+            if Path(path).is_file():
+                here = self._location()
+                if here is not None:
+                    target.append(here)
+                self.navigate_to(path, line, column, record=False)
+                return
+        self._update_editor_actions()
+
     def set_lint_enabled(self, on: bool):
         EditorTab.lint_enabled = on
         self.settings.setValue("lint", on)
@@ -1155,6 +1247,8 @@ class MainWindow(QMainWindow):
             editor.path_changed.connect(lambda _p, e=editor: self._update_editor_title(e))
             editor.path_changed.connect(self._update_editor_actions)
             editor.saved.connect(self._editor_saved)
+            editor.navigate_requested.connect(self.navigate_to)
+            editor.attach_lsp(self.lsp_client)
             self.tabs.addTab(editor, file.name)
             self._update_editor_title(editor)
         self.tabs.setCurrentWidget(editor)
@@ -1190,7 +1284,7 @@ class MainWindow(QMainWindow):
                 if not editor.maybe_save():
                     return False
         for editor in editors:
-            editor.stop_lint()
+            editor.close_down()
             self.tabs.removeTab(self.tabs.indexOf(editor))
             editor.deleteLater()
         return True
@@ -1201,7 +1295,7 @@ class MainWindow(QMainWindow):
             return
         self.tabs.setCurrentIndex(index)
         if widget.maybe_save():
-            widget.stop_lint()
+            widget.close_down()
             self.tabs.removeTab(index)
             widget.deleteLater()
 
@@ -1214,6 +1308,10 @@ class MainWindow(QMainWindow):
         editor = self.current_editor()
         self.format_action.setEnabled(editor is not None and formatter.can_format(editor.path)
                                       and formatter.executable() is not None)
+        self.definition_action.setEnabled(editor is not None and editor.lsp is not None)
+        self.symbol_action.setEnabled(self.lsp_client.is_running())
+        self.back_action.setEnabled(bool(self._back))
+        self.forward_action.setEnabled(bool(self._forward))
         self._update_review_actions()
 
     def format_file(self, editor: EditorTab):
@@ -1286,6 +1384,23 @@ class MainWindow(QMainWindow):
                                                   lambda e: e.find_bar.find_previous())
         menu.addSeparator()
         self.goto_action = editor_action("Go to Line…", "Ctrl+L", lambda e: e.go_to_line_dialog())
+        menu.addSeparator()
+        self.definition_action = editor_action("Go to Definition", "F12", lambda e: e.go_to_definition())
+        self.definition_action.setStatusTip("Open the definition of the name at the cursor "
+                                            "(or ⌘/Ctrl-click the name)")
+        self.symbol_action = menu.addAction("Go to Symbol in Project…")
+        self.symbol_action.setShortcut(QKeySequence("Ctrl+T"))
+        self.symbol_action.setStatusTip("Find a module, type or procedure in the project "
+                                        "and its dependencies")
+        self.symbol_action.triggered.connect(self.go_to_symbol)
+        self.back_action = menu.addAction("Go Back")
+        self.back_action.setShortcut(QKeySequence(QKeySequence.Back))
+        self.back_action.triggered.connect(lambda: self._go_history(back=True))
+        self.forward_action = menu.addAction("Go Forward")
+        self.forward_action.setShortcut(QKeySequence(QKeySequence.Forward))
+        self.forward_action.triggered.connect(lambda: self._go_history(back=False))
+        self._back: list[tuple[str, int, int]] = []     # where Go to Definition jumped from
+        self._forward: list[tuple[str, int, int]] = []
         menu.addSeparator()
         self.format_action = editor_action("Format with fprettify", "Ctrl+Shift+I", self.format_file)
         self.format_action.setIconText("Format")
