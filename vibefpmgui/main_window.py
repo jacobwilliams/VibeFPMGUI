@@ -1066,7 +1066,11 @@ class MainWindow(QMainWindow):
         self._held_blank = False
         # Commands that compile get the per-file status grid (the test run
         # itself doesn't: "fpm test --list" already built everything).
-        self._monitoring = sub[0] in ("build", "run", "test") and phase != "tests"
+        # Commands that compile get the per-file build grid. "fpm test --list"
+        # doesn't build; "fpm test" builds first, so its output goes to the
+        # build grid until the first test starts (see _test_line).
+        self._monitoring = sub[0] in ("build", "run", "test") and phase != "list"
+        self._test_building = phase == "tests"
         if self._monitoring:
             self.build_monitor.start(self.graph, self.manifest_path.parent, self._build_description())
             if phase is None:
@@ -1123,6 +1127,11 @@ class MainWindow(QMainWindow):
         """Pass a line of test output through the test monitor; returns the
         text to show. The runner prints a blank line before each marker,
         which is dropped along with the marker."""
+        if self._test_building:
+            if MARKER_RE.search(line):
+                self._build_part_done()  # the first test is starting
+            else:
+                self.build_monitor.feed_line(line)  # fpm is still compiling
         text = ""
         if self._held_blank:
             self._held_blank = False
@@ -1134,6 +1143,15 @@ class MainWindow(QMainWindow):
             return text
         shown = self.test_monitor.feed_line(line)
         return text + (shown + "\n" if shown is not None else "")
+
+    def _build_part_done(self):
+        """The build part of "fpm test" is over: show the tests."""
+        self._test_building = False
+        if self._monitoring:
+            self.build_monitor.finish(0)
+            self._monitoring = False
+        self.test_monitor.build_finished()
+        self.monitor_tabs.setCurrentWidget(self.test_monitor)
 
     def _flush_monitor(self, exit_code: int, stopped: bool):
         if self._phase == "tests":
@@ -1211,6 +1229,7 @@ class MainWindow(QMainWindow):
         description = self._build_description()
         if inner_runner:
             description += f" · runner: {inner_runner}"
+        self.build_monitor.reset()  # the build progress shown next is this run's
         self.test_monitor.begin_listing(description)
         self.show_test_output("")
         self.run_fpm(["test"], True, False, phase="list", args=list_args)
@@ -1232,8 +1251,8 @@ class MainWindow(QMainWindow):
             # "fpm test --list" lists every test regardless of the names given,
             # so apply the Target names/globs ourselves, as fpm will.
             names = [n for n in names if any(fnmatch.fnmatchcase(n, p) for p in patterns)]
-        self.test_monitor.start(names or [], self._load_test_durations())
-        self.monitor_tabs.setCurrentWidget(self.test_monitor)
+        # fpm builds first (the Build tab shows it), then runs the tests.
+        self.test_monitor.start(names or [], self._load_test_durations(), building=True)
         env = {"VIBEFPM_INNER_RUNNER": inner_runner} if inner_runner else {}
         self.run_fpm(["test"], True, True, phase="tests", args=run_args, env_extra=env)
 
@@ -1244,6 +1263,8 @@ class MainWindow(QMainWindow):
         total = len(self.test_monitor.tests)
         if stopped:
             message = "Tests stopped"
+        elif self.test_monitor._result == "buildfailed":
+            message = "Tests: the build failed (see the Build tab)"
         elif counts["Failed"]:
             message = f"Tests: {counts['Failed']} of {total} failed"
         elif counts["Not run"]:

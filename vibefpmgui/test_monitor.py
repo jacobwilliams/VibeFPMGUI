@@ -358,23 +358,35 @@ class TestMonitor(SortableTable, QWidget):
         self._timer.start()
         self._update_header()
 
-    def start(self, names: list[str], history: dict[str, float]):
-        """Phase 2: the tests are about to run."""
+    def start(self, names: list[str], history: dict[str, float], building: bool = False):
+        """Phase 2: run the tests (after fpm has built them, if ``building``)."""
         self.tests, self.by_name, self.current = [], {}, None
         self.table.setRowCount(0)
         for name in names:
             self._add(name, history.get(name))
-        self._result = ""
+        self._result = "building" if building else ""
         self._started = time.monotonic()
         self._active = True
-        self.progress.set(0, "running")  # ends the busy bar of the build phase
+        if building:
+            self.progress.set_busy(True)
+        else:
+            self.progress.set(0, "running")
         self._show_empty(None if names else "This project has no tests.")
         self._timer.start()
         self._update_header()
 
+    def build_finished(self):
+        """fpm has finished building; the tests are starting."""
+        if self._result == "building":
+            self._result = ""
+            self._started = time.monotonic()
+            self.progress.set(0, "running")
+            self._update_header()
+
     def finish(self, exit_code: int, stopped: bool = False, no_tests: bool = False):
         if not self._active:
             return
+        build_failed = self._result == "building" and exit_code != 0 and not stopped
         self._active = False
         self._finished_at = time.monotonic()
         now = self._finished_at
@@ -393,9 +405,12 @@ class TestMonitor(SortableTable, QWidget):
             self._result = "failed"
         else:
             self._result = "ok"
+        if build_failed:
+            self._result = "buildfailed"
         if self._result == "failed" and not self.tests:
             self._show_empty("The tests could not be built or listed — see the build panel and output.")
-        state = {"ok": "ok", "failed": "failed", "stopped": "stopped", "none": "ok"}[self._result]
+        state = {"ok": "ok", "failed": "failed", "stopped": "stopped", "none": "ok",
+                 "buildfailed": "failed"}[self._result]
         self.progress.set(1.0 if self._result in ("ok", "none") else self.fraction(), state)
         self._update_header()
         self.table.viewport().update()
@@ -568,10 +583,13 @@ class TestMonitor(SortableTable, QWidget):
         n = len(self.tests)
         finished = counts[PASSED] + counts[FAILED_T]
         failed = f" · {counts[FAILED_T]} failed" if counts[FAILED_T] else ""
-        if self._result == "listing":
+        if self._result in ("listing", "building"):
             pct = self.build_percent() if self.build_percent else None
             done = f" {pct}%" if pct else ""
-            text = f"<b>Building…{done}</b> {muted}· collecting tests · {seconds}</span>"
+            what = "collecting tests" if self._result == "listing" else "tests start after the build"
+            text = f"<b>Building…{done}</b> {muted}· {what} · {seconds}</span>"
+        elif self._result == "buildfailed":
+            text = f"<b>Build failed</b> {muted}· see the Build tab</span>"
         elif self._result == "none":
             text = "<b>No tests</b>"
         elif self._result == "ok" and counts[NOT_RUN]:
