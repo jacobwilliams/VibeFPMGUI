@@ -36,6 +36,12 @@ dependencies = [
     "pygments>=2.21.0",  # syntax highlighting
 ]
 
+[project.optional-dependencies]
+# AI code review with a local model. Also needs the Ollama server
+# (https://ollama.com, or "ollama" from conda-forge) and a model,
+# e.g. "ollama pull qwen2.5-coder:7b".
+ai = ["ollama>=0.6.3"]
+
 [project.urls]
 Homepage = "https://github.com/jacobwilliams/VibeFPMGUI"
 Source = "https://github.com/jacobwilliams/VibeFPMGUI"

@@ -1,0 +1,268 @@
+"""AI code review with a local model served by Ollama (https://ollama.com).
+
+Everything runs on this machine: the GUI talks to an ``ollama serve``
+process on localhost (starting one if needed), so no code leaves the
+computer. Models are downloaded once with ``ollama pull`` (the GUI can do
+that too) and are then available offline.
+
+The model is asked to answer with one finding per line::
+
+    LINE 12: bug: the loop never updates i
+    LINE 30-34: style: use an assumed-shape array instead of (*)
+
+followed by ``SUMMARY: ...``. :func:`parse_findings` reads those lines back
+(tolerating the small variations models produce), so findings can be listed
+and marked in the editor's gutter.
+
+The work happens in a :class:`ReviewWorker` on a background thread; the
+``ollama`` Python package is optional and imported lazily.
+"""
+
+from __future__ import annotations
+
+import re
+import shutil
+import threading
+from dataclasses import dataclass
+
+from qtpy.QtCore import QObject, QThread, Signal, Slot
+
+DEFAULT_MODEL = "qwen2.5-coder:7b"
+DEFAULT_HOST = None  # the ollama library's default: $OLLAMA_HOST or localhost:11434
+CATEGORIES = ("bug", "warning", "performance", "style", "suggestion")
+
+FOCUS = {
+    "general": "Give a balanced review: correctness first, then clarity, performance and style.",
+    "bugs": "Concentrate on real bugs: wrong results, out-of-bounds access, uninitialised "
+            "variables, integer overflow, wrong intent, aliasing, precision loss, race conditions.",
+    "modern": "Concentrate on modernising the code: implicit none, intent, modules instead of "
+              "common blocks/include, assumed-shape arrays, allocatable instead of pointers, "
+              "do concurrent where safe, removing obsolescent features (goto, arithmetic if, "
+              "fixed form, equivalence).",
+    "performance": "Concentrate on performance: memory access order (Fortran is column-major), "
+                   "unnecessary temporaries and copies, repeated allocation in loops, "
+                   "vectorisation and OpenMP opportunities.",
+    "docs": "Concentrate on documentation and readability: missing or misleading comments, "
+            "unclear names, FORD-style (!>) doc comments for public procedures.",
+}
+FOCUS_LABELS = {"general": "General", "bugs": "Bugs", "modern": "Modern Fortran style",
+                "performance": "Performance", "docs": "Documentation"}
+
+SYSTEM_PROMPT = """You are an experienced reviewer of scientific and numerical code, \
+expert in modern Fortran (2008/2018), and also C and Python. You review one file at a time.
+
+Rules for your answer:
+- Write one line per finding, in exactly this form:
+  LINE <n>: <category>: <comment>
+  or, for a range of lines,
+  LINE <start>-<end>: <category>: <comment>
+- <category> is one of: bug, warning, performance, style, suggestion.
+- Use the line numbers shown at the start of each source line.
+- Keep each comment to one or two sentences and say how to fix it.
+- Only report real, specific issues. Do not invent problems; if the code is fine, say so.
+- After the findings, write a line starting with "SUMMARY:" with a one to three
+  sentence overall assessment.
+- Do not repeat the code and do not use Markdown headings or code blocks."""
+
+
+@dataclass
+class Finding:
+    line: int
+    end_line: int
+    category: str
+    comment: str
+
+
+FINDING_RE = re.compile(
+    r"""^\s*(?:[-*•]\s*|\d+[.)]\s*)?      # optional bullet / numbering
+        \**\s*L(?:INE)?S?\s*\#?\s*(\d+)        # LINE 12 / Line 12 / L12
+        (?:\s*(?:-|–|to)\s*(\d+))?        # optional range
+        \s*\**\s*[:\])-]\s*\**\s*              # separator
+        (?:(bug|error|warning|performance|style|suggestion|info|note)s?\**\s*[:\-]\s*)?
+        (.+?)\s*$""",
+    re.IGNORECASE | re.VERBOSE)
+SUMMARY_RE = re.compile(r"^\s*\**\s*SUMMARY\s*\**\s*:\s*(.*)$", re.IGNORECASE)
+
+
+def parse_findings(text: str, max_line: int | None = None) -> tuple[list[Finding], str]:
+    """Findings and the summary from a model's answer."""
+    findings: list[Finding] = []
+    summary_lines: list[str] = []
+    in_summary = False
+    for raw in text.splitlines():
+        if in_summary:
+            if raw.strip():
+                summary_lines.append(raw.strip())
+            continue
+        match = SUMMARY_RE.match(raw)
+        if match:
+            in_summary = True
+            if match.group(1).strip():
+                summary_lines.append(match.group(1).strip())
+            continue
+        match = FINDING_RE.match(raw)
+        if not match:
+            # Models often explain a finding on the following line(s).
+            extra = raw.strip().lstrip("-*\u2022 ").strip()
+            if extra and findings and not extra.startswith("```"):
+                last = findings[-1]
+                joiner = " " if last.comment.rstrip("\x00").endswith((".", "!", "?", ":")) else " — "
+                last.comment = f"{last.comment}{joiner}{extra}"
+            elif not extra and findings:
+                findings[-1].comment += "\x00"  # a blank line ends the explanation
+            continue
+        start = int(match.group(1))
+        end = int(match.group(2)) if match.group(2) else start
+        if end < start:
+            start, end = end, start
+        if max_line is not None and (start < 1 or start > max_line):
+            continue  # a hallucinated line number
+        category = (match.group(3) or "suggestion").lower()
+        category = {"error": "bug", "info": "suggestion", "note": "suggestion"}.get(category, category)
+        comment = match.group(4).strip().strip("*").strip()
+        if comment:
+            findings.append(Finding(start, min(end, max_line or end), category, comment))
+    for f in findings:
+        # Text after a blank line wasn't part of the finding.
+        f.comment = f.comment.split("\x00")[0].strip()
+    return findings, " ".join(summary_lines)
+
+
+def build_prompt(path: str, language: str, code: str, focus: str,
+                 diagnostics: list[tuple[int, str, str]]) -> str:
+    """The user message: instructions, compiler messages and numbered code."""
+    lines = code.splitlines() or [""]
+    width = len(str(len(lines)))
+    numbered = "\n".join(f"{i:>{width}}| {line}" for i, line in enumerate(lines, 1))
+    parts = [f"Review this {language} file: {path}", FOCUS.get(focus, FOCUS["general"])]
+    if diagnostics:
+        notes = "\n".join(f"line {ln}: {sev}: {msg}" for ln, sev, msg in diagnostics[:40])
+        parts.append("The compiler already reported these messages in the last build, and they "
+                     "are shown to the user separately. Do NOT list them again; look for other "
+                     "problems the compiler can't see:\n" + notes)
+    parts.append("Source (line numbers on the left):\n" + numbered)
+    return "\n\n".join(parts)
+
+
+def context_size(prompt: str) -> int:
+    """A context window big enough for the prompt plus the answer (Ollama's
+    default is much smaller than the files we send)."""
+    estimate = len(prompt) // 3 + len(SYSTEM_PROMPT) // 3 + 2048
+    size = 4096
+    while size < estimate and size < 32768:
+        size *= 2
+    return size
+
+
+def ollama_available() -> bool:
+    try:
+        import ollama  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def ollama_executable() -> str | None:
+    return shutil.which("ollama")
+
+
+def make_client(host: str | None = DEFAULT_HOST, timeout: float | None = None):
+    import ollama
+    return ollama.Client(host=host, timeout=timeout)
+
+
+def server_running(host: str | None = DEFAULT_HOST) -> bool:
+    try:
+        make_client(host, timeout=2).list()
+        return True
+    except Exception:  # noqa: BLE001 - any failure means "not reachable"
+        return False
+
+
+def installed_models(host: str | None = DEFAULT_HOST) -> list[str]:
+    try:
+        response = make_client(host, timeout=5).list()
+    except Exception:  # noqa: BLE001
+        return []
+    models = getattr(response, "models", None) or response.get("models", [])
+    names = []
+    for m in models:
+        name = getattr(m, "model", None) or (m.get("model") if isinstance(m, dict) else None) \
+            or (m.get("name") if isinstance(m, dict) else None)
+        if name:
+            names.append(name)
+    return sorted(names)
+
+
+class ReviewWorker(QObject):
+    """Runs a review (or a model download) on a background thread."""
+
+    chunk = Signal(str)                 # streamed text of the answer
+    progress = Signal(str, float)       # download status, fraction (-1 = unknown)
+    finished = Signal(str, dict)        # full answer, stats
+    failed = Signal(str)
+
+    def __init__(self, host: str | None, model: str, prompt: str = "", pull_only: bool = False):
+        super().__init__()
+        self.host, self.model, self.prompt, self.pull_only = host, model, prompt, pull_only
+        self._cancel = threading.Event()
+
+    def cancel(self):
+        self._cancel.set()
+
+    @Slot()
+    def run(self):
+        try:
+            client = make_client(self.host)
+            if self.pull_only:
+                self._pull(client)
+            else:
+                self._review(client)
+        except Exception as exc:  # noqa: BLE001 - shown to the user
+            self.failed.emit(str(exc) or type(exc).__name__)
+
+    def _pull(self, client):
+        for part in client.pull(self.model, stream=True):
+            if self._cancel.is_set():
+                self.failed.emit("Download cancelled")
+                return
+            status = getattr(part, "status", "") or ""
+            total = getattr(part, "total", None) or 0
+            completed = getattr(part, "completed", None) or 0
+            self.progress.emit(status, completed / total if total else -1.0)
+        self.finished.emit("", {})
+
+    def _review(self, client):
+        options = {"num_ctx": context_size(self.prompt), "temperature": 0.2}
+        stream = client.chat(model=self.model, stream=True, options=options, messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": self.prompt},
+        ])
+        parts: list[str] = []
+        stats: dict = {}
+        for part in stream:
+            if self._cancel.is_set():
+                self.failed.emit("Review stopped")
+                return
+            message = getattr(part, "message", None)
+            text = getattr(message, "content", "") if message is not None else ""
+            if text:
+                parts.append(text)
+                self.chunk.emit(text)
+            if getattr(part, "done", False):
+                stats = {"tokens": getattr(part, "eval_count", 0) or 0,
+                         "seconds": (getattr(part, "total_duration", 0) or 0) / 1e9}
+        self.finished.emit("".join(parts), stats)
+
+
+def start_worker(worker: ReviewWorker, parent: QObject) -> QThread:
+    """Run ``worker`` on a new thread that cleans itself up when done."""
+    thread = QThread(parent)
+    worker.moveToThread(thread)
+    thread.started.connect(worker.run)
+    worker.finished.connect(thread.quit)
+    worker.failed.connect(thread.quit)
+    thread.finished.connect(worker.deleteLater)
+    thread.finished.connect(thread.deleteLater)
+    thread.start()
+    return thread

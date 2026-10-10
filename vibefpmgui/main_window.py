@@ -12,13 +12,14 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 import tomllib
 from pathlib import Path
 
-from qtpy.QtCore import QEvent, QProcess, QProcessEnvironment, QSettings, QSize, Qt, QUrl
+from qtpy.QtCore import QEvent, QProcess, QProcessEnvironment, QSettings, QSize, Qt, QTimer, QUrl
 from qtpy.QtGui import QAction, QActionGroup, QColor, QPalette, QDesktopServices, QFont, QFontDatabase, QKeySequence, QTextCursor
 from qtpy.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
+    QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QInputDialog,
     QLabel, QLineEdit, QMainWindow, QMenu, QStackedWidget, QTabBar, QMessageBox, QPlainTextEdit, QPushButton, QSplitter,
     QTabWidget, QTextBrowser, QToolBar, QToolButton, QVBoxLayout, QWidget,
 )
@@ -27,7 +28,9 @@ from . import __version__
 from . import manifest as m
 from .build_monitor import BuildMonitor, set_ui_scale
 from .test_monitor import MARKER_RE, TestMonitor, parse_test_list
+from . import ai_review as ai
 from .editor import EditorTab, monospace_font
+from .review_monitor import ReviewMonitor
 from .icons import make_icon
 from .highlighter import DARK_STYLE, LIGHT_STYLE, PygmentsHighlighter, is_dark
 from .graph_view import EDGE_STYLES, KIND_LABELS, LAYOUTS, THEME_CHOICES, DependencyGraphView
@@ -206,6 +209,7 @@ class MainWindow(QMainWindow):
         self.selected_features: list[str] = []
         self._wanted_profile = "(default)"
         self._rebuild_features_menu()
+        self._build_ai_menu()
 
         left = QWidget()
         left_layout = QVBoxLayout(left)
@@ -296,6 +300,9 @@ class MainWindow(QMainWindow):
         self.monitor_tabs.setDocumentMode(True)
         self.monitor_tabs.addTab(self.build_monitor, "Build")
         self.monitor_tabs.addTab(self.test_monitor, "Tests")
+        self.review_monitor = ReviewMonitor()
+        self.review_monitor.finding_selected.connect(self._go_to_finding)
+        self.monitor_tabs.addTab(self.review_monitor, "Review")
         self.bottom_split = QSplitter(Qt.Horizontal)
         self.bottom_split.addWidget(self.monitor_tabs)
         self.bottom_split.addWidget(console_box)
@@ -334,6 +341,7 @@ class MainWindow(QMainWindow):
             self._update_legend()
             self.build_monitor.refresh_palette()
             self.test_monitor.refresh_palette()
+            self.review_monitor.refresh_palette()
             for editor in self.editors():
                 editor.refresh_style()
             self._update_command_icons()
@@ -420,6 +428,7 @@ class MainWindow(QMainWindow):
         self.command_toolbar.setIconSize(QSize(round(22 * factor), round(22 * factor)))
         self.build_monitor.refresh_fonts()
         self.test_monitor.refresh_fonts()
+        self.review_monitor.refresh_fonts()
         self.graph_view.refresh_fonts()
         if self.graph:
             self.show_package(self.graph_view.selected or self.graph.root)
@@ -533,6 +542,7 @@ class MainWindow(QMainWindow):
                 return
             self.process.kill()
             self.process.waitForFinished(2000)
+        self._shutdown_ai()
         s = self.settings
         s.setValue("geometry", self.saveGeometry())
         s.setValue("profile", self.profile_combo.currentText())
@@ -1191,6 +1201,232 @@ class MainWindow(QMainWindow):
         if self.test_monitor.selected:
             self.test_monitor.selected = ""
             self.test_monitor.table.viewport().update()
+
+    # ------------------------------------------------------------ AI review
+    def _build_ai_menu(self):
+        self.ai_model = self.settings.value("ai_model", ai.DEFAULT_MODEL)
+        self.ai_focus = self.settings.value("ai_focus", "general")
+        self._ai_thread = None
+        self._ai_worker = None
+        self._ai_editor: EditorTab | None = None
+        self._ollama_process: QProcess | None = None
+
+        menu = self.menuBar().addMenu("&AI")
+        self.review_action = menu.addAction("Review Current File")
+        self.review_action.setShortcut(QKeySequence("Ctrl+Alt+R"))
+        self.review_action.setStatusTip("Ask a local AI model (via Ollama) to review the file in the editor")
+        self.review_action.triggered.connect(self.start_review)
+        self.stop_review_action = menu.addAction("Stop Review")
+        self.stop_review_action.setEnabled(False)
+        self.stop_review_action.triggered.connect(self.stop_review)
+        self.clear_review_action = menu.addAction("Clear Review Markers")
+        self.clear_review_action.triggered.connect(
+            lambda: self._with_editor(lambda e: e.clear_review()))
+        menu.addSeparator()
+        self.model_menu = menu.addMenu("Model")
+        self.model_menu.aboutToShow.connect(self._fill_model_menu)
+        focus_menu = menu.addMenu("Focus")
+        group = QActionGroup(self)
+        for key, label in ai.FOCUS_LABELS.items():
+            action = focus_menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(key == self.ai_focus)
+            action.setStatusTip(ai.FOCUS[key])
+            action.triggered.connect(lambda _=False, k=key: self._set_ai_focus(k))
+            group.addAction(action)
+
+    def _set_ai_focus(self, key: str):
+        self.ai_focus = key
+        self.settings.setValue("ai_focus", key)
+
+    def _set_ai_model(self, name: str):
+        self.ai_model = name
+        self.settings.setValue("ai_model", name)
+        self.statusBar().showMessage(f"AI model: {name}", 4000)
+
+    def _fill_model_menu(self):
+        """Installed models (if Ollama is running), plus the current choice."""
+        menu = self.model_menu
+        menu.clear()
+        models = ai.installed_models() if ai.ollama_available() else []
+        names = sorted(set(models) | {self.ai_model})
+        group = QActionGroup(menu)
+        for name in names:
+            label = name if name in models else f"{name} (not downloaded yet)"
+            action = menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(name == self.ai_model)
+            action.triggered.connect(lambda _=False, n=name: self._set_ai_model(n))
+            group.addAction(action)
+        if not models:
+            note = menu.addAction("(Ollama isn't running — installed models appear once it is)")
+            note.setEnabled(False)
+        menu.addSeparator()
+        other = menu.addAction("Other Model…")
+        other.triggered.connect(self._choose_other_model)
+
+    def _choose_other_model(self):
+        name, ok = QInputDialog.getText(
+            self, "AI model", "Ollama model name (e.g. qwen2.5-coder:14b, qwen3-coder:30b, "
+            "gpt-oss:20b). It's downloaded the first time it's used:", text=self.ai_model)
+        if ok and name.strip():
+            self._set_ai_model(name.strip())
+
+    def start_review(self):
+        editor = self.current_editor()
+        if editor is None:
+            QMessageBox.information(self, "AI review", "Open a file in the editor first "
+                                    "(double-click a file, or File → Open File in Editor).")
+            return
+        if self._ai_thread is not None:
+            return
+        if not ai.ollama_available():
+            QMessageBox.warning(self, "AI review", "The 'ollama' Python package isn't installed.\n"
+                                "Run 'pixi install' (or 'pip install ollama').")
+            return
+        self._ai_editor = editor
+        self._ensure_ollama(self._check_model)
+
+    def _ensure_ollama(self, then):
+        """Start "ollama serve" if no server answers, then call ``then``."""
+        if ai.server_running():
+            then()
+            return
+        exe = ai.ollama_executable()
+        if exe is None:
+            QMessageBox.warning(self, "AI review", "Ollama isn't running and the 'ollama' program "
+                                "wasn't found. Run 'pixi install', or install Ollama from ollama.com.")
+            return
+        self.monitor_tabs.setCurrentWidget(self.review_monitor)
+        self.review_monitor.begin("starting the local Ollama server", "Starting Ollama")
+        self._ollama_process = QProcess(self)
+        self._ollama_process.setProcessChannelMode(QProcess.MergedChannels)
+        self._ollama_process.start(exe, ["serve"])
+        deadline = time.monotonic() + 20
+
+        def poll():
+            if ai.server_running():
+                then()
+            elif time.monotonic() > deadline or self._ollama_process.state() == QProcess.NotRunning:
+                self.review_monitor.finish(False, "Could not start the Ollama server.")
+            else:
+                QTimer.singleShot(300, poll)
+
+        QTimer.singleShot(300, poll)
+
+    def _check_model(self):
+        model = self.ai_model if ":" in self.ai_model else self.ai_model + ":latest"
+        installed = ai.installed_models()
+        if model in installed or self.ai_model in installed:
+            self._run_review()
+            return
+        answer = QMessageBox.question(
+            self, "Download AI model",
+            f"The model '{self.ai_model}' isn't downloaded yet. Download it now?\n\n"
+            "Models are a few GB; this happens once, and everything runs locally afterwards.")
+        if answer != QMessageBox.Yes:
+            return
+        self.monitor_tabs.setCurrentWidget(self.review_monitor)
+        self.review_monitor.begin(f"downloading {self.ai_model}", "Downloading")
+        worker = ai.ReviewWorker(ai.DEFAULT_HOST, self.ai_model, pull_only=True)
+        worker.progress.connect(self._pull_progress)
+        worker.finished.connect(lambda *_: self._ai_done(then=self._run_review))
+        worker.failed.connect(self._review_failed)
+        self._start_ai_worker(worker)
+
+    def _pull_progress(self, status: str, fraction: float):
+        if fraction >= 0:
+            self.review_monitor.set_status(f"Downloading {self.ai_model} {fraction * 100:.0f}%", fraction)
+        else:
+            self.review_monitor.set_status(status.capitalize() or "Downloading")
+
+    def _run_review(self):
+        editor = self._ai_editor
+        if editor is None or editor not in self.editors():
+            return
+        code = editor.editor.toPlainText()
+        diagnostics = [(line, sev, msg) for line, notes in sorted(editor._compiler_markers.items())
+                       for sev, msg in notes]
+        prompt = ai.build_prompt(editor.path.name, editor.highlighter.lexer.name, code,
+                                 self.ai_focus, diagnostics)
+        focus = ai.FOCUS_LABELS.get(self.ai_focus, self.ai_focus)
+        self.monitor_tabs.setCurrentWidget(self.review_monitor)
+        self.review_monitor.begin(f"{editor.path.name} · {self.ai_model} · {focus.lower()}", "Thinking")
+        self._show_single_output(f"AI review of {editor.path.name} ({self.ai_model})", "")
+        worker = ai.ReviewWorker(ai.DEFAULT_HOST, self.ai_model, prompt)
+        worker.chunk.connect(self._review_chunk)
+        worker.finished.connect(self._review_finished)
+        worker.failed.connect(self._review_failed)
+        self._start_ai_worker(worker)
+
+    def _start_ai_worker(self, worker):
+        self._ai_worker = worker
+        self._ai_thread = ai.start_worker(worker, self)
+        self._ai_thread.finished.connect(self._ai_thread_done)
+        self.review_action.setEnabled(False)
+        self.stop_review_action.setEnabled(True)
+
+    def _ai_thread_done(self):
+        self._ai_thread = None
+        self._ai_worker = None
+        self.review_action.setEnabled(True)
+        self.stop_review_action.setEnabled(False)
+
+    def _ai_done(self, then=None):
+        # Let the download thread finish before starting the review thread.
+        if then is not None:
+            QTimer.singleShot(100, lambda: self._after_ai_thread(then))
+
+    def _after_ai_thread(self, then):
+        if self._ai_thread is not None:
+            QTimer.singleShot(100, lambda: self._after_ai_thread(then))
+        else:
+            then()
+
+    def _review_chunk(self, text: str):
+        cursor = self.test_output.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        cursor.insertText(text)
+        self.test_output.setTextCursor(cursor)
+        self.test_output.ensureCursorVisible()
+        self.review_monitor.add_text(text)
+
+    def _review_finished(self, text: str, stats: dict):
+        editor = self._ai_editor
+        max_line = editor.editor.blockCount() if editor in self.editors() else None
+        findings, summary = ai.parse_findings(text, max_line)
+        self.review_monitor.set_findings(findings, summary)
+        detail = f"{stats.get('seconds', 0):.1f} s · {self.ai_model}" if stats else self.ai_model
+        self.review_monitor.finish(True, detail)
+        if editor in self.editors():
+            editor.show_review(findings)
+        self.statusBar().showMessage(f"AI review: {len(findings)} findings", 5000)
+
+    def _review_failed(self, message: str):
+        hint = ""
+        if "not found" in message.lower():
+            hint = f" (is '{self.ai_model}' downloaded? See AI → Model)"
+        self.review_monitor.finish(False, message + hint)
+
+    def stop_review(self):
+        if self._ai_worker is not None:
+            self._ai_worker.cancel()
+
+    def _go_to_finding(self, line: int):
+        editor = self._ai_editor
+        if editor in self.editors():
+            self.tabs.setCurrentWidget(editor)
+            editor.editor.go_to_line(line, select=True)
+
+    def _shutdown_ai(self):
+        if self._ai_worker is not None:
+            self._ai_worker.cancel()
+        if self._ai_thread is not None:
+            self._ai_thread.quit()
+            self._ai_thread.wait(3000)
+        if self._ollama_process is not None:  # only a server we started ourselves
+            self._ollama_process.terminate()
+            self._ollama_process.waitForFinished(3000)
 
 
 def split_runner(args: list[str]) -> tuple[list[str], str]:

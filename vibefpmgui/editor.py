@@ -26,7 +26,14 @@ from .highlighter import DARK_STYLE, LIGHT_STYLE, PygmentsHighlighter, is_dark, 
 INDENT = "    "
 MAX_FIND_HIGHLIGHTS = 2000
 MARKER_COLORS = {"error": "#e03131", "fatal error": "#e03131", "warning": "#f08c00",
-                 "remark": "#1c7ed6"}
+                 "review": "#7048e8", "remark": "#1c7ed6"}
+# Which marker colour wins when a line has several kinds of note.
+MARKER_PRIORITY = ["fatal error", "error", "warning", "review", "remark"]
+
+
+def worst_severity(notes: list[tuple[str, str]]) -> str:
+    return min((s for s, _ in notes),
+               key=lambda s: MARKER_PRIORITY.index(s) if s in MARKER_PRIORITY else len(MARKER_PRIORITY))
 
 
 class LineNumberArea(QWidget):
@@ -125,7 +132,7 @@ class CodeEditor(QPlainTextEdit):
                 painter.drawText(0, top, width - 8, height, Qt.AlignRight | Qt.AlignVCenter, str(line))
                 notes = self.markers.get(line)
                 if notes:
-                    worst = "error" if any(s in ("error", "fatal error") for s, _ in notes) else notes[0][0]
+                    worst = worst_severity(notes)
                     painter.setPen(Qt.NoPen)
                     painter.setBrush(QColor(MARKER_COLORS.get(worst, "#868e96")))
                     d = max(6, height // 2)
@@ -160,7 +167,7 @@ class CodeEditor(QPlainTextEdit):
             block = self.document().findBlockByNumber(line - 1)
             if not block.isValid():
                 continue
-            worst = "error" if any(s in ("error", "fatal error") for s, _ in notes) else notes[0][0]
+            worst = worst_severity(notes)
             sel = QTextEdit.ExtraSelection()
             color = QColor(MARKER_COLORS.get(worst, "#868e96"))
             color.setAlpha(34)
@@ -443,6 +450,8 @@ class EditorTab(QWidget):
         self.encoding = "utf-8"
         self.newline = "\n"
         self._disk_text = ""
+        self._compiler_markers: dict[int, list[tuple[str, str]]] = {}
+        self._review_markers: dict[int, list[tuple[str, str]]] = {}
         self.editor = CodeEditor()
         self.highlighter = PygmentsHighlighter(self.editor.document(), lexer_for_path(self.path))
         self.find_bar = FindBar(self.editor)
@@ -519,7 +528,9 @@ class EditorTab(QWidget):
             return False
         self._disk_text = text
         self.editor.document().setModified(False)
-        self.editor.set_markers({})  # the compiler messages no longer apply
+        # Line numbers in the compiler/review notes may no longer be right.
+        self._compiler_markers, self._review_markers = {}, {}
+        self.editor.set_markers({})
         self._watch()
         self.saved.emit(str(self.path))
         return True
@@ -597,11 +608,14 @@ class EditorTab(QWidget):
         parts = [f"Ln {cursor.blockNumber() + 1}, Col {cursor.positionInBlock() + 1}",
                  self.highlighter.lexer.name, self.encoding.upper(),
                  "CRLF" if self.newline == "\r\n" else "LF"]
-        if self.editor.markers:
-            errors = sum(1 for notes in self.editor.markers.values()
-                         for s, _ in notes if s in ("error", "fatal error"))
-            warnings = sum(1 for notes in self.editor.markers.values() for s, _ in notes if s == "warning")
+        if self._compiler_markers:
+            notes = [s for ns in self._compiler_markers.values() for s, _ in ns]
+            errors = sum(1 for s in notes if s in ("error", "fatal error"))
+            warnings = sum(1 for s in notes if s == "warning")
             parts.append(f"{errors} errors, {warnings} warnings from the last build")
+        if self._review_markers:
+            count = sum(len(ns) for ns in self._review_markers.values())
+            parts.append(f"{count} AI review note{'s' * (count != 1)}")
         if note:
             parts.append(note)
         self.status.setText("<span style='color:gray'>" + " · ".join(parts) + "</span>")
@@ -611,7 +625,27 @@ class EditorTab(QWidget):
         markers: dict[int, list[tuple[str, str]]] = {}
         for d in diagnostics:
             markers.setdefault(d.line, []).append((d.severity, d.message))
-        self.editor.set_markers(markers)
+        self._compiler_markers = markers
+        self._apply_markers()
+
+    def show_review(self, findings):
+        """Mark AI review findings (objects with .line, .category, .comment)."""
+        markers: dict[int, list[tuple[str, str]]] = {}
+        for f in findings:
+            markers.setdefault(f.line, []).append(("review", f"AI ({f.category}): {f.comment}"))
+        self._review_markers = markers
+        self._apply_markers()
+
+    def clear_review(self):
+        self._review_markers = {}
+        self._apply_markers()
+
+    def _apply_markers(self):
+        merged: dict[int, list[tuple[str, str]]] = {}
+        for source in (self._compiler_markers, self._review_markers):
+            for line, notes in source.items():
+                merged.setdefault(line, []).extend(notes)
+        self.editor.set_markers(merged)
         self._update_status()
 
     def go_to_line_dialog(self):

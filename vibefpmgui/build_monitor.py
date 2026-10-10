@@ -344,20 +344,46 @@ class RowDelegate(QStyledItemDelegate):
 
 
 class ProgressLine(QWidget):
-    """Thin rounded progress bar with a gradient fill."""
+    """Thin rounded progress bar with a gradient fill. In "busy" mode
+    (:meth:`set_busy`) it shows a segment sliding back and forth instead of
+    a fill, for work whose length isn't known."""
+
+    SEGMENT = 0.28  # busy segment width, as a fraction of the bar
 
     def __init__(self, monitor: "BuildMonitor"):
         super().__init__()
         self.monitor = monitor
         self.value = 0.0
         self.state = "running"  # running | ok | failed | stopped
+        self.busy = False
+        self._busy_started = 0.0
+        self._busy_timer = QTimer(self)
+        self._busy_timer.setInterval(16)
+        self._busy_timer.timeout.connect(self.update)
         self.setFixedHeight(6)
 
     def set(self, value: float, state: str | None = None):
+        """Show a known fraction (0..1); ends busy mode."""
+        self._stop_busy()
         self.value = max(0.0, min(1.0, value))
         if state:
             self.state = state
         self.update()
+
+    def set_busy(self, busy: bool = True):
+        """Indeterminate mode: something is happening, amount unknown."""
+        if busy and not self.busy:
+            self.busy = True
+            self.state = "running"
+            self._busy_started = time.monotonic()
+            self._busy_timer.start()
+        elif not busy:
+            self._stop_busy()
+        self.update()
+
+    def _stop_busy(self):
+        self.busy = False
+        self._busy_timer.stop()
 
     def paintEvent(self, _event):
         pal = self.monitor.palette_colors
@@ -367,6 +393,9 @@ class ProgressLine(QWidget):
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(pal["track"]))
         p.drawRoundedRect(r, 3, 3)
+        if self.busy:
+            self._paint_busy(p, r, pal)
+            return
         if self.value <= 0:
             return
         if self.state == "failed":
@@ -382,6 +411,26 @@ class ProgressLine(QWidget):
         gradient.setColorAt(1, b)
         p.setBrush(gradient)
         p.drawRoundedRect(QRectF(r.left(), r.top(), max(r.width() * self.value, 6), r.height()), 3, 3)
+
+    def _paint_busy(self, p: QPainter, r: QRectF, pal: dict):
+        # Ease back and forth across the track, ~1.6 s per sweep.
+        t = ((time.monotonic() - self._busy_started) / 1.6) % 2.0
+        t = t if t <= 1 else 2 - t
+        t = t * t * (3 - 2 * t)  # smoothstep
+        seg = r.width() * self.SEGMENT
+        x = r.left() + (r.width() - seg) * t
+        gradient = QLinearGradient(x, 0, x + seg, 0)
+        a, b = QColor(pal["accent1"]), QColor(pal["accent2"])
+        edge = QColor(a)
+        edge.setAlpha(0)
+        gradient.setColorAt(0, edge)
+        gradient.setColorAt(0.3, a)
+        gradient.setColorAt(0.7, b)
+        end = QColor(b)
+        end.setAlpha(0)
+        gradient.setColorAt(1, end)
+        p.setBrush(gradient)
+        p.drawRoundedRect(QRectF(x, r.top(), seg, r.height()), 3, 3)
 
 
 # ------------------------------------------------------------------ widget
