@@ -10,10 +10,10 @@ import tomllib
 from pathlib import Path
 
 from qtpy.QtCore import QEvent, QProcess, QProcessEnvironment, QSettings, Qt, QUrl
-from qtpy.QtGui import QAction, QColor, QPalette, QDesktopServices, QFont, QFontDatabase, QKeySequence, QTextCursor
+from qtpy.QtGui import QAction, QActionGroup, QColor, QPalette, QDesktopServices, QFont, QFontDatabase, QKeySequence, QTextCursor
 from qtpy.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
-    QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QSplitter,
+    QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSplitter,
     QTabWidget, QTextBrowser, QToolBar, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -21,7 +21,7 @@ from . import __version__
 from . import manifest as m
 from .build_monitor import BuildMonitor
 from .highlighter import DARK_STYLE, LIGHT_STYLE, PygmentsHighlighter, is_dark
-from .graph_view import KIND_LABELS, NODE_COLORS, DependencyGraphView
+from .graph_view import EDGE_STYLES, KIND_LABELS, LAYOUTS, THEME_CHOICES, DependencyGraphView
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
 
@@ -76,6 +76,14 @@ class MainWindow(QMainWindow):
         reload_action.triggered.connect(self.reload)
         toolbar.addAction(reload_action)
         toolbar.addSeparator()
+        file_menu = self.menuBar().addMenu("&File")
+        file_menu.addAction(open_action)
+        file_menu.addAction(reload_action)
+        file_menu.addSeparator()
+        quit_action = QAction("Quit", self)
+        quit_action.setShortcut(QKeySequence.Quit)
+        quit_action.triggered.connect(self.close)
+        file_menu.addAction(quit_action)
         self.path_label = QLabel("No project loaded")
         self.path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         toolbar.addWidget(self.path_label)
@@ -138,17 +146,26 @@ class MainWindow(QMainWindow):
         self.graph_view.package_selected.connect(self.show_package)
         self.graph_view.package_activated.connect(self.open_package_manifest)
 
+        self.graph_menu = self._build_graph_menu()
+        self.menuBar().addMenu(self.graph_menu)
+
         graph_buttons = QHBoxLayout()
+        style_button = QToolButton()
+        style_button.setText("Style")
+        style_button.setMenu(self.graph_menu)
+        style_button.setPopupMode(QToolButton.InstantPopup)
+        graph_buttons.addWidget(style_button)
         for text, slot in [("Fit", self.graph_view.fit),
                            ("Zoom +", lambda: self.graph_view.zoom(1.25)),
                            ("Zoom −", lambda: self.graph_view.zoom(0.8)),
-                           ("Re-layout", self._relayout),
+                           ("Re-layout", self.graph_view.relayout),
                            ("Export image…", self.export_graph)]:
             b = QPushButton(text)
             b.clicked.connect(slot)
             graph_buttons.addWidget(b)
         graph_buttons.addStretch(1)
-        graph_buttons.addWidget(self._legend())
+        self.legend = QLabel()
+        self.legend.setWordWrap(True)
 
         self.details = QTextBrowser()
         self.details.setOpenLinks(False)
@@ -164,6 +181,7 @@ class MainWindow(QMainWindow):
         gl = QVBoxLayout(graph_tab)
         gl.addLayout(graph_buttons)
         gl.addWidget(graph_split, 1)
+        gl.addWidget(self.legend)
 
         mono = QFontDatabase.systemFont(QFontDatabase.FixedFont)
         self.manifest_view = QPlainTextEdit()
@@ -227,13 +245,62 @@ class MainWindow(QMainWindow):
     def changeEvent(self, event):
         if event.type() == QEvent.PaletteChange and hasattr(self, "toml_highlighter"):
             self._apply_highlight_style()
+            self.graph_view.refresh_theme()  # "Auto" theme follows the system
+            self._update_legend()
         super().changeEvent(event)
 
-    def _legend(self) -> QLabel:
-        parts = [f'<span style="background:{NODE_COLORS[k]}; color:#1b1b1b">&nbsp;{KIND_LABELS[k]}&nbsp;</span>'
-                 for k in (m.ROOT, m.GIT, m.PATH, m.REGISTRY, m.META, m.MISSING)]
-        label = QLabel(" ".join(parts) + " &nbsp;<i>dashed edge = dev dependency</i>")
-        return label
+    def _build_graph_menu(self) -> QMenu:
+        """Graph menu: layout, theme and edge style choices (radio groups)."""
+        menu = QMenu("&Graph", self)
+        self.graph_style_actions: dict[str, dict[str, QAction]] = {}
+        for title, key, choices, setter in [
+            ("Layout", "layout", LAYOUTS, self._set_graph_layout),
+            ("Theme", "theme", THEME_CHOICES, self._set_graph_theme),
+            ("Edges", "edges", EDGE_STYLES, self._set_graph_edges),
+        ]:
+            sub = menu.addMenu(title)
+            group = QActionGroup(self)
+            group.setExclusive(True)
+            self.graph_style_actions[key] = {}
+            for value, label in choices.items():
+                action = QAction(label, self, checkable=True)
+                action.triggered.connect(lambda _=False, v=value, f=setter: f(v))
+                group.addAction(action)
+                sub.addAction(action)
+                self.graph_style_actions[key][value] = action
+        menu.addSeparator()
+        for text, slot, shortcut in [("Fit to window", lambda: self.graph_view.fit(), "Ctrl+0"),
+                                     ("Re-layout", lambda: self.graph_view.relayout(), "Ctrl+L"),
+                                     ("Export image…", self.export_graph, "Ctrl+E")]:
+            action = QAction(text, self)
+            action.setShortcut(QKeySequence(shortcut))
+            action.triggered.connect(slot)
+            menu.addAction(action)
+        return menu
+
+    def _check_style_action(self, key: str, value: str):
+        action = self.graph_style_actions[key].get(value)
+        if action:
+            action.setChecked(True)
+
+    def _set_graph_layout(self, value: str):
+        self.graph_view.set_layout(value)
+        self._check_style_action("layout", value)
+        self.settings.setValue("graph_layout", value)
+
+    def _set_graph_theme(self, value: str):
+        self.graph_view.set_theme(value)
+        self._check_style_action("theme", value)
+        self.settings.setValue("graph_theme", value)
+        self._update_legend()
+
+    def _set_graph_edges(self, value: str):
+        self.graph_view.set_edge_style(value)
+        self._check_style_action("edges", value)
+        self.settings.setValue("graph_edges", value)
+
+    def _update_legend(self):
+        self.legend.setText(self.graph_view.legend_html())
 
     def _set_project_enabled(self, enabled: bool):
         running = self.process is not None
@@ -252,6 +319,9 @@ class MainWindow(QMainWindow):
         self.extra_edit.setText(s.value("extra", ""))
         self.fpm_edit.setText(s.value("fpm", ""))
         self.verbose_check.setChecked(s.value("verbose", False, type=bool))
+        self._set_graph_layout(s.value("graph_layout", next(iter(LAYOUTS))))
+        self._set_graph_theme(s.value("graph_theme", next(iter(THEME_CHOICES))))
+        self._set_graph_edges(s.value("graph_edges", next(iter(EDGE_STYLES))))
 
     def closeEvent(self, event):
         if self.process is not None:
@@ -321,10 +391,6 @@ class MainWindow(QMainWindow):
         if missing:
             msg += f" ({missing} not downloaded — run Update deps or Build)"
         self.statusBar().showMessage(msg)
-
-    def _relayout(self):
-        if self.graph:
-            self.graph_view.set_graph(self.graph)
 
     def show_package(self, name: str):
         if not self.graph or name not in self.graph.packages:
