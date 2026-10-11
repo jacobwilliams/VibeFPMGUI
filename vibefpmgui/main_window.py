@@ -149,8 +149,11 @@ class ScrollingTabBar(QTabBar):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, manifest_path: str | None = None):
+    def __init__(self, manifest_path: str | None = None, remember_last: bool = True):
+        """``remember_last`` False: an extra window (File → Open in New Window)
+        doesn't become the project reopened at the next start."""
         super().__init__()
+        self.remember_last = remember_last
         self.setWindowTitle("VibeFPMGUI")
         self.resize(1300, 850)
         self.settings = make_settings()
@@ -196,8 +199,13 @@ class MainWindow(QMainWindow):
         reload_action = QAction("Reload", self)
         reload_action.setShortcut(QKeySequence("Ctrl+Shift+R"))  # Ctrl/⌘+R is Run
         reload_action.triggered.connect(self.reload)
+        open_new_action = QAction("Open fpm.toml in New Window…", self)
+        open_new_action.setShortcut(QKeySequence("Ctrl+Shift+O"))
+        open_new_action.setStatusTip("Open another project in its own window, keeping this one open")
+        open_new_action.triggered.connect(lambda: self.browse(new_window=True))
         file_menu = self.menuBar().addMenu("&File")
         file_menu.addAction(open_action)
+        file_menu.addAction(open_new_action)
         self.recent_menu = file_menu.addMenu("Recent Manifests")
         self.recent_menu.aboutToShow.connect(self._fill_recent_menu)
         self.recent_menu.setToolTipsVisible(True)
@@ -845,12 +853,39 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     # ------------------------------------------------------------- project
-    def browse(self):
+    def browse(self, new_window: bool = False):
         start = str(self.manifest_path.parent) if self.manifest_path else str(Path.home())
         filename, _ = QFileDialog.getOpenFileName(
-            self, "Open fpm manifest", start, "fpm manifest (fpm.toml);;TOML files (*.toml);;All files (*)")
+            self, "Open fpm manifest in a new window" if new_window else "Open fpm manifest", start,
+            "fpm manifest (fpm.toml);;TOML files (*.toml);;All files (*)")
         if filename:
-            self.open_manifest(filename)
+            if new_window:
+                self.open_in_new_window(filename)
+            else:
+                self.open_manifest(filename)
+
+    def open_in_new_window(self, manifest: str | Path):
+        """Open a project in another VibeFPMGUI window (a separate process, so
+        each window has its own fpm runs, language server and so on), keeping
+        this one as it is."""
+        manifest = Path(manifest).resolve()
+        process = QProcess()
+        process.setProgram(sys.executable)
+        process.setArguments(["-m", "vibefpmgui", "--new-window", str(manifest)])
+        process.setWorkingDirectory(str(manifest.parent))
+        # Make sure the new process finds this package even when it isn't
+        # installed (run from a checkout, e.g. "pixi run start").
+        env = QProcessEnvironment.systemEnvironment()
+        package_root = str(Path(__file__).resolve().parent.parent)
+        env.insert("PYTHONPATH", os.pathsep.join(p for p in (package_root, env.value("PYTHONPATH")) if p))
+        process.setProcessEnvironment(env)
+        ok = process.startDetached()
+        ok = ok[0] if isinstance(ok, tuple) else ok  # (PySide returns (ok, pid))
+        if ok:
+            self.statusBar().showMessage(f"Opening {manifest.parent.name} in a new window…", 5000)
+        else:
+            QMessageBox.warning(self, "Open in New Window",
+                                f"Could not start a new VibeFPMGUI window for {manifest}.")
 
     def _browse_fpm(self):
         filename, _ = QFileDialog.getOpenFileName(self, "Select fpm executable")
@@ -876,7 +911,8 @@ class MainWindow(QMainWindow):
                 self.process.waitForFinished(3000)
             self._clear_run_panels()
         self.manifest_path = path
-        self.settings.setValue("last_manifest", str(self.manifest_path))
+        if self.remember_last:
+            self.settings.setValue("last_manifest", str(self.manifest_path))
         self._remember_manifest(self.manifest_path)
         self.settings.sync()  # write now, so it survives the app being killed
         self.setWindowFilePath(str(self.manifest_path))  # macOS title-bar proxy icon
@@ -1346,8 +1382,12 @@ class MainWindow(QMainWindow):
         add("Show in Project Files", lambda: self._show_package_files(pkg), on_disk)
         add(reveal_label(), lambda: reveal_in_file_manager(str(pkg.directory)), on_disk)
         if not is_root:
-            add("Open as Project", lambda: self.open_manifest(pkg.manifest), pkg.manifest and pkg.manifest.is_file(),
-                "Open this package's fpm.toml as the project (e.g. to work on a local library)")
+            has_manifest = pkg.manifest and pkg.manifest.is_file()
+            add("Open as Project in New Window", lambda: self.open_in_new_window(pkg.manifest), has_manifest,
+                "Open this package as a project in its own window (e.g. to work on a local "
+                "library), keeping this project open")
+            add("Open as Project Here", lambda: self.open_manifest(pkg.manifest), has_manifest,
+                "Replace the project in this window with this package")
         links = []
         if pkg.git and (url := repo_web_url(pkg.git)):
             links.append(("Open Repository", url))
@@ -2864,6 +2904,7 @@ def main(argv: list[str] | None = None) -> int:
     path = next((a for a in argv[1:] if not a.startswith("-")), None)
     if path and Path(path).is_dir():
         path = str(Path(path) / "fpm.toml")
-    window = MainWindow(path)
+    # --new-window: opened from another window, so not the project to reopen next time
+    window = MainWindow(path, remember_last="--new-window" not in argv[1:])
     window.show()
     return app.exec()

@@ -17,7 +17,10 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   ones are greyed out); the last one is reopened at startup. Each project
   remembers the files open in the editor (with their cursor and scroll
   positions), the tab in front and the folders open in the *Project files*
-  tree, and restores them when it is opened again.
+  tree, and restores them when it is opened again. *File → Open fpm.toml in
+  New Window…* (⇧⌘O) opens another project in its own window (a separate
+  process, so each has its own builds and language server); such windows
+  don't change which project is reopened at startup.
 * *Features* menu: tick any of the features declared in the project's
   `[features]` table to build/run/test with `--features …` (remembered per
   project). The *Profile* list also offers the project's own `[profiles]`;
@@ -188,8 +191,9 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
     details list who asks for what and which one fpm uses (the declaration
     closest to the project; fpm doesn't warn about the others).
   * Right-click a package for its menu: open its `fpm.toml`, show it in
-    *Project Files* or Finder, *Open as Project* (e.g. to work on a local
-    library), open its repository, checked-out commit or homepage, *Check for
+    *Project Files* or Finder, *Open as Project in New Window* (e.g. to work
+    on a local library while keeping the project open; *Open as Project Here*
+    replaces it instead), open its repository, checked-out commit or homepage, *Check for
     Updates* or *Update This Dependency* (`fpm update <name>`), *Copy
     Dependency Line* (its declaration, ready to paste into another
     `fpm.toml`), and *Why Is This Here?*, which highlights every chain of
