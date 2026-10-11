@@ -16,7 +16,7 @@ fpm only echoes compiler output when a compile fails; otherwise it is kept in
 ``build/<compiler>_<hash>/<package>/<object>.o.log``, so that log is read when
 a file finishes to pick up its warnings.
 
-The table is drawn by :class:`RowDelegate`: status badges (with a spinner
+The table is drawn by `RowDelegate`: status badges (with a spinner
 while compiling), package tags, and per-file timing bars scaled to the slowest
 file.  The summary chips above it filter the table by status.
 """
@@ -123,7 +123,7 @@ class Diagnostic(NamedTuple):
 
 
 class DiagnosticParser:
-    """Turns compiler output, one line at a time, into :class:`Diagnostic`."""
+    """Turns compiler output, one line at a time, into `Diagnostic`."""
 
     def __init__(self):
         self._location: tuple[str, int] | None = None  # gfortran prints the severity later
@@ -279,7 +279,7 @@ def app_is_light() -> bool:
 
 
 class RowDelegate(QStyledItemDelegate):
-    """Paints every cell of the build table from its :class:`Target`."""
+    """Paints every cell of the build table from its `Target`."""
 
     def __init__(self, monitor: BuildMonitor):
         super().__init__(monitor.table)
@@ -489,7 +489,7 @@ class SortableTable:
 
 class ProgressLine(QWidget):
     """Thin rounded progress bar with a gradient fill. In "busy" mode
-    (:meth:`set_busy`) it shows a segment sliding back and forth instead of
+    (`set_busy`) it shows a segment sliding back and forth instead of
     a fill, for work whose length isn't known."""
 
     SEGMENT = 0.28  # busy segment width, as a fraction of the bar

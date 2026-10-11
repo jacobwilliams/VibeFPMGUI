@@ -110,7 +110,7 @@ def _category_rank(category: str) -> int:
 
 class ReviewMonitor(SortableTable, QWidget):
     """Findings table with chips, a progress line and the model's summary.
-    Clicking a finding emits :attr:`finding_selected` with its line."""
+    Clicking a finding emits `finding_selected` with its line."""
 
     COLUMNS: ClassVar[list[str]] = ["LINE", "CATEGORY", "COMMENT"]
     finding_selected = Signal(int)

@@ -31,8 +31,13 @@ jobs:
     # - name: Run tests
     #   run: pixi run test
 
-    # - name: Build documentation
-    #   run: pixi run documentation
+    # API docs from the docstrings (pdoc), into web/api so they're deployed
+    # with the website. pdoc imports the package, which imports Qt: no display
+    # is needed, but tell Qt not to look for one.
+    - name: Build API documentation
+      run: pixi run docs
+      env:
+        QT_QPA_PLATFORM: offscreen
 
     - name: Deploy Documentation
       if: github.ref == 'refs/heads/master'

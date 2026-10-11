@@ -545,7 +545,7 @@ LAYOUT_FUNCTIONS = {
 
 # ------------------------------------------------------------------- view
 class DependencyGraphView(QWidget):
-    """Shows a :class:`manifest.DependencyGraph`. Wheel zooms, drag pans,
+    """Shows a `vibefpmgui.manifest.DependencyGraph`. Wheel zooms, drag pans,
     nodes can be dragged, click selects (highlighting what the package
     depends on and what uses it), double-click opens."""
 

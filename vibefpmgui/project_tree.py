@@ -203,7 +203,7 @@ class _Filter(QSortFilterProxyModel):
 
 
 class ProjectTree(QWidget):
-    """The file tree. Emits :attr:`open_requested` with a file path."""
+    """The file tree. Emits `open_requested` with a file path."""
 
     open_requested = Signal(str)
     compile_command_requested = Signal(str)
@@ -357,7 +357,7 @@ class ProjectTree(QWidget):
 
     def _fill(self, parent: QStandardItem, directory: Path, other_packages: set[Path]):
         """List one folder: subfolders first, then files. Subfolders are
-        loaded when opened (see :meth:`_load`), so big trees stay fast."""
+        loaded when opened (see `_load`), so big trees stay fast."""
         parent.setData(str(directory), PATH_ROLE)
         self._load(parent)
 

@@ -3,7 +3,7 @@
 A header line (the kind as a colored badge, like the outline's, then the
 name and what it is), fortitude's messages for that spot, the language
 server's description (declaration or manual page, see
-:func:`.lsp.hover_info`), and a footer with the related shortcuts.
+`vibefpmgui.lsp.hover_info`), and a footer with the related shortcuts.
 """
 
 from __future__ import annotations

@@ -8,6 +8,8 @@ version = "0.0.3"
 [tasks]
 start = "python -m vibefpmgui"
 demo = "python -m vibefpmgui examples/demo"
+docs = "pdoc -o web/api vibefpmgui"       # API docs (HTML) from the docstrings, into the website
+docs-serve = "pdoc vibefpmgui"            # the same, live in the browser while you edit
 
 [dependencies]
 gfortran = "15.*"
@@ -24,6 +26,7 @@ ruff = ">=0.17.0,<0.18"
 lfortran = ">=0.67.0,<0.68"
 fprettify = ">=0.3.7,<0.4"
 fortls = ">=3.2.2,<4"
+pdoc = ">=16.0.0,<17"
 
 [pypi-dependencies]
 fortitude-lint = ">=0.9.2, <0.10"

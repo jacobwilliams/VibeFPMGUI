@@ -8,12 +8,12 @@ sets are never removed.
 
 The hashes can't be turned back into settings, so the GUI records, for every
 build it runs, which folders that build created or changed together with the
-settings used (:class:`ConfigRecords`). Folders it has no record for (built
+settings used (`ConfigRecords`). Folders it has no record for (built
 before this feature, or by fpm on the command line) are grouped by when they
 were last written.
 
 ``build/compile_commands.json`` (the exact compiler command for each source
-file of the most recent build) is read by :func:`read_compile_commands`.
+file of the most recent build) is read by `read_compile_commands`.
 """
 
 from __future__ import annotations

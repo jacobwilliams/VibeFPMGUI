@@ -1,10 +1,10 @@
 """A small built-in code editor: line numbers, syntax highlighting (Pygments,
 chosen by file extension), find/replace, go to line, and compiler warning /
-error markers in the gutter, fortitude lint findings (see :mod:`.lint`), and
+error markers in the gutter, fortitude lint findings (see `vibefpmgui.lint`), and
 for Fortran files the language server's hover, go to definition and outline
-(see :mod:`.lsp`).
+(see `vibefpmgui.lsp`).
 
-:class:`EditorTab` wraps a :class:`CodeEditor` with a find bar and a status
+`EditorTab` wraps a `CodeEditor` with a find bar and a status
 line, and takes care of loading and saving the file (keeping its encoding and
 line endings) and of noticing when it changes on disk.
 """

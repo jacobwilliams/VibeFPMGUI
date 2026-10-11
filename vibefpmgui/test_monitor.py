@@ -1,7 +1,7 @@
 """Live table of the tests ``fpm test`` runs, with an estimated progress bar.
 
 The GUI first runs ``fpm test --list`` to learn the test names, then runs the
-tests with ``--runner`` pointing at :mod:`vibefpmgui.test_runner`, which
+tests with ``--runner`` pointing at `vibefpmgui.test_runner`, which
 prints a marker before and after each test (fpm runs them one at a time)::
 
     @@vibefpm:start:check_fast@@
@@ -228,7 +228,7 @@ STATUS_SORT = {FAILED_T: 0, RUNNING: 1, QUEUED: 2, NOT_RUN: 3, PASSED: 4}
 
 class TestMonitor(SortableTable, QWidget):
     """Header with filter chips, progress bar and a table of tests. Clicking a
-    test emits :attr:`test_selected` with its name ("" to show all output)."""
+    test emits `test_selected` with its name ("" to show all output)."""
 
     COLUMNS: ClassVar[list[str]] = ["TEST", "STATUS", "TIME"]
     test_selected = Signal(str)

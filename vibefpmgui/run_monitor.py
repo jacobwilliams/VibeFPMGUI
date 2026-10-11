@@ -1,7 +1,7 @@
 """The "Run" tab: progress of programs started with Run.
 
 It is the Tests panel with different wording: programs are launched through
-the same marker wrapper (:mod:`vibefpmgui.test_runner`), so each one's start,
+the same marker wrapper (`vibefpmgui.test_runner`), so each one's start,
 end, exit code and output are known, and run times are remembered to
 estimate the next run.
 """

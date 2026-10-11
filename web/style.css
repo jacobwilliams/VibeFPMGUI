@@ -84,6 +84,12 @@ code {
   transition: transform 0.2s, background-color 0.3s;
 }
 .theme-toggle:hover { transform: rotate(-12deg); }
+/* "API" docs button: icon + label, styled like the icon buttons */
+.docs-link { width: auto; padding: 0 11px; gap: 6px; display: inline-flex; align-items: center;
+  color: var(--text); font-size: 0.86rem; font-weight: 600; margin-right: -12px; }
+.docs-link svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round; }
+.docs-link:hover { text-decoration: none; transform: translateY(-1px); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 .github-link { margin-right: -12px; }  /* (closer to the theme button than the nav gap) */
 .github-link:hover { text-decoration: none; transform: translateY(-1px); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 .github-link svg { width: 19px; height: 19px; fill: currentColor; }
@@ -301,7 +307,7 @@ p { margin: 0 0 14px; }
   .window.hero-shot { margin-top: 44px; }
   .ribbon { top: 43px; right: -74px; padding: 5px 0; font-size: 0.66rem; }
   .nav-links { display: none; }
-  .github-link { margin-left: auto; }
+  .docs-link { margin-left: auto; }
   .hero { padding-top: 56px; }
   .section { padding: 64px 0; }
   .cards, .pair, .tree-pair, .before-after { grid-template-columns: 1fr; }

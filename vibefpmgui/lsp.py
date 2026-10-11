@@ -4,7 +4,7 @@
 sources and answers questions about them: what a name is (hover), where it
 is defined, the outline of a file and the symbols in the whole project. It
 runs as a background process speaking the Language Server Protocol (JSON
-messages over stdin/stdout); :class:`LspClient` handles that with a QProcess,
+messages over stdin/stdout); `LspClient` handles that with a QProcess,
 so the editor never waits for it.
 
 Open editor tabs send their text to the server (``didOpen``/``didChange``),

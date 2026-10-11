@@ -10,11 +10,11 @@ The model is asked to answer with one finding per line::
     LINE 12: bug: the loop never updates i
     LINE 30-34: style: use an assumed-shape array instead of (*)
 
-followed by ``SUMMARY: ...``. :func:`parse_findings` reads those lines back
+followed by ``SUMMARY: ...``. `parse_findings` reads those lines back
 (tolerating the small variations models produce), so findings can be listed
 and marked in the editor's gutter.
 
-The work happens in a :class:`ReviewWorker` on a background thread; the
+The work happens in a `ReviewWorker` on a background thread; the
 ``ollama`` Python package is optional and imported lazily.
 """
 
@@ -141,7 +141,7 @@ class RepeatGuard:
     """Spots a model stuck in a loop (writing a line it already wrote).
 
     Text is passed on a line at a time, so a repeated line can be held back:
-    :meth:`feed` returns the text that's safe to show and whether to stop.
+    `feed` returns the text that's safe to show and whether to stop.
     """
 
     MIN_LENGTH = 12  # short lines ("", "```", "SUMMARY:") may legitimately repeat

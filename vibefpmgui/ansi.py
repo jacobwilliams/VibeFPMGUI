@@ -2,7 +2,7 @@
 
 Some compilers color their messages even when writing to a file or pipe
 (lfortran always does, e.g. ``\\x1b[0;31;1msemantic error\\x1b[0;0m``).
-:class:`AnsiWriter` shows those colors in a text widget; :func:`strip`
+`AnsiWriter` shows those colors in a text widget; `strip`
 removes them for parsing.
 """
 
