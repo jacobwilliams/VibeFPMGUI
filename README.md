@@ -105,6 +105,8 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
     declaration and documentation.
   * *Find References* (⇧F12) lists every use of the name at the cursor in
     the *References* tab, grouped by file; click one to go there.
+  * Go to Definition, Find References and Rename Symbol are also at the top
+    of the editor's right-click menu, for the name you right-click.
   * *Rename Symbol…* (F2) renames a module, procedure, type or variable
     everywhere it is used, after a preview of every file and line it will
     change. Files open in the editor are changed there (unsaved; Undo

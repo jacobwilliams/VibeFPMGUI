@@ -27,10 +27,12 @@ from qtpy.QtCore import (
     Signal,
 )
 from qtpy.QtGui import (
+    QAction,
     QColor,
     QCursor,
     QFont,
     QFontDatabase,
+    QKeySequence,
     QPainter,
     QPalette,
     QTextCharFormat,
@@ -204,7 +206,9 @@ class CodeEditor(QPlainTextEdit):
     """Plain-text editor with a line-number gutter, current-line highlight,
     auto-indent and soft tabs."""
 
-    definition_requested = Signal()  # ⌘/Ctrl-click on a name
+    definition_requested = Signal()  # ⌘/Ctrl-click on a name (or the right-click menu)
+    references_requested = Signal()  # right-click menu → Find References
+    rename_requested = Signal()      # right-click menu → Rename Symbol…
     typed = Signal(str)                # a key that changed the text (after it did; "\b" = Backspace)
     completion_chosen = Signal(object)  # Enter/Tab in the completion list
 
@@ -415,6 +419,37 @@ class CodeEditor(QPlainTextEdit):
             self.definition_requested.emit()
             return
         super().mousePressEvent(event)
+
+    def contextMenuEvent(self, event):
+        """The usual Cut/Copy/Paste menu, plus the language server's commands
+        for the name that was right-clicked (when one is attached)."""
+        menu = self.createStandardContextMenu(event.pos())
+        if self.hover_provider is not None:
+            on_name = False
+            if event.reason() == event.Reason.Mouse:
+                point = event.pos()  # (already in viewport coordinates)
+                on_name = self.word_at(point) is not None
+                if on_name:  # the commands act on the name at the cursor
+                    cursor = self.cursorForPosition(point)
+                    if not (self.textCursor().selectionStart() <= cursor.position()
+                            <= self.textCursor().selectionEnd() and self.textCursor().hasSelection()):
+                        self.setTextCursor(cursor)
+            else:  # opened from the keyboard: the name at the cursor
+                rect = self.cursorRect()
+                on_name = self.word_at(rect.center()) is not None
+            first = menu.actions()[0] if menu.actions() else None
+            for text, keys, signal in (("Go to Definition", "F12", self.definition_requested),
+                                       ("Find References", "Shift+F12", self.references_requested),
+                                       ("Rename Symbol…", "F2", self.rename_requested)):
+                action = QAction(text, menu)
+                action.setShortcut(QKeySequence(keys))  # shown in the menu; the Edit menu's work
+                action.setShortcutContext(Qt.WidgetShortcut)
+                action.setEnabled(on_name)
+                action.triggered.connect(signal.emit)
+                menu.insertAction(first, action)
+            menu.insertSeparator(first)
+        menu.exec(event.globalPos())
+        menu.deleteLater()
 
     def mouseMoveEvent(self, event):
         super().mouseMoveEvent(event)
@@ -819,6 +854,8 @@ class EditorTab(QWidget):
         self._lsp_timer.setInterval(LSP_SYNC_MS)
         self._lsp_timer.timeout.connect(self._lsp_sync)
         self.editor.definition_requested.connect(self.go_to_definition)
+        self.editor.references_requested.connect(self.find_references)
+        self.editor.rename_requested.connect(self.rename_symbol)
         self._complete_timer = QTimer(self)
         self._complete_timer.setSingleShot(True)
         self._complete_timer.setInterval(COMPLETE_MS)
@@ -898,10 +935,12 @@ class EditorTab(QWidget):
         if self.lsp is None:
             return
         self._flush_lsp()
-        cursor = self.editor.textCursor()
-        line, column = cursor.blockNumber() + 1, cursor.positionInBlock()
-        rect = self.editor.cursorRect(cursor)
-        word = self.editor.word_at(QPoint(rect.center().x(), rect.center().y()))
+        word = self._name_at_cursor()
+        if word is not None:
+            line, column = word[0], word[1]
+        else:
+            cursor = self.editor.textCursor()
+            line, column = cursor.blockNumber() + 1, cursor.positionInBlock()
 
         def answered(result):
             found = lsp_mod.first_location(result)
@@ -1076,8 +1115,15 @@ class EditorTab(QWidget):
 
     # ------------------------------------------------- references / rename
     def _name_at_cursor(self) -> tuple[int, int, str] | None:
-        """(1-based line, start column, name) of the name at the cursor."""
+        """(1-based line, start column, name) of the name at the cursor, or
+        of the selected text if that is a single name."""
         cursor = self.editor.textCursor()
+        if cursor.hasSelection():
+            selected = cursor.selectedText()
+            if re.fullmatch(r"[A-Za-z_]\w*", selected):
+                start = QTextCursor(self.editor.document())
+                start.setPosition(cursor.selectionStart())
+                return start.blockNumber() + 1, start.positionInBlock(), selected
         text = cursor.block().text()
         i = cursor.positionInBlock()
         if not (i < len(text) and WORD_RE.match(text[i])):
