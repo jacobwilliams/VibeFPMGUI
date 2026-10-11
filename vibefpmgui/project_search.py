@@ -8,11 +8,10 @@ leaves out fpm's ``build`` folder, ``.git`` and compiled files; files ignored
 by git and hidden files only with *Ignored files* checked.
 
 Results are grouped by file in the *Search* tab, each line in the colors
-the editor would give it; click one to open the file there. Replacing changes open files in the editor (not saved: Undo reverts
-it) and saves the others, like *Rename Symbol*.
+the editor would give it; click one to open the file there. Replacing
+changes open files in the editor (not saved: Undo reverts it) and saves the
+others, like *Rename Symbol*.
 """
-
-from __future__ import annotations
 
 import fnmatch
 import os
@@ -376,7 +375,7 @@ class _ResultDelegate(QStyledItemDelegate):
     number and the line, with the match highlighted, or the replacement
     shown when replacing)."""
 
-    def __init__(self, panel: SearchPanel):
+    def __init__(self, panel: "SearchPanel"):
         super().__init__(panel)
         self.panel = panel
 

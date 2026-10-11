@@ -7,8 +7,6 @@ It runs in the folder of the file, so it finds the project's settings
 fortitude only understands free-form Fortran, so other files are skipped.
 """
 
-from __future__ import annotations
-
 import json
 import shutil
 import subprocess
