@@ -69,7 +69,10 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   highlighting chosen by file extension, line numbers, find/replace, go to
   line, undo/redo and save. Files opened from the Build tab show the last
   build's warnings and errors as markers in the gutter (hover for the
-  message) and open at the first one. Saving the project's `fpm.toml`
+  message) and open at the first one. A bar at the gutter's edge marks
+  changed lines: amber for changes not saved yet, green for lines changed
+  since the file was opened but saved; a small triangle marks where lines
+  were deleted (hover them for details). Saving the project's `fpm.toml`
   reloads the project. *View → Open Files in Built-in Editor* switches back
   to your default application. *View → Syntax Colors* picks any installed
   Pygments style (listed as light or dark) for the editor and `fpm.toml`;

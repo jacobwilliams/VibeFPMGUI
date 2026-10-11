@@ -11,6 +11,7 @@ line endings) and of noticing when it changes on disk.
 
 from __future__ import annotations
 
+import difflib
 import html
 import re
 from collections.abc import Callable
@@ -19,8 +20,10 @@ from pathlib import Path
 from qtpy.QtCore import (
     QFileSystemWatcher,
     QPoint,
+    QPointF,
     QProcess,
     QRect,
+    QRectF,
     QSize,
     Qt,
     QTimer,
@@ -35,6 +38,7 @@ from qtpy.QtGui import (
     QKeySequence,
     QPainter,
     QPalette,
+    QPolygonF,
     QTextCharFormat,
     QTextCursor,
     QTextDocument,
@@ -92,6 +96,41 @@ MODIFIER_KEYS = {Qt.Key_Shift, Qt.Key_Control, Qt.Key_Meta, Qt.Key_Alt, Qt.Key_A
 def worst_severity(notes: list[tuple[str, str]]) -> str:
     return min((s for s, _ in notes),
                key=lambda s: MARKER_PRIORITY.index(s) if s in MARKER_PRIORITY else len(MARKER_PRIORITY))
+
+
+# Change bars in the gutter: lines changed and not saved yet, and lines
+# changed since the file was opened but saved.
+CHANGE_COLORS = {"unsaved": "#f59f00", "saved": "#40c057"}
+CHANGE_DIFF_MAX_LINES = 30_000  # (bigger files: no change bars, the diff would be slow)
+
+
+def line_changes(opened: str, saved: str, current: str) -> tuple[dict[int, str], dict[int, tuple[str, int]]]:
+    """Which lines of ``current`` differ from the saved text ("unsaved") or,
+    if not, from the text as opened ("saved"); and where lines were deleted:
+    {line: (kind, count)}, meaning removed just above that line (line count
+    + 1: at the end). Lines are 1-based."""
+    lines = current.split("\n")
+    if len(lines) > CHANGE_DIFF_MAX_LINES:
+        return {}, {}
+
+    def diff(base: str):
+        changed: set[int] = set()
+        deleted: dict[int, int] = {}
+        matcher = difflib.SequenceMatcher(None, base.split("\n"), lines, autojunk=False)
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag in ("replace", "insert"):
+                changed.update(range(j1 + 1, j2 + 1))
+            elif tag == "delete":
+                deleted[j1 + 1] = i2 - i1
+        return changed, deleted
+
+    unsaved, unsaved_deleted = diff(saved)
+    since_open, open_deleted = (unsaved, unsaved_deleted) if opened == saved else diff(opened)
+    marks = {line: "saved" for line in since_open - unsaved}
+    marks.update({line: "unsaved" for line in unsaved})
+    deletions = {line: ("saved", n) for line, n in open_deleted.items() if line not in unsaved_deleted}
+    deletions.update({line: ("unsaved", n) for line, n in unsaved_deleted.items()})
+    return marks, deletions
 
 
 class HoverPopup(QFrame):
@@ -210,6 +249,10 @@ class LineNumberArea(QWidget):
     def event(self, event):
         if event.type() == event.Type.ToolTip:
             line = self.editor.line_at_y(event.pos().y())
+            change_tip = self._change_tip(event.pos(), line)
+            if change_tip:  # over a change bar or a deletion marker
+                QToolTip.showText(event.globalPos(), change_tip, self)
+                return True
             notes = self.editor.markers.get(line)
             issues = [i for i in self.editor.lint_issues if i.line == line]
             popup = self.editor.hover_popup
@@ -224,6 +267,27 @@ class LineNumberArea(QWidget):
                 QToolTip.hideText()
             return True
         return super().event(event)
+
+    def _change_tip(self, pos, line: int) -> str:
+        """Tooltip for the change bars at the gutter's right edge."""
+        if pos.x() < self.width() - 9:
+            return ""
+        editor = self.editor
+        block = editor.document().findBlockByNumber(line - 1)
+        if block.isValid():
+            top = editor.blockBoundingGeometry(block).translated(editor.contentOffset()).top()
+            bottom = top + editor.blockBoundingRect(block).height()
+            for deleted_at, y in ((line, top), (line + 1, bottom)):
+                if deleted_at in editor.deletions and abs(pos.y() - y) <= 5:
+                    kind, count = editor.deletions[deleted_at]
+                    what = f"{count} line{'s' * (count != 1)} deleted here"
+                    return what + (" — not saved yet" if kind == "unsaved" else " (saved)")
+        change = editor.change_marks.get(line)
+        if change == "unsaved":
+            return "Changed — not saved yet"
+        if change == "saved":
+            return "Changed since the file was opened (saved)"
+        return ""
 
     def mouseMoveEvent(self, event):
         popup = self.editor.hover_popup
@@ -269,6 +333,8 @@ class CodeEditor(QPlainTextEdit):
         for bar in (self.verticalScrollBar(), self.horizontalScrollBar()):
             bar.valueChanged.connect(self.hide_popups)
         self.markers: dict[int, list[tuple[str, str]]] = {}  # line -> [(severity, message)]
+        self.change_marks: dict[int, str] = {}                  # line -> "unsaved" / "saved"
+        self.deletions: dict[int, tuple[str, int]] = {}          # line -> (kind, lines deleted above it)
         self.find_selections: list[QTextEdit.ExtraSelection] = []
         self.lint_issues: list[lint.LintIssue] = []  # underlined, with a tooltip
         self.gutter = LineNumberArea(self)
@@ -332,11 +398,33 @@ class CodeEditor(QPlainTextEdit):
                     painter.setBrush(QColor(MARKER_COLORS.get(worst, "#868e96")))
                     d = max(6, height // 2)
                     painter.drawEllipse(4, top + (height - d) // 2, d, d)
+                # Change bar (full line height) at the edge next to the text.
+                change = self.change_marks.get(line)
+                if change:
+                    painter.setPen(Qt.NoPen)
+                    painter.setBrush(QColor(CHANGE_COLORS[change]))
+                    painter.drawRect(QRectF(width - 4, top, 3, bottom - top))
+                # Deleted lines: a small triangle on the boundary above this
+                # line (and below the last one, for a deletion at the end).
+                for deleted_at, y in ((line, top), (line + 1, bottom)):
+                    if deleted_at == line + 1 and block.next().isValid():
+                        continue
+                    if deleted_at in self.deletions:
+                        kind, _count = self.deletions[deleted_at]
+                        painter.setPen(Qt.NoPen)
+                        painter.setBrush(QColor(CHANGE_COLORS[kind]))
+                        painter.drawPolygon(QPolygonF([QPointF(width - 7, y - 4.5), QPointF(width - 1, y),
+                                                       QPointF(width - 7, y + 4.5)]))
             block = block.next()
             top = bottom
             bottom = top + round(self.blockBoundingRect(block).height())
             number += 1
         painter.end()
+
+    def set_change_marks(self, marks: dict[int, str], deletions: dict[int, tuple[str, int]]):
+        if marks != self.change_marks or deletions != self.deletions:
+            self.change_marks, self.deletions = marks, deletions
+            self.gutter.update()
 
     def line_at_y(self, y: int) -> int:
         block = self.firstVisibleBlock()
@@ -983,6 +1071,10 @@ class EditorTab(QWidget):
         self._lint_timer.setSingleShot(True)
         self._lint_timer.setInterval(LINT_DELAY_MS)
         self._lint_timer.timeout.connect(self.lint)
+        self._changes_timer = QTimer(self)  # the gutter's change bars, once typing pauses
+        self._changes_timer.setSingleShot(True)
+        self._changes_timer.setInterval(300)
+        self._changes_timer.timeout.connect(self.update_change_marks)
         self._lsp_timer = QTimer(self)
         self._lsp_timer.setSingleShot(True)
         self._lsp_timer.setInterval(LSP_SYNC_MS)
@@ -1009,6 +1101,7 @@ class EditorTab(QWidget):
         self.load()
         self.refresh_style()
         self.editor.textChanged.connect(self._lint_timer.start)
+        self.editor.textChanged.connect(self._changes_timer.start)
         self.editor.textChanged.connect(lambda: self.lsp is not None and self._lsp_timer.start())
         self.editor.cursorPositionChanged.connect(self._outline_follow_cursor)
         self.lint()
@@ -1396,6 +1489,14 @@ class EditorTab(QWidget):
         self.apply_text_edits(issue.edits)
         self._update_status(f"applied fix: {issue.fix or issue.code}")
 
+    def update_change_marks(self):
+        """The gutter's change bars: lines changed and not saved yet, and
+        lines changed since the file was opened (and saved)."""
+        self._changes_timer.stop()
+        marks, deletions = line_changes(getattr(self, "_opened_text", self._disk_text), self._disk_text,
+                                        self.editor.toPlainText())
+        self.editor.set_change_marks(marks, deletions)
+
     def stop_lint(self):
         """Before the tab is closed: don't leave fortitude running."""
         self._lint_timer.stop()
@@ -1435,6 +1536,7 @@ class EditorTab(QWidget):
     def load(self):
         text = self._read()
         self._disk_text = text
+        self._opened_text = text  # (the change bars compare with this and the saved text)
         self.editor.setPlainText(text)
         self.editor.document().setModified(False)
         self._watch()
@@ -1470,6 +1572,7 @@ class EditorTab(QWidget):
         if self.lsp is not None:
             self._flush_lsp()
             self.lsp.save_document(self.path)
+        self.update_change_marks()  # unsaved bars become saved ones
         self.saved.emit(str(self.path))
         return True
 
