@@ -179,6 +179,13 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
     around. Click a package to highlight everything it depends on and
     everything that uses it (click the background to clear); double-click to
     open its `fpm.toml`. Export to PNG or SVG.
+  * Right-click a package for its menu: open its `fpm.toml`, show it in
+    *Project Files* or Finder, *Open as Project* (e.g. to work on a local
+    library), open its repository, checked-out commit or homepage, *Check for
+    Updates* or *Update This Dependency* (`fpm update <name>`), *Copy
+    Dependency Line* (its declaration, ready to paste into another
+    `fpm.toml`), and *Why Is This Here?*, which highlights every chain of
+    dependencies from the project down to it.
 * The graph refreshes automatically after commands that may download
   dependencies.
 

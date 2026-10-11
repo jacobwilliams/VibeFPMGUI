@@ -16,6 +16,7 @@ import tempfile
 import time
 import tomllib
 from collections import deque
+from itertools import pairwise
 from pathlib import Path
 
 from qtpy.QtCore import (
@@ -370,6 +371,7 @@ class MainWindow(QMainWindow):
         self.graph_view = DependencyGraphView()
         self.graph_view.package_selected.connect(self.show_package)
         self.graph_view.package_activated.connect(self.open_package_manifest)
+        self.graph_view.package_context_menu.connect(self._package_menu)
 
         self.graph_menu = self._build_graph_menu()
         self.menuBar().addMenu(self.graph_menu)
@@ -1131,11 +1133,14 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     # --------------------------------------------------- dependency updates
-    def check_dependency_updates(self):
-        """Commands → Check for Dependency Updates… (only runs when asked)."""
+    def check_dependency_updates(self, only: str | None = None):
+        """Commands → Check for Dependency Updates… (only runs when asked);
+        ``only``: just that dependency (from its menu in the graph)."""
         if not self.graph:
             return
         checks = dep_updates.git_dependencies(self.graph)
+        if only:
+            checks = [c for c in checks if c.name == only]
         dialog = dep_updates.UpdatesDialog(checks, repo_web_url, commit_web_url, compare_web_url, self)
         dialog.update_tag_requested.connect(lambda c: self._update_dependency_tag(c, dialog))
         dialog.update_deps_requested.connect(lambda: (dialog.accept(), self.run_fpm(["update"], False, True)))
@@ -1294,6 +1299,122 @@ class MainWindow(QMainWindow):
         if pkg.manifest:
             body += "<p><i>Double-click the node to open its fpm.toml.</i></p>"
         self.details.setHtml(body)
+
+    # ------------------------------------------------- package menu (graph)
+    def _package_menu(self, name: str, pos):
+        """Right-click on a package in the dependency graph."""
+        pkg = self.graph.packages.get(name) if self.graph else None
+        if pkg is None:
+            return
+        is_root = pkg.kind == m.ROOT
+        on_disk = pkg.directory is not None and pkg.directory.is_dir()
+        menu = QMenu(self)
+
+        def add(text, slot, enabled=True, tip=""):
+            action = menu.addAction(text)
+            action.triggered.connect(slot)
+            action.setEnabled(bool(enabled))
+            if tip:
+                action.setToolTip(tip)
+            return action
+
+        add("Open fpm.toml", lambda: self.open_package_manifest(name), pkg.manifest and pkg.manifest.is_file())
+        add("Show in Project Files", lambda: self._show_package_files(pkg), on_disk)
+        add(reveal_label(), lambda: reveal_in_file_manager(str(pkg.directory)), on_disk)
+        if not is_root:
+            add("Open as Project", lambda: self.open_manifest(pkg.manifest), pkg.manifest and pkg.manifest.is_file(),
+                "Open this package's fpm.toml as the project (e.g. to work on a local library)")
+        links = []
+        if pkg.git and (url := repo_web_url(pkg.git)):
+            links.append(("Open Repository", url))
+        if pkg.git and pkg.git_rev and (url := commit_web_url(pkg.git, pkg.git_rev)):
+            links.append((f"Open Checked-out Commit ({pkg.git_rev[:7]})", url))
+        if pkg.homepage:
+            links.append(("Open Homepage", pkg.homepage))
+        if links:
+            menu.addSeparator()
+            for text, url in links:
+                add(text, lambda _=False, u=url: QDesktopServices.openUrl(QUrl(u)))
+        if pkg.git and not is_root:
+            menu.addSeparator()
+            add("Check for Updates", lambda: self.check_dependency_updates(only=name))
+            add("Update This Dependency", lambda: self.run_fpm(["update", name], False, True), self.process is None,
+                f"fpm update {name}: fetch it again (or download it if it's missing)")
+        if not is_root:
+            menu.addSeparator()
+            line = self._dependency_line(name)
+            add("Copy Dependency Line", lambda: self._copy_dependency_line(line), line,
+                f"Copy “{line}” to paste into another fpm.toml" if line else "")
+            add("Why Is This Here?", lambda: self._why_is_this_here(name))
+        menu.setToolTipsVisible(True)
+        menu.exec(pos)
+
+    def _show_package_files(self, pkg):
+        if not self.project_tree.reveal_package(pkg.directory):
+            self.statusBar().showMessage(f"{pkg.name} isn't listed in Project Files", 4000)
+
+    def _dependency_line(self, name: str) -> str:
+        """How ``name`` is declared, as one fpm.toml line (e.g. ``fmin = {
+        git = "…", tag = "1.1.3" }``), from the manifest of a package that
+        uses it (preferring the project's own); "" if not found."""
+        parents = sorted((self.graph.packages[e.parent] for e in self.graph.parents(name)
+                          if e.parent in self.graph.packages),
+                         key=lambda p: (p.kind != m.ROOT, p.kind != m.PATH))
+        for parent in parents:
+            try:
+                data = m.load_toml(parent.manifest) if parent.manifest else {}
+            except (OSError, tomllib.TOMLDecodeError):
+                continue
+            tables = [data.get("dependencies"), data.get("dev-dependencies")]
+            for section in ("executable", "test", "example"):
+                tables += [t.get("dependencies") for t in data.get(section) or [] if isinstance(t, dict)]
+            for table in tables:
+                if isinstance(table, dict) and name in table:
+                    return toml_line(name, table[name])
+        return ""
+
+    def _copy_dependency_line(self, line: str):
+        QApplication.clipboard().setText(line)
+        self.statusBar().showMessage(f"Copied: {line}", 5000)
+
+    def _why_is_this_here(self, name: str):
+        """Every chain of dependencies from the project down to ``name``,
+        highlighted in the graph and listed in the details panel."""
+        chains: list[list[str]] = []
+
+        def walk(node, path):
+            if len(chains) >= 50:  # (plenty to see why)
+                return
+            if node == name:
+                chains.append(path)
+                return
+            for edge in self.graph.children(node):
+                if edge.child not in path:
+                    walk(edge.child, [*path, edge.child])
+
+        walk(self.graph.root, [self.graph.root])
+        if not chains:
+            self.statusBar().showMessage(f"{name} isn't reached from {self.graph.root}", 5000)
+            return
+        dev = {(e.parent, e.child) for e in self.graph.edges if e.dev}
+        e = html.escape
+
+        def show(chain):
+            out = e(chain[0])
+            for a, b in pairwise(chain):
+                out += f" → <b>{e(b)}</b>" if b == name else f" → {e(b)}"
+                if (a, b) in dev:
+                    out += " <i>(dev)</i>"
+            return out
+
+        direct = any(len(c) == 2 for c in chains)
+        summary = ("a direct dependency of the project" if direct and len(chains) == 1 else
+                   f"needed through {len(chains)} chain{'s' * (len(chains) != 1)}")
+        self.details.setHtml(f"<h3>Why is {e(name)} here?</h3><p>{e(name)} is {summary}:</p><ul>"
+                             + "".join(f"<li>{show(c)}</li>" for c in chains)
+                             + "</ul><p><i>Click the background of the graph to clear the highlight.</i></p>")
+        self.graph_view.show_chains(name, chains)
+        self.statusBar().showMessage(f"{name}: {summary}", 6000)
 
     def open_package_manifest(self, name: str):
         pkg = self.graph.packages.get(name) if self.graph else None
@@ -2608,6 +2729,26 @@ def _descendants(pid: int) -> list[int]:
             found.append(child)
             queue.append(child)
     return found
+
+
+def toml_line(name: str, spec) -> str:
+    """A dependency as one fpm.toml line: ``name = "1.0"`` or
+    ``name = { git = "…", tag = "…" }``."""
+    def key(k):
+        return k if re.fullmatch(r"[A-Za-z0-9_-]+", str(k)) else json.dumps(str(k))
+
+    def value(v):
+        if isinstance(v, bool):
+            return "true" if v else "false"
+        if isinstance(v, (int, float)):
+            return str(v)
+        if isinstance(v, dict):
+            return "{ " + ", ".join(f"{key(k)} = {value(x)}" for k, x in v.items()) + " }"
+        if isinstance(v, list):
+            return "[" + ", ".join(value(x) for x in v) + "]"
+        return json.dumps(str(v))  # (a TOML basic string)
+
+    return f"{key(name)} = {value(spec)}"
 
 
 def make_settings() -> QSettings:

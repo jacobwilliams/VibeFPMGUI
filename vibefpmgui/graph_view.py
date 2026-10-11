@@ -15,6 +15,7 @@ from __future__ import annotations
 import math
 import os
 import time
+from itertools import pairwise
 
 import qtpy
 
@@ -23,7 +24,7 @@ os.environ.setdefault("PYQTGRAPH_QT_LIB", qtpy.API_NAME)
 
 import numpy as np
 import pyqtgraph as pg
-from qtpy.QtCore import QPointF, QRectF, Qt, QTimer, Signal
+from qtpy.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, Signal
 from qtpy.QtGui import (
     QBrush,
     QColor,
@@ -239,6 +240,11 @@ class NodeItem(pg.GraphicsObject):
             self.view._hover_changed(self, True)
 
     def mouseClickEvent(self, ev):
+        if ev.button() == Qt.RightButton:  # the package's menu (see MainWindow)
+            ev.accept()
+            self.view.select(self.package.name, center=False)
+            self.view.package_context_menu.emit(self.package.name, ev.screenPos().toPoint())
+            return
         if ev.button() != Qt.LeftButton:
             ev.ignore()
             return
@@ -551,6 +557,7 @@ class DependencyGraphView(QWidget):
 
     package_selected = Signal(str)
     package_activated = Signal(str)
+    package_context_menu = Signal(str, QPoint)  # right-click: package name, screen position
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -754,6 +761,22 @@ class DependencyGraphView(QWidget):
             self.package_selected.emit(name)
             if center:
                 self.vb.translateBy(self.nodes[name].center() - self.vb.viewRect().center())
+
+    def show_chains(self, name: str, chains: list[list[str]]):
+        """Highlight the dependency chains from the project down to ``name``
+        (Why Is This Here?); everything else is dimmed. A click on the
+        background clears it, like a selection."""
+        on_chain = {n for chain in chains for n in chain}
+        links = {(a, b) for chain in chains for a, b in pairwise(chain)}
+        self.selected = name
+        for n, node in self.nodes.items():
+            node.selected = n == name
+            node.dimmed = n not in on_chain
+            node.update()
+        for edge in self.edges:
+            pair = (edge.source.package.name, edge.target.package.name)
+            edge.state = "down" if pair in links else "dim"
+            edge.apply_style()
 
     def _reachable(self, name: str | None, forward: bool) -> set[str]:
         if name is None or not self.graph:

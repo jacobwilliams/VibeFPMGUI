@@ -601,6 +601,31 @@ class ProjectTree(QWidget):
         self.view.setCurrentIndex(index)
         self.view.scrollTo(index)
 
+    def reveal_package(self, directory: Path) -> bool:
+        """Select a package's row (the project, or one under Dependencies),
+        open it, and scroll to it. False if it isn't in the tree."""
+        target = str(Path(directory).resolve())
+        stack = [self.model.item(r) for r in range(self.model.rowCount())]
+        while stack:
+            item = stack.pop()
+            if item is None:
+                continue
+            if item.data(KIND_ROLE) == "package" and str(Path(item.data(PATH_ROLE)).resolve()) == target:
+                index = self.proxy.mapFromSource(item.index())
+                if not index.isValid():
+                    return False
+                parent = index.parent()
+                while parent.isValid():
+                    self.view.expand(parent)
+                    parent = parent.parent()
+                self.view.expand(index)
+                self.view.setCurrentIndex(index)
+                self.view.scrollTo(index, QAbstractItemView.PositionAtTop)
+                return True
+            if item.data(KIND_ROLE) == "group":
+                stack.extend(item.child(r) for r in range(item.rowCount()))
+        return False
+
     def _load_down_to(self, path: Path) -> QStandardItem | None:
         """Load the folders between a package and ``path``; return its item."""
         target = path.resolve()
