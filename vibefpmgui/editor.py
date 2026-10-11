@@ -56,6 +56,7 @@ from qtpy.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QStyle,
@@ -604,12 +605,19 @@ class CodeEditor(QPlainTextEdit):
         super().mousePressEvent(event)
 
     def contextMenuEvent(self, event):
-        """The usual Cut/Copy/Paste menu, plus the language server's commands
-        for the name that was right-clicked (when one is attached)."""
-        menu = self.createStandardContextMenu(event.pos())
+        menu = self.context_menu(event.pos(), from_mouse=event.reason() == event.Reason.Mouse)
+        menu.exec(event.globalPos())
+        menu.deleteLater()
+
+    def context_menu(self, pos: QPoint, from_mouse: bool = True) -> QMenu:
+        """The usual Cut/Copy/Paste menu, plus fortitude's fixes for the
+        issues at that spot and the language server's commands for the name
+        there (when one is attached). ``pos``: where the menu was asked for
+        (viewport coordinates); ``from_mouse`` False: from the keyboard, for
+        the text cursor's spot."""
+        menu = self.createStandardContextMenu(pos)
         # fortitude's fixes for the issues at that spot.
-        spot = (self.cursorForPosition(event.pos()).position() if event.reason() == event.Reason.Mouse
-                else self.textCursor().position())
+        spot = self.cursorForPosition(pos).position() if from_mouse else self.textCursor().position()
         fixes = [i for i in self.lint_issues if i.fixable
                  and (span := self._lint_span(i)) and span[0] <= spot <= span[1]]
         if fixes:
@@ -622,8 +630,8 @@ class CodeEditor(QPlainTextEdit):
             menu.insertSeparator(first)
         if self.hover_provider is not None:
             on_name = False
-            if event.reason() == event.Reason.Mouse:
-                point = event.pos()  # (already in viewport coordinates)
+            if from_mouse:
+                point = pos  # (already in viewport coordinates)
                 on_name = self.word_at(point) is not None
                 if on_name:  # the commands act on the name at the cursor
                     cursor = self.cursorForPosition(point)
@@ -644,8 +652,7 @@ class CodeEditor(QPlainTextEdit):
                 action.triggered.connect(signal.emit)
                 menu.insertAction(first, action)
             menu.insertSeparator(first)
-        menu.exec(event.globalPos())
-        menu.deleteLater()
+        return menu
 
     def mouseMoveEvent(self, event):
         super().mouseMoveEvent(event)
@@ -1508,14 +1515,22 @@ class EditorTab(QWidget):
         self._lint_again = False
         process = QProcess(self)
         process.setWorkingDirectory(str(self.path.parent))
-        process.finished.connect(lambda *_: self._lint_finished(process))
-        process.errorOccurred.connect(lambda err: err == QProcess.FailedToStart and
-                                      self._lint_finished(process))
+        # (Methods, not lambdas holding the process: see LspClient.start.)
+        process.finished.connect(self._lint_process_finished)
+        process.errorOccurred.connect(self._lint_process_error)
         self._lint_process = process
         process.start(lint.executable(), lint.command(self.path))
         self._lint_sent_revision = self.editor.document().revision()
         process.write(self.editor.toPlainText().encode("utf-8"))
         process.closeWriteChannel()
+
+    def _lint_process_finished(self, *_):
+        if isinstance(self.sender(), QProcess):
+            self._lint_finished(self.sender())
+
+    def _lint_process_error(self, error):
+        if error == QProcess.FailedToStart and isinstance(self.sender(), QProcess):
+            self._lint_finished(self.sender())
 
     def _lint_finished(self, process: QProcess):
         if process is not self._lint_process:

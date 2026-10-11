@@ -287,9 +287,11 @@ class LspClient(QObject):
         process.setWorkingDirectory(str(root))
         process.setStandardErrorFile(QProcess.nullDevice())
         process.readyReadStandardOutput.connect(self._read)
-        process.finished.connect(lambda *_: self._finished(process))
-        process.errorOccurred.connect(lambda err: err == QProcess.FailedToStart and
-                                      self._finished(process))
+        # (Methods, not lambdas holding the process: when Qt deletes the
+        # process, PySide drops those lambdas, and with them possibly the last
+        # reference to the process's Python wrapper, mid-delete: a crash.)
+        process.finished.connect(self._process_finished)
+        process.errorOccurred.connect(self._process_error)
         self.process = process
         self._stopping = False
         process.start(program, self.args)
@@ -312,6 +314,14 @@ class LspClient(QObject):
         self._queue.clear()
         self._versions.clear()
         self._ready = False
+
+    def _process_finished(self, *_):
+        if isinstance(self.sender(), QProcess):
+            self._finished(self.sender())
+
+    def _process_error(self, error):
+        if error == QProcess.FailedToStart and isinstance(self.sender(), QProcess):
+            self._finished(self.sender())
 
     def _finished(self, process: QProcess):
         if process is not self.process:

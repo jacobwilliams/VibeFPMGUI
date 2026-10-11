@@ -1418,9 +1418,16 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------- package menu (graph)
     def _package_menu(self, name: str, pos):
         """Right-click on a package in the dependency graph."""
+        menu = self.package_menu(name)
+        if menu is not None:
+            menu.exec(pos)
+            menu.deleteLater()
+
+    def package_menu(self, name: str) -> QMenu | None:
+        """The menu for a package in the dependency graph (None: not one)."""
         pkg = self.graph.packages.get(name) if self.graph else None
         if pkg is None:
-            return
+            return None
         is_root = pkg.kind == m.ROOT
         on_disk = pkg.directory is not None and pkg.directory.is_dir()
         menu = QMenu(self)
@@ -1466,7 +1473,7 @@ class MainWindow(QMainWindow):
                 f"Copy “{line}” to paste into another fpm.toml" if line else "")
             add("Why Is This Here?", lambda: self._why_is_this_here(name))
         menu.setToolTipsVisible(True)
-        menu.exec(pos)
+        return menu
 
     def _show_package_files(self, pkg):
         if not self.project_tree.reveal_package(pkg.directory):
@@ -2840,9 +2847,14 @@ class MainWindow(QMainWindow):
         self.review_monitor.begin(f"downloading {self.ai_model}", "Downloading")
         worker = ai.ReviewWorker(ai.DEFAULT_HOST, self.ai_model, pull_only=True)
         worker.progress.connect(self._pull_progress)
-        worker.finished.connect(lambda *_: self._ai_done(then=self._run_review))
+        # (A method of the window, not a lambda: a lambda would run in the
+        # worker's thread, which is ending, and the review would never start.)
+        worker.finished.connect(self._pull_finished)
         worker.failed.connect(self._review_failed)
         self._start_ai_worker(worker)
+
+    def _pull_finished(self, *_):
+        self._ai_done(then=self._run_review)
 
     def _pull_progress(self, status: str, fraction: float):
         if fraction >= 0:
