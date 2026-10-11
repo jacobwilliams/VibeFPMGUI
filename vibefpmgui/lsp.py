@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from qtpy.QtCore import QObject, QProcess, QUrl, Signal
+from qtpy.QtGui import QTextDocument
 
 from . import manifest as m
 from .project_tree import fpm_folders
@@ -92,28 +93,53 @@ def server_args(graph: m.DependencyGraph | None, project_dir: Path) -> list[str]
     return args
 
 
+# fortls's hover text for an intrinsic is a manual page in markdown that
+# starts with a rule and the name as a heading ("-----\n## sum\n\n### **Name**");
+# for the project's own names it starts with a ```fortran block.
+INTRINSIC_RE = re.compile(r"^\s*-{3,}[ \t]*\n\s*##[ \t]+(\w+)[ \t]*\n(?:\s*###[ \t]*\**Name\**[ \t]*\n)?")
+
+
+def intrinsic_name(text: str) -> str | None:
+    """The intrinsic's name if ``text`` is fortls's documentation of one."""
+    match = INTRINSIC_RE.match(text or "")
+    return match.group(1) if match else None
+
+
+def markdown_html(text: str) -> str:
+    """Markdown as HTML for a rich-text label (rendered by Qt)."""
+    doc = QTextDocument()
+    doc.setMarkdown(text, QTextDocument.MarkdownDialectGitHub)
+    body = re.search(r"<body[^>]*>(.*)</body>", doc.toHtml(), re.DOTALL)
+    out = body.group(1).strip() if body else ""
+    # Qt makes headings large ("font-size:xx-large" etc.); keep them modest.
+    return re.sub(r"font-size:\s*(xx-large|x-large|large)", "font-size:medium", out)
+
+
 def hover_html(contents) -> str:
-    """fortls's hover answer (markdown: a ```fortran block, maybe followed by
-    "-----" and a doc comment) as tooltip HTML; "" if there is nothing."""
+    """fortls's hover answer (markdown) as tooltip HTML; "" if there is
+    nothing. An intrinsic's manual page gets a title saying what it is."""
     if isinstance(contents, dict):
         text = contents.get("value", "")
     elif isinstance(contents, list):
         text = "\n\n".join(c.get("value", "") if isinstance(c, dict) else str(c) for c in contents)
     else:
         text = str(contents or "")
-    out = []
-    for i, part in enumerate(re.split(r"```[\w+-]*\n?", text)):
-        if not part.strip():
-            continue
-        if i % 2:  # inside a code fence
-            out.append(f"<pre style='margin:0'>{html.escape(part.rstrip())}</pre>")
-        else:
-            for chunk in re.split(r"^\s*-{3,}\s*$", part.strip(), flags=re.MULTILINE):
-                if chunk.strip():
-                    prose = html.escape(chunk.strip()).replace("\n", "<br>")
-                    prose = re.sub(r"`([^`]+)`", r"<code>\1</code>", prose)  # inline code
-                    out.append(f"<p style='margin:4px 0 0 0'>{prose}</p>")
-    return "".join(out)
+    if not text.strip():
+        return ""
+    title = ""
+    name = intrinsic_name(text)
+    if name:
+        text = text[INTRINSIC_RE.match(text).end():]
+        title = (f"<p style='margin:0 0 4px 0'><b>{html.escape(name)}</b> &nbsp;—&nbsp; "
+                 "<span style='color:gray'>Fortran intrinsic</span></p>")
+    # "-----" between the declaration and a doc comment: a rule, not a heading
+    # underline (markdown would turn the line above it into a heading).
+    text = re.sub(r"^[ \t]*-{3,}[ \t]*$", "\n***\n", text, flags=re.MULTILINE)
+    # Qt shows _word_ underlined (like a link); the manual pages mean italics.
+    parts = re.split(r"(```.*?```|`[^`]*`)", text, flags=re.DOTALL)
+    text = "".join(part if i % 2 else re.sub(r"(?<![\w\\*])_([^_\n]+?)_(?!\w)", r"*\1*", part)
+                   for i, part in enumerate(parts))
+    return title + markdown_html(text)
 
 
 def first_location(result) -> tuple[Path, int, int] | None:
