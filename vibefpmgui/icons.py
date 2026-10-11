@@ -296,18 +296,24 @@ FORTRAN_FILE_PATH = Path(__file__).with_name("resources") / "fortran-file.svg"
 # Fortran sources (any case, e.g. .F90): shown with the Fortran file icon.
 FORTRAN_SUFFIXES = {".f", ".for", ".ftn", ".f77", ".f90", ".f95", ".f03", ".f08", ".f18", ".f23",
                     ".fpp"}
-_fortran_icon: QIcon | None = None
+# Fortran include files: the same icon in gray.
+FORTRAN_INCLUDE_SUFFIXES = {".inc", ".if"}
+_fortran_icons: dict[bool, QIcon] = {}
 
 
-def fortran_file_icon() -> QIcon:
-    """The icon for Fortran source files (a page with the Fortran "F"),
-    drawn crisply at each size."""
-    global _fortran_icon
-    if _fortran_icon is None:
+def fortran_file_icon(include: bool = False) -> QIcon:
+    """The icon for Fortran source files (a page with the Fortran "F"), or
+    in gray for include files, drawn crisply at each size."""
+    icon = _fortran_icons.get(include)
+    if icon is None:
+        from qtpy.QtCore import QByteArray
         from qtpy.QtSvg import QSvgRenderer
 
-        renderer = QSvgRenderer(str(FORTRAN_FILE_PATH))
-        _fortran_icon = QIcon()
+        svg = FORTRAN_FILE_PATH.read_text(encoding="utf-8")
+        if include:
+            svg = svg.replace("#734f96", "#6c757d").replace("#a98cc9", "#adb5bd")
+        renderer = QSvgRenderer(QByteArray(svg.encode()))
+        icon = _fortran_icons[include] = QIcon()
         if renderer.isValid():
             for size in (16, 20, 24, 32, 40, 48, 64):
                 pixmap = QPixmap(size, size)
@@ -316,8 +322,8 @@ def fortran_file_icon() -> QIcon:
                 painter.setRenderHint(QPainter.Antialiasing)
                 renderer.render(painter)
                 painter.end()
-                _fortran_icon.addPixmap(pixmap)
-    return _fortran_icon
+                icon.addPixmap(pixmap)
+    return icon
 
 
 def app_icon() -> QIcon:
