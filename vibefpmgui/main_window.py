@@ -284,6 +284,14 @@ class MainWindow(QMainWindow):
         self.minimap_action.setStatusTip("A zoomed-out view of the whole file at the right of the editor")
         self.minimap_action.toggled.connect(self.set_minimap_enabled)
         view_menu.addAction(self.minimap_action)
+        self.word_wrap_action = QAction("Word Wrap", self, checkable=True)
+        self.word_wrap_action.setShortcut(QKeySequence("Alt+Z"))
+        EditorTab.word_wrap = self.settings.value("word_wrap", False, type=bool)
+        self.word_wrap_action.setChecked(EditorTab.word_wrap)
+        self.word_wrap_action.setStatusTip("Wrap long lines in the editor at the window's edge "
+                                           "instead of scrolling sideways")
+        self.word_wrap_action.toggled.connect(self.set_word_wrap)
+        view_menu.addAction(self.word_wrap_action)
         self.fortls_action = QAction("Fortran Language Server (fortls)", self, checkable=True)
         self.fortls_action.setChecked(self.settings.value("fortls", True, type=bool))
         self.fortls_action.toggled.connect(self.set_fortls_enabled)
@@ -1777,6 +1785,12 @@ class MainWindow(QMainWindow):
         self.settings.setValue("minimap", on)
         for editor in self.editors():
             editor.minimap.setVisible(on)
+
+    def set_word_wrap(self, on: bool):
+        EditorTab.word_wrap = on
+        self.settings.setValue("word_wrap", on)
+        for editor in self.editors():
+            editor.editor.set_word_wrap(on)
 
     def set_lint_enabled(self, on: bool):
         EditorTab.lint_enabled = on

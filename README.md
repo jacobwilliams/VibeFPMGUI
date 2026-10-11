@@ -90,7 +90,8 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   whole file in miniature, in its syntax colors, with the change bars,
   warnings, errors, lint and AI-review markers and find matches; click it
   to jump, or drag the box (the part in view) to scroll. *View → Show
-  Minimap* turns it off. Saving the project's `fpm.toml`
+  Minimap* turns it off. *View → Word Wrap* (⌥/Alt+Z) wraps long lines at
+  the window's edge instead of scrolling sideways. Saving the project's `fpm.toml`
   reloads the project. *View → Open Files in Built-in Editor* switches back
   to your default application. *View → Syntax Colors* picks any installed
   Pygments style (listed as light or dark) for the editor and `fpm.toml`;

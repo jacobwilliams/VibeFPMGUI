@@ -16,9 +16,9 @@ from __future__ import annotations
 
 import re
 
-from qtpy.QtCore import QPointF, QRectF, QSize, Qt, QTimer
+from qtpy.QtCore import QPoint, QPointF, QRectF, QSize, Qt, QTimer
 from qtpy.QtGui import QColor, QPainter, QPalette, QPolygonF
-from qtpy.QtWidgets import QWidget
+from qtpy.QtWidgets import QPlainTextEdit, QWidget
 
 LINE_HEIGHT = 2.0  # logical pixels per line
 CHAR_WIDTH = 1.0   # logical pixels per character
@@ -63,7 +63,20 @@ class Minimap(QWidget):
     def _lines(self) -> int:
         return max(1, self.editor.document().blockCount())
 
+    def _wrapping(self) -> bool:
+        return self.editor.lineWrapMode() != QPlainTextEdit.NoWrap
+
+    def _first_line(self) -> int:
+        """The first line in view. (Without word wrap, the scroll bar counts
+        lines; with it, it counts screen rows, so ask for the block.)"""
+        if self._wrapping():
+            return self.editor.firstVisibleBlock().blockNumber()
+        return self.editor.verticalScrollBar().value()
+
     def _visible_lines(self) -> float:
+        if self._wrapping():
+            last = self.editor.cursorForPosition(QPoint(0, self.editor.viewport().height() - 1))
+            return max(1.0, last.blockNumber() - self._first_line() + 1.0)
         return max(1.0, self.editor.viewport().height() / max(1, self.editor.fontMetrics().height()))
 
     def _offset(self) -> float:
@@ -78,8 +91,7 @@ class Minimap(QWidget):
         return spare * fraction
 
     def _view_box(self) -> QRectF:
-        first = self.editor.verticalScrollBar().value()  # (QPlainTextEdit: lines)
-        top = first * LINE_HEIGHT - self._offset()
+        top = self._first_line() * LINE_HEIGHT - self._offset()
         return QRectF(0, top, self.width(), max(self._visible_lines() * LINE_HEIGHT, 6))
 
     # ----------------------------------------------------------- drawing
@@ -194,7 +206,11 @@ class Minimap(QWidget):
 
     # ------------------------------------------------------------- mouse
     def _scroll_to_line(self, line: float):
+        """Scroll so that ``line`` (0-based) is the first in view."""
         bar = self.editor.verticalScrollBar()
+        if self._wrapping():  # (the scroll bar counts screen rows)
+            block = self.editor.document().findBlockByNumber(max(0, min(self._lines() - 1, int(line))))
+            line = block.firstLineNumber()
         bar.setValue(round(max(0, min(bar.maximum(), line))))
 
     def mousePressEvent(self, event):
@@ -222,7 +238,7 @@ class Minimap(QWidget):
             # The minimap scrolls too: move in proportion over its height.
             bar = self.editor.verticalScrollBar()
             room = max(1.0, self.height() - box_h)
-            self._scroll_to_line(max(0.0, min(1.0, y / room)) * bar.maximum())
+            bar.setValue(round(max(0.0, min(1.0, y / room)) * bar.maximum()))
 
     def mouseReleaseEvent(self, event):
         self._drag = None

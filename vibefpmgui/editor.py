@@ -43,6 +43,7 @@ from qtpy.QtGui import (
     QTextCursor,
     QTextDocument,
     QTextFormat,
+    QTextOption,
 )
 from qtpy.QtWidgets import (
     QApplication,
@@ -367,6 +368,8 @@ class CodeEditor(QPlainTextEdit):
         super().resizeEvent(event)
         cr = self.contentsRect()
         self.gutter.setGeometry(QRect(cr.left(), cr.top(), self.gutter_width(), cr.height()))
+        if self.lineWrapMode() != QPlainTextEdit.NoWrap:  # (lines re-wrap: highlight their new rows)
+            QTimer.singleShot(0, self._update_extra_selections)
 
     def paint_gutter(self, event):
         pal = self.palette()
@@ -422,6 +425,15 @@ class CodeEditor(QPlainTextEdit):
             bottom = top + round(self.blockBoundingRect(block).height())
             number += 1
         painter.end()
+
+    def set_word_wrap(self, on: bool):
+        """Wrap long lines at the window's edge (at a space if there is
+        one), or scroll sideways."""
+        self.setWordWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
+        self.setLineWrapMode(QPlainTextEdit.WidgetWidth if on else QPlainTextEdit.NoWrap)
+        QTimer.singleShot(0, self._update_extra_selections)
+        self.gutter.update()
+        self._update_minimap()
 
     def set_change_marks(self, marks: dict[int, str], deletions: dict[int, tuple[str, int]]):
         if marks != self.change_marks or deletions != self.deletions:
@@ -668,22 +680,13 @@ class CodeEditor(QPlainTextEdit):
             if not block.isValid():
                 continue
             worst = worst_severity(notes)
-            sel = QTextEdit.ExtraSelection()
             color = QColor(MARKER_COLORS.get(worst, "#868e96"))
             color.setAlpha(34)
-            sel.format.setBackground(color)
-            sel.format.setProperty(QTextFormat.FullWidthSelection, True)
-            sel.cursor = QTextCursor(block)
-            selections.append(sel)
+            selections += self._line_highlight(block, color)
         if not self.isReadOnly():
-            sel = QTextEdit.ExtraSelection()
             color = QColor(self.palette().color(QPalette.Highlight))
             color.setAlpha(28)
-            sel.format.setBackground(color)
-            sel.format.setProperty(QTextFormat.FullWidthSelection, True)
-            sel.cursor = self.textCursor()
-            sel.cursor.clearSelection()
-            selections.append(sel)
+            selections += self._line_highlight(self.textCursor().block(), color)
         for issue in self.lint_issues:
             span = self._lint_span(issue)
             if span is None:
@@ -696,6 +699,23 @@ class CodeEditor(QPlainTextEdit):
             sel.cursor.setPosition(span[1], QTextCursor.KeepAnchor)
             selections.append(sel)
         self.setExtraSelections(selections + self.find_selections)
+
+    @staticmethod
+    def _line_highlight(block, color: QColor) -> list:
+        """A full-width background for a line: one per row it is shown in
+        (with View → Word Wrap a long line takes several, and Qt fills only
+        the row the selection's cursor is in)."""
+        layout = block.layout()
+        starts = [layout.lineAt(i).textStart() for i in range(layout.lineCount())] if layout else []
+        out = []
+        for start in starts or [0]:
+            sel = QTextEdit.ExtraSelection()
+            sel.format.setBackground(color)
+            sel.format.setProperty(QTextFormat.FullWidthSelection, True)
+            sel.cursor = QTextCursor(block)
+            sel.cursor.setPosition(block.position() + start)
+            out.append(sel)
+        return out
 
     def set_find_selections(self, selections):
         self.find_selections = selections
@@ -1020,6 +1040,7 @@ class EditorTab(QWidget):
 
     lint_enabled = True  # lint Fortran files with fortitude (View menu)
     minimap_enabled = True  # View → Show Minimap
+    word_wrap = False       # View → Word Wrap
 
     dirty_changed = Signal(bool)
     saved = Signal(str)
@@ -1070,6 +1091,7 @@ class EditorTab(QWidget):
         self.minimap = Minimap(self.editor)
         self.editor.minimap = self.minimap
         self.minimap.setVisible(self.minimap_enabled)
+        self.editor.set_word_wrap(self.word_wrap)
         self.highlighter.relexed.connect(self.minimap.invalidate)
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
