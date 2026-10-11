@@ -14,6 +14,7 @@ from __future__ import annotations
 import difflib
 import html
 import re
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -323,6 +324,7 @@ class CodeEditor(QPlainTextEdit):
     lint_fix_requested = Signal(object)  # a lint.LintIssue whose fix to apply (hover link or menu)
     typed = Signal(str)                # a key that changed the text (after it did; "\b" = Backspace)
     completion_chosen = Signal(object)  # Enter/Tab in the completion list
+    cursors_changed = Signal()          # extra cursors added or removed (multiple cursors)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -342,6 +344,10 @@ class CodeEditor(QPlainTextEdit):
         self.minimap = None  # the vibefpmgui.minimap.Minimap beside it, if any
         self.find_selections: list[QTextEdit.ExtraSelection] = []
         self.lint_issues: list[lint.LintIssue] = []  # underlined, with a tooltip
+        # Multiple cursors: ⌥/Alt-click adds one, ⌘⇧/Ctrl+Shift-click a column
+        # of them. Typing, deleting and moving happen at all of them; these
+        # QTextCursors stay in place as the text changes.
+        self.extra_cursors: list[QTextCursor] = []
         self.gutter = LineNumberArea(self)
         self.setLineWrapMode(QPlainTextEdit.NoWrap)
         self.blockCountChanged.connect(self._update_gutter_width)
@@ -596,6 +602,16 @@ class CodeEditor(QPlainTextEdit):
         super().hideEvent(event)
 
     def mousePressEvent(self, event):
+        mods = event.modifiers()
+        if event.button() == Qt.LeftButton:
+            point = event.position().toPoint()
+            if mods & Qt.AltModifier and not mods & (Qt.ControlModifier | Qt.ShiftModifier):
+                self.toggle_cursor_at(self.cursorForPosition(point).position())  # ⌥/Alt-click
+                return
+            if mods & Qt.ControlModifier and mods & Qt.ShiftModifier:  # ⌘⇧/Ctrl+Shift-click
+                self.add_column_cursors(self.cursorForPosition(point).blockNumber())
+                return
+            self.clear_extra_cursors()  # (any other click: back to one cursor)
         if (event.button() == Qt.LeftButton and event.modifiers() & Qt.ControlModifier
                 and self.hover_provider is not None):
             # ⌘-click (Ctrl-click on Linux/Windows): go to the definition.
@@ -706,6 +722,14 @@ class CodeEditor(QPlainTextEdit):
             sel.cursor.setPosition(span[0])
             sel.cursor.setPosition(span[1], QTextCursor.KeepAnchor)
             selections.append(sel)
+        selected = QColor(self.palette().color(QPalette.Highlight))
+        for c in self.extra_cursors:
+            if c.hasSelection():
+                sel = QTextEdit.ExtraSelection()
+                sel.format.setBackground(selected)
+                sel.format.setForeground(self.palette().color(QPalette.HighlightedText))
+                sel.cursor = QTextCursor(c)
+                selections.append(sel)
         self.setExtraSelections(selections + self.find_selections)
 
     @staticmethod
@@ -731,6 +755,171 @@ class CodeEditor(QPlainTextEdit):
         self._update_minimap()
 
     # ------------------------------------------------------------ editing
+    # ------------------------------------------------- multiple cursors
+    def all_cursors(self) -> list[QTextCursor]:
+        """Every cursor, the main one included, in the order they're in the text."""
+        return sorted([self.textCursor(), *self.extra_cursors], key=lambda c: c.position())
+
+    def toggle_cursor_at(self, position: int):
+        """⌥/Alt-click: add a cursor there, or remove the one that's there."""
+        for c in self.extra_cursors:
+            if c.position() == position:
+                self.extra_cursors.remove(c)
+                self._cursors_changed()
+                return
+        if position == self.textCursor().position() and not self.textCursor().hasSelection():
+            return  # (the main cursor is already there)
+        cursor = QTextCursor(self.document())
+        cursor.setPosition(position)
+        self.extra_cursors.append(cursor)
+        self._cursors_changed()
+
+    def add_column_cursors(self, to_line: int):
+        """⌘⇧/Ctrl+Shift-click: a cursor on each line from the main cursor's
+        line to ``to_line`` (0-based), at the main cursor's column (or the
+        end of a shorter line)."""
+        main = self.textCursor()
+        first, column = main.blockNumber(), main.positionInBlock()
+        step = 1 if to_line >= first else -1
+        for number in range(first + step, to_line + step, step):
+            block = self.document().findBlockByNumber(number)
+            if not block.isValid():
+                break
+            cursor = QTextCursor(block)
+            cursor.setPosition(block.position() + min(column, block.length() - 1))
+            self.extra_cursors.append(cursor)
+        self._cursors_changed()
+
+    def clear_extra_cursors(self):
+        if self.extra_cursors:
+            self.extra_cursors = []
+            self._cursors_changed()
+
+    def _cursors_changed(self):
+        # Two cursors on the same spot are one (e.g. after deleting between them).
+        seen = {(self.textCursor().position(), self.textCursor().anchor())}
+        kept = []
+        for c in self.extra_cursors:
+            key = (c.position(), c.anchor())
+            if key not in seen:
+                seen.add(key)
+                kept.append(c)
+        self.extra_cursors = kept
+        self._update_extra_selections()
+        self.viewport().update()
+        self.cursors_changed.emit()
+
+    def _at_each_cursor(self, edit):
+        """``edit(cursor)`` at every cursor, as one Undo step."""
+        main = self.textCursor()
+        cursors = [main, *self.extra_cursors]
+        main.beginEditBlock()  # (the document's: every cursor's edits are in it)
+        for c in sorted(cursors, key=lambda c: c.position(), reverse=True):
+            edit(c)
+        main.endEditBlock()
+        self.setTextCursor(main)
+        self._cursors_changed()
+
+    def _move_each_cursor(self, operation, select: bool):
+        mode = QTextCursor.KeepAnchor if select else QTextCursor.MoveAnchor
+        main = self.textCursor()
+        for c in (main, *self.extra_cursors):
+            c.movePosition(operation, mode)
+        self.setTextCursor(main)
+        self._cursors_changed()
+
+    def _multi_cursor_key(self, event) -> bool:
+        """A key with several cursors: True if it was handled here."""
+        self.completion_popup.hide()
+        self.signature_popup.hide()
+        key, mods = event.key(), event.modifiers()
+        shift = bool(mods & Qt.ShiftModifier)
+        word = bool(mods & (Qt.AltModifier if sys.platform == "darwin" else Qt.ControlModifier))
+        if key == Qt.Key_Escape:
+            self.clear_extra_cursors()
+            return True
+        if event.matches(QKeySequence.Copy):
+            self.copy()
+            return True
+        if event.matches(QKeySequence.Cut):
+            self.cut()
+            return True
+        if event.matches(QKeySequence.Paste):
+            self.paste()
+            return True
+        moves = {Qt.Key_Left: QTextCursor.WordLeft if word else QTextCursor.Left,
+                 Qt.Key_Right: QTextCursor.WordRight if word else QTextCursor.Right,
+                 Qt.Key_Up: QTextCursor.Up, Qt.Key_Down: QTextCursor.Down,
+                 Qt.Key_Home: QTextCursor.StartOfBlock, Qt.Key_End: QTextCursor.EndOfBlock}
+        command = sys.platform == "darwin" and mods & Qt.ControlModifier
+        if command and key in (Qt.Key_Left, Qt.Key_Right):  # ⌘← / ⌘→: the start / end of the line
+            self._move_each_cursor(QTextCursor.StartOfBlock if key == Qt.Key_Left else QTextCursor.EndOfBlock,
+                                   shift)
+            return True
+        if key in moves and not command:
+            self._move_each_cursor(moves[key], shift)
+            return True
+        if key == Qt.Key_Backspace:
+            self._at_each_cursor(lambda c: c.removeSelectedText() if c.hasSelection() else c.deletePreviousChar())
+            return True
+        if key == Qt.Key_Delete:
+            self._at_each_cursor(lambda c: c.removeSelectedText() if c.hasSelection() else c.deleteChar())
+            return True
+        if key in (Qt.Key_Return, Qt.Key_Enter):
+            def newline(c):
+                line = c.block().text()
+                c.insertText("\n" + line[:len(line) - len(line.lstrip())])  # (keeping the indentation)
+            self._at_each_cursor(newline)
+            return True
+        if key == Qt.Key_Tab:
+            self._at_each_cursor(lambda c: c.insertText(INDENT))
+            return True
+        text = event.text()
+        if text and text.isprintable() and not mods & (Qt.ControlModifier | Qt.MetaModifier):
+            self._at_each_cursor(lambda c: c.insertText(text))
+            return True
+        return False  # (other keys: shortcuts and the like, for the main cursor)
+
+    def copy(self):
+        if not self.extra_cursors:
+            super().copy()
+            return
+        texts = [c.selectedText().replace("\u2029", "\n") for c in self.all_cursors() if c.hasSelection()]
+        if texts:
+            QApplication.clipboard().setText("\n".join(texts))
+
+    def cut(self):
+        if not self.extra_cursors:
+            super().cut()
+            return
+        self.copy()
+        self._at_each_cursor(lambda c: c.removeSelectedText())
+
+    def paste(self):
+        if not self.extra_cursors:
+            super().paste()
+            return
+        text = QApplication.clipboard().text().replace("\r\n", "\n")
+        lines = text.split("\n")
+        cursors = self.all_cursors()
+        # As many lines as cursors: one each (e.g. copied with these cursors).
+        pieces = dict(zip((c.position() for c in cursors), lines)) if len(lines) == len(cursors) else None
+
+        def insert(c):
+            c.insertText(pieces[c.position()] if pieces is not None and c.position() in pieces else text)
+
+        self._at_each_cursor(insert)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self.extra_cursors:  # (Qt draws only the main cursor)
+            painter = QPainter(self.viewport())
+            color = self.palette().color(QPalette.Text)
+            for c in self.extra_cursors:
+                rect = self.cursorRect(c)
+                painter.fillRect(QRect(rect.left(), rect.top(), max(2, self.cursorWidth()), rect.height()), color)
+            painter.end()
+
     def keyPressEvent(self, event):
         key = event.key()
         if key in MODIFIER_KEYS:
@@ -739,6 +928,8 @@ class CodeEditor(QPlainTextEdit):
             super().keyPressEvent(event)
             return
         self.hover_popup.hide()
+        if self.extra_cursors and self._multi_cursor_key(event):
+            return
         popup = self.completion_popup
         plain = not event.modifiers() & (Qt.ShiftModifier | Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)
         if popup.isVisible():
@@ -1158,6 +1349,7 @@ class EditorTab(QWidget):
 
         self.editor.document().modificationChanged.connect(self.dirty_changed)
         self.editor.cursorPositionChanged.connect(self._update_status)
+        self.editor.cursors_changed.connect(self._update_status)
         self.load()
         self.refresh_style()
         self.editor.textChanged.connect(self._lint_timer.start)
@@ -1731,6 +1923,8 @@ class EditorTab(QWidget):
         if self._lint_markers:
             count = sum(len(ns) for ns in self._lint_markers.values())
             parts.append(f"{count} fortitude issue{'s' * (count != 1)}")
+        if self.editor.extra_cursors:
+            parts.insert(1, f"{len(self.editor.extra_cursors) + 1} cursors (Esc: back to one)")
         if note:
             parts.append(note)
         self.status.setText("<span style='color:gray'>" + " · ".join(parts) + "</span>")
