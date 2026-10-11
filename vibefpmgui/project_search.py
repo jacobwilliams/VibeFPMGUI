@@ -438,6 +438,11 @@ class _ResultDelegate(QStyledItemDelegate):
 
         if parts[0] == "file":
             _kind, name, folder, package, count = parts
+            icon = self.panel.icon_for(Path(index.data(RESULT_ROLE)[0])) if self.panel.icon_for else None
+            if icon is not None and not icon.isNull():
+                size = QFontMetrics(opt.font).height()
+                icon.paint(painter, QRect(x, rect.top() + (rect.height() - size) // 2, size, size))
+                x += size + 5
             bold = QFont(opt.font)
             bold.setBold(True)
             draw(name, bold, color)
@@ -502,6 +507,7 @@ class SearchPanel(QWidget):
         # Set by the window: () -> (roots to search, {path: text of open editors}, project folder).
         self.provider: Callable[[], tuple[list[Root], dict[Path, str], Path | None]] | None = None
         self.mono = QFont()
+        self.icon_for: Callable[[Path], object] | None = None  # set by the window: a file's QIcon
         self._results: dict[Path, FileResult] = {}
         self._items: dict[Path, QTreeWidgetItem] = {}
         self._query: Query | None = None      # what the results are for

@@ -516,6 +516,10 @@ class ProjectTree(QWidget):
             self._role_icons["manifest"] = badged_icon(base, "manifest")
         return self._role_icons["manifest"]
 
+    def icon_for(self, path: Path):
+        """A file's icon, as in the tree (e.g. for the Search tab)."""
+        return self._manifest_icon() if path.name == "fpm.toml" else self._file_icon(path)
+
     def _file_icon(self, path: Path):
         """Icons by file type (asking the OS once per type, not per file)."""
         key = path.suffix.lower() or path.name

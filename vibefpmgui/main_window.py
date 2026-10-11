@@ -535,6 +535,7 @@ class MainWindow(QMainWindow):
         self.monitor_tabs.addTab(self.references_panel, "References")
         self.search_panel = SearchPanel(self.settings)
         self.search_panel.provider = self._search_sources
+        self.search_panel.icon_for = self.project_tree.icon_for
         self.search_panel.mono = self._mono_font()
         self.search_panel.open_requested.connect(self._open_search_match)
         self.search_panel.replace_requested.connect(self._replace_in_files)
