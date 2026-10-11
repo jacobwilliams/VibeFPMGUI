@@ -27,9 +27,12 @@ jobs:
         cache: true
         cache-write: ${{ github.ref == 'refs/heads/master' }}
 
-    # add some tests
-    # - name: Run tests
-    #   run: pixi run test
+    # GUI and unit tests (pytest + pytest-qt). There's no display on the
+    # runner: Qt draws offscreen (tests/conftest.py sets this too).
+    - name: Run tests
+      run: pixi run test
+      env:
+        QT_QPA_PLATFORM: offscreen
 
     # API docs from the docstrings (pdoc), into web/api so they're deployed
     # with the website. pdoc imports the package, which imports Qt: no display

@@ -114,14 +114,13 @@ def compile_query(query: Query) -> re.Pattern | None:
     return re.compile(pattern, re.MULTILINE | (0 if query.case else re.IGNORECASE))
 
 
-def search_roots(graph: m.DependencyGraph | None, project_dir: Path,
-                 dependencies: bool = True) -> list[Root]:
+def search_roots(graph: m.DependencyGraph | None, project_dir: Path) -> list[Root]:
     """The project folder, then each dependency on disk."""
     name = project_dir.name
     if graph is not None and graph.root in graph.packages:
         name = graph.packages[graph.root].name
     roots, seen = [Root(name, project_dir, False)], {project_dir.resolve()}
-    if graph is not None and dependencies:
+    if graph is not None:
         for pkg in graph.packages.values():
             if pkg.name == graph.root or pkg.kind in (m.META, m.MISSING):
                 continue
@@ -152,10 +151,14 @@ def glob_matches(relative: str, globs: list[str]) -> bool:
 
 
 def iter_files(roots: list[Root], query: Query, cancelled: Callable[[], bool] = lambda: False):
-    """(root, path) for every file to search, package by package."""
+    """(root, path) for every file to search, package by package (the
+    dependencies only with ``query.dependencies``; their folders are left out
+    of the project's even when not searched, e.g. a local dependency in it)."""
     others = {r.directory.resolve() for r in roots}
     include, exclude = _globs(query.include), _globs(query.exclude)
     for root in roots:
+        if root.dependency and not query.dependencies:
+            continue
         top = root.directory.resolve()
         rules = GitIgnore(top)
         for folder, dirs, files in os.walk(top):
@@ -782,8 +785,6 @@ class SearchPanel(QWidget):
         if not roots:
             self.status.setText("Open a project to search its files.")
             return
-        if not query.dependencies:
-            roots = [r for r in roots if not r.dependency]
         self._query, self._pattern = query, pattern
         worker = SearchWorker(roots, query, pattern, open_texts, self)
         worker.found.connect(self._add_results)

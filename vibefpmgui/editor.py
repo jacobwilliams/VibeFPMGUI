@@ -24,6 +24,7 @@ from qtpy.QtCore import (
     QProcess,
     QRect,
     QRectF,
+    QRegularExpression,
     QSize,
     Qt,
     QTimer,
@@ -900,11 +901,21 @@ class FindBar(QWidget):
         flags = QTextDocument.FindFlag(0)
         if self.case_check.isChecked():
             flags |= QTextDocument.FindCaseSensitively
-        if self.word_check.isChecked():
-            flags |= QTextDocument.FindWholeWords
         if backward:
             flags |= QTextDocument.FindBackward
         return flags
+
+    def _needle(self):
+        """What to look for: the text, or with *Whole words* a regular
+        expression (Qt's own whole-word search counts "_" as a break, so
+        "count" would match in count_all)."""
+        text = self.find_edit.text()
+        if not self.word_check.isChecked():
+            return text
+        options = QRegularExpression.NoPatternOption
+        if not self.case_check.isChecked():
+            options |= QRegularExpression.CaseInsensitiveOption
+        return QRegularExpression(rf"(?<!\w){QRegularExpression.escape(text)}(?!\w)", options)
 
     def find_next(self):
         self._find(backward=False)
@@ -916,12 +927,12 @@ class FindBar(QWidget):
         text = self.find_edit.text()
         if not text:
             return False
-        if not self.editor.find(text, self._flags(backward)):
+        if not self.editor.find(self._needle(), self._flags(backward)):
             # Wrap around.
             cursor = self.editor.textCursor()
             cursor.movePosition(QTextCursor.End if backward else QTextCursor.Start)
             self.editor.setTextCursor(cursor)
-            if not self.editor.find(text, self._flags(backward)):
+            if not self.editor.find(self._needle(), self._flags(backward)):
                 return False
         self._update_count()
         return True
@@ -941,11 +952,11 @@ class FindBar(QWidget):
         cursor = QTextCursor(doc)
         cursor.beginEditBlock()
         count = 0
-        found = doc.find(text, 0, self._flags())
+        found = doc.find(self._needle(), 0, self._flags())
         while not found.isNull():
             found.insertText(self.replace_edit.text())
             count += 1
-            found = doc.find(text, found.position(), self._flags())
+            found = doc.find(self._needle(), found.position(), self._flags())
         cursor.endEditBlock()
         self.count_label.setText(f"{count} replaced")
 
@@ -958,10 +969,10 @@ class FindBar(QWidget):
             return []
         doc = self.editor.document()
         out = []
-        found = doc.find(text, 0, self._flags())
+        found = doc.find(self._needle(), 0, self._flags())
         while not found.isNull() and len(out) < MAX_FIND_HIGHLIGHTS:
             out.append(found)
-            found = doc.find(text, found.selectionEnd(), self._flags())
+            found = doc.find(self._needle(), found.selectionEnd(), self._flags())
         return out
 
     def _update_highlights_if_visible(self):

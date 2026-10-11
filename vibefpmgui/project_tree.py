@@ -193,8 +193,9 @@ class _Filter(QSortFilterProxyModel):
         self.include_ignored = False
 
     def set_filter(self, needle: str, include_ignored: bool):
+        self.beginFilterChange()
         self.needle, self.include_ignored = needle.lower(), include_ignored
-        self.invalidateRowsFilter()
+        self.endFilterChange(QSortFilterProxyModel.Direction.Rows)
 
     def filterAcceptsRow(self, row, parent):
         if not self.needle:

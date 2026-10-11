@@ -1,0 +1,132 @@
+"""Find in Files: the Search tab in the window."""
+
+from __future__ import annotations
+
+from conftest import open_editor
+from qtpy.QtGui import QTextCursor
+from qtpy.QtWidgets import QMessageBox
+
+
+def search_for(qtbot, window, text: str, **checks):
+    panel = window.search_panel
+    for name, value in checks.items():
+        getattr(panel, name).setChecked(value)
+    panel.find_edit.setText(text)
+    panel.start_search()
+    qtbot.waitUntil(lambda: panel._worker is None, timeout=10_000)
+    return panel
+
+
+def result_files(panel) -> list[str]:
+    return sorted(str(p.name) for p in panel._results)
+
+
+def test_shortcut_searches_the_selection(qtbot, window, project):
+    assert window.find_files_action.shortcut().toString() == "Ctrl+Shift+F"
+    editor = open_editor(window, project / "src/foo.f90")
+    cursor = editor.editor.textCursor()
+    block = editor.editor.document().findBlockByNumber(2)
+    cursor.setPosition(block.position() + 13)
+    cursor.setPosition(block.position() + 18, QTextCursor.KeepAnchor)  # "count"
+    editor.editor.setTextCursor(cursor)
+    window.find_files_action.trigger()
+    panel = window.search_panel
+    assert window.monitor_tabs.currentWidget() is panel
+    assert panel.find_edit.text() == "count"
+    qtbot.waitUntil(lambda: panel._worker is None and bool(panel._results), timeout=10_000)
+    assert result_files(panel) == ["check.f90", "dl.f90", "foo.f90"]
+    assert panel.status.text().startswith("7 results in 3 files")
+
+
+def test_options_and_errors(qtbot, window):
+    panel = search_for(qtbot, window, "count", word_button=True)
+    assert sum(len(r.matches) for r in panel._results.values()) == 6
+    panel = search_for(qtbot, window, "count", word_button=False, deps_check=False)
+    assert result_files(panel) == ["check.f90", "foo.f90"]
+    panel.regex_button.setChecked(True)
+    panel.find_edit.setText("count(")
+    panel.start_search()
+    assert "Bad regular expression" in panel.status.text()
+    assert not panel._results
+
+
+def test_options_are_remembered(qtbot, window, make_window, project):
+    window.search_panel.case_button.setChecked(True)
+    window.search_panel.include_edit.setText("*.f90")
+    window.search_panel._save_options()
+    again = make_window(project / "fpm.toml")
+    assert again.search_panel.case_button.isChecked()
+    assert again.search_panel.include_edit.text() == "*.f90"
+
+
+def test_results_follow_unsaved_edits(qtbot, window, project):
+    panel = search_for(qtbot, window, "count", deps_check=False)
+    editor = open_editor(window, project / "app/main.f90")
+    editor.editor.moveCursor(QTextCursor.End)
+    editor.editor.insertPlainText("! count again\n")
+    qtbot.waitUntil(lambda: "main.f90" in result_files(panel), timeout=5_000)
+
+
+def test_clicking_a_result_opens_the_match(qtbot, window, project):
+    panel = search_for(qtbot, window, "count", deps_check=False)
+    item = panel._items[(project / "test/check.f90").resolve()]
+    panel._open(item.child(0))
+    editor = window.current_editor()
+    assert editor.path.name == "check.f90"
+    cursor = editor.editor.textCursor()
+    assert cursor.selectedText() == "count" and cursor.blockNumber() == 2
+
+
+def test_replace_all(qtbot, window, project, monkeypatch):
+    open_editor(window, project / "src/foo.f90")  # an open file: changed in the editor only
+    panel = search_for(qtbot, window, "count", word_button=True)
+    panel.set_replace_visible(True)
+    panel.replace_edit.setText("n_count")
+    asked = []
+    monkeypatch.setattr(QMessageBox, "exec", lambda box: asked.append(box.text()) or QMessageBox.Yes)
+    panel.replace_all()
+    assert asked and "Replace 6 matches in 3 files" in asked[0]
+    assert not panel._results  # (nothing left to find)
+    assert "n_count" in (project / "test/check.f90").read_text()   # saved
+    assert "n_count" in (project / "dep_local/src/dl.f90").read_text()
+    foo = window.current_editor()
+    assert foo.is_dirty() and "n_count = n_count + 1" in foo.editor.toPlainText()
+    assert "n_count" not in (project / "src/foo.f90").read_text()   # not saved
+    foo.editor.undo()
+    qtbot.waitUntil(lambda: "foo.f90" in result_files(panel), timeout=5_000)
+
+
+def test_replace_cancelled_changes_nothing(qtbot, window, project, monkeypatch):
+    panel = search_for(qtbot, window, "count", word_button=True)
+    panel.set_replace_visible(True)
+    panel.replace_edit.setText("n")
+    monkeypatch.setattr(QMessageBox, "exec", lambda box: QMessageBox.Cancel)
+    panel.replace_all()
+    assert "n" + " = " not in (project / "src/foo.f90").read_text()
+    assert len(panel._results) == 3
+
+
+def test_replace_one_match_and_dismiss(qtbot, window, project):
+    panel = search_for(qtbot, window, "count", word_button=True, deps_check=False)
+    panel.replace_edit.setText("total")
+    path = (project / "src/foo.f90").resolve()
+    first = panel._results[path].matches[0]
+    panel._replace({path: {(first.line, first.column)}})  # (right-click → Replace: no question)
+    text = (project / "src/foo.f90").read_text()
+    assert "integer :: total = 1" in text and "count = count + 1" in text
+    assert len(panel._results[path].matches) == 3
+    panel._dismiss(path, None)
+    assert path not in panel._results
+
+
+def test_result_lines_are_syntax_colored(qtbot, window, project):
+    panel = search_for(qtbot, window, "bump", deps_check=False)
+    path = (project / "src/foo.f90").resolve()
+    formats = panel.line_formats(path, 5)  # "  subroutine bump()"
+    keyword, name = formats[2], formats[13]
+    assert keyword is not None and keyword.foreground().color() != name.foreground().color()
+    # A line inside a C block comment is colored as a comment (lexed with the lines before it).
+    c_file = project / "src/x.c"
+    c_file.write_text("int a;\n/* start\n   bump inside\n*/\nint bump;\n")
+    inside, code = panel.line_formats(c_file, 3), panel.line_formats(c_file, 5)
+    assert inside[3].foreground().color() != code[0].foreground().color()

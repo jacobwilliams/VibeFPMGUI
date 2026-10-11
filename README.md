@@ -255,6 +255,20 @@ The demo project ([examples/demo](examples/demo)) uses features, profiles,
 git/path/metapackage/dev dependencies, warnings, parallel compiles and tests,
 so every part of the GUI can be tried; its README lists what to click.
 
+## Tests
+
+```sh
+pixi run test                       # all of them (pytest)
+pixi run test tests/test_editor.py  # one file; add -k word_wrap for one test
+```
+
+The tests in [tests/](tests) drive the real windows with
+[pytest-qt](https://pytest-qt.readthedocs.io). They use Qt's offscreen
+platform, so no windows appear and they also run on CI machines without a
+display (they run on every push), and a settings file of their own, so your
+settings are never touched. To watch them, set `QT_QPA_PLATFORM=cocoa`
+(macOS), `xcb` (Linux) or `windows`.
+
 ## AI code review
 
 The review runs entirely on your computer: [Ollama](https://ollama.com)
