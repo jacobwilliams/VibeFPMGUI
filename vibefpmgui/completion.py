@@ -139,8 +139,14 @@ class CompletionPopup(QFrame):
         self.list.setFixedSize(QSize(width, row_h * min(MAX_ROWS, len(matches)) + 4))
         self.detail.setFixedWidth(width)
         self._show_detail(0)
-        self.adjustSize()
         return True
+
+    def _fit(self):
+        """Size the popup to the list plus the detail line. (adjustSize()
+        only ever grows a window, so a shorter list left a gap.)"""
+        detail_h = self.detail.heightForWidth(self.detail.width()) if self.detail.isVisibleTo(self) else 0
+        self.detail.setFixedHeight(max(detail_h, 0))
+        self.setFixedSize(self.list.width() + 2, self.list.height() + detail_h + 2)
 
     def _show_detail(self, row: int):
         item = self.list.item(row)
@@ -148,7 +154,7 @@ class CompletionPopup(QFrame):
         text = c.detail if c else ""
         self.detail.setText(text)
         self.detail.setVisible(bool(text))
-        self.adjustSize()
+        self._fit()
 
     def move_selection(self, step: int):
         rows = self.list.count()
