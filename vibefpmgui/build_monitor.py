@@ -157,6 +157,29 @@ class DiagnosticParser:
         return None
 
 
+LOG_READ_LIMIT = 1_000_000  # bytes of a compiler log read (half from each end)
+
+
+def read_log_text(log: Path) -> str:
+    """A compiler log's text. A huge one (an lfortran crash writes the whole
+    compiled program, 100+ MB) is read as its start and end only, which is
+    where the messages are; reading and showing all of it would freeze the app."""
+    size = log.stat().st_size
+    if size <= LOG_READ_LIMIT:
+        return log.read_text(errors="replace")
+    half = LOG_READ_LIMIT // 2
+    with open(log, "rb") as f:
+        head = f.read(half)
+        f.seek(size - half)
+        tail = f.read()
+    head = head[:head.rfind(b"\n") + 1] or head  # whole lines only
+    tail = tail[tail.find(b"\n") + 1:] or tail
+    skipped = size - len(head) - len(tail)
+    return (head.decode("utf-8", errors="replace")
+            + f"\n[… {skipped / 1e6:.1f} MB of compiler output not shown — full log: {log} …]\n\n"
+            + tail.decode("utf-8", errors="replace"))
+
+
 def target_kind(name: str) -> str:
     suffix = Path(name).suffix.lower()
     if suffix in SOURCE_EXTS:
@@ -829,7 +852,7 @@ class BuildMonitor(SortableTable, QWidget):
         log = max(logs)[1]
         self._resolve_owner(target, log.name)
         try:
-            text = log.read_text(errors="replace")
+            text = read_log_text(log)
         except OSError:
             return
         target.log_text = text  # shown with its colours

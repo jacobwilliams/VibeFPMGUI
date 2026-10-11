@@ -12,8 +12,10 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import tomllib
+from collections import deque
 from pathlib import Path
 
 from qtpy.QtCore import (
@@ -72,7 +74,7 @@ from . import build_outputs as bo
 from . import manifest as m
 from .about import FPM_DOCS_URL, AboutDialog
 from .build_monitor import BuildMonitor, set_ui_scale
-from .compat import join_args, quote_arg, set_windows_app_id, split_args
+from .compat import join_args, quote_arg, reveal_label, set_windows_app_id, split_args
 from .editor import EditorTab, monospace_font
 from .graph_view import (
     EDGE_STYLES,
@@ -90,6 +92,14 @@ from .review_monitor import ReviewMonitor
 from .run_monitor import RunMonitor
 from .symbol_search import SymbolSearchDialog
 from .test_monitor import MARKER_RE, TestMonitor, parse_test_list
+
+# A command's output beyond this many characters isn't added to the Output
+# panel (it would freeze the app: an lfortran crash, for one, prints the whole
+# compiled program, 100+ MB); the last lines are shown when it finishes and
+# everything is saved to a file.
+OUTPUT_SHOW_LIMIT = 2_000_000
+OUTPUT_TAIL_LINES = 200
+MAX_LINE_SHOWN = 20_000  # longer lines are shortened
 
 # (label, fpm sub-command, uses build options, refresh graph afterwards, icon, shortcut, description)
 COMMANDS = [
@@ -127,6 +137,13 @@ class MainWindow(QMainWindow):
         self._monitoring = False
         self._partial = ""  # output text after the last newline
         self._esc_tail = ""  # colour code cut off at the end of the last output chunk
+        self._full_output_path = Path(tempfile.gettempdir()) / f"vibefpmgui-output-{os.getpid()}.log"
+        self._full_output = None  # the file the running command's whole output is saved to
+        self._shown_chars = 0     # how much of it the Output panel shows (see OUTPUT_SHOW_LIMIT)
+        self._hidden_chars = 0
+        self._hidden_lines = 0
+        self._tail: deque[str] = deque(maxlen=OUTPUT_TAIL_LINES)
+        self._tail_partial = ""
         # None, or while running Test/Run: "list" (fpm ... --list), "marked"
         # (fpm ... --runner <wrapper>) or "direct" (a built program, via the wrapper)
         self._phase: str | None = None
@@ -398,6 +415,12 @@ class MainWindow(QMainWindow):
         self.show_all_button.clicked.connect(self.show_all_output)
         self.show_all_button.hide()
         footer.addWidget(self.show_all_button)
+        self.full_output_button = QPushButton("Full Output…")
+        self.full_output_button.setToolTip("The last command's output was too long to show in full; "
+                                           f"show the file it was saved to in {reveal_label()}")
+        self.full_output_button.clicked.connect(lambda: reveal_in_file_manager(str(self._full_output_path)))
+        self.full_output_button.hide()
+        footer.addWidget(self.full_output_button)
         clear = QPushButton("Clear")
         clear.setToolTip("Clear the output")
         clear.clicked.connect(self.console.clear)
@@ -885,6 +908,7 @@ class MainWindow(QMainWindow):
         self._partial = ""
         self._esc_tail = ""
         self.console_writer.reset()
+        self._begin_output()
         self._held_blank = False
         # Through the same marker wrapper as Test, so the Run tab can follow it.
         self._phase = "direct"
@@ -1714,6 +1738,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Running fpm {' '.join(sub)}…")
         self._esc_tail = ""
         self.console_writer.reset()
+        self._begin_output()
         self.process.start(program, args)
 
     def stop(self):
@@ -1722,8 +1747,64 @@ class MainWindow(QMainWindow):
 
     def _append(self, text: str, bold: bool = False, colored: bool = False):
         """Add text to the Output panel; ``colored``: program output, whose
-        terminal colour codes are shown as colours."""
-        self.console_writer.write(text, bold, ansi=colored)
+        terminal colour codes are shown as colours (and which is limited to
+        OUTPUT_SHOW_LIMIT characters per command)."""
+        if not colored:
+            self.console_writer.write(text, bold, ansi=False)
+            return
+        if self._full_output is not None:
+            try:
+                self._full_output.write(ansi.strip(text))
+            except (OSError, ValueError):
+                self._full_output = None
+        if not self._hidden_chars and self._shown_chars + len(text) <= OUTPUT_SHOW_LIMIT:
+            self._shown_chars += len(text)
+            if len(text) > MAX_LINE_SHOWN and max(map(len, text.split("\n"))) > MAX_LINE_SHOWN:
+                text = "\n".join(line if len(line) <= MAX_LINE_SHOWN
+                                 else line[:MAX_LINE_SHOWN] + f" … [{len(line) - MAX_LINE_SHOWN} more characters]"
+                                 for line in text.split("\n"))
+            self.console_writer.write(text, bold, ansi=True)
+            return
+        if not self._hidden_chars:
+            self.console_writer.write(
+                f"\n[The output is very long, so the rest isn't shown here (that would freeze the app). "
+                f"The last {OUTPUT_TAIL_LINES} lines are shown when the command finishes, and all of "
+                f"it is saved to {self._full_output_path} (Full Output… below).]\n", True, ansi=False)
+            self.full_output_button.show()
+        self._hidden_chars += len(text)
+        lines = (self._tail_partial + text).split("\n")
+        self._tail_partial = lines.pop()
+        self._hidden_lines += len(lines)
+        self._tail.extend(line[:MAX_LINE_SHOWN] for line in lines)
+
+    def _begin_output(self):
+        """A command is starting: reset the output limit and the saved copy."""
+        self._end_output(show_tail=False)
+        self._shown_chars = self._hidden_chars = self._hidden_lines = 0
+        self._tail.clear()
+        self._tail_partial = ""
+        self.full_output_button.hide()
+        try:
+            self._full_output = open(self._full_output_path, "w", encoding="utf-8", errors="replace")  # noqa: SIM115
+        except OSError:
+            self._full_output = None
+
+    def _end_output(self, show_tail: bool = True):
+        """The command has finished: show the end of any output that wasn't shown."""
+        if self._full_output is not None:
+            try:
+                self._full_output.close()
+            except OSError:
+                pass
+            self._full_output = None
+        if show_tail and self._hidden_chars:
+            tail = list(self._tail) + ([self._tail_partial] if self._tail_partial else [])
+            skipped = self._hidden_lines + bool(self._tail_partial) - len(tail)
+            self.console_writer.write(
+                f"\n[… {skipped:,} lines ({self._hidden_chars / 1e6:.1f} MB) not shown — "
+                f"full output: {self._full_output_path} …]\n", True, ansi=False)
+            self.console_writer.write("\n".join(tail) + "\n", ansi=True)
+            self._hidden_chars = 0
 
     def _read_output(self):
         if self.process is None:
@@ -1804,6 +1885,7 @@ class MainWindow(QMainWindow):
         self._read_output()
         crashed = status == QProcess.CrashExit
         self._flush_monitor(code, crashed)
+        self._end_output()
         if crashed:
             self._append("\n[process was stopped]\n", bold=True)
         else:
@@ -1828,6 +1910,7 @@ class MainWindow(QMainWindow):
                 self._append(f"\nCould not start '{self._process_label}'.\n", bold=True)
             self.statusBar().showMessage(f"{getattr(self, '_process_label', 'fpm')} failed to start")
             self._flush_monitor(-1, True)
+            self._end_output()
             if self._phase is not None:
                 self._marker_monitor().finish(-1, stopped=True)
             self._phase = None
