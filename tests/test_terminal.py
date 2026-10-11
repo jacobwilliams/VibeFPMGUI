@@ -397,3 +397,32 @@ def test_alternate_screen_is_not_reflowed_but_main_is_after():
     assert screen.alternate
     screen.stream.feed(b"\x1b[?1049l")
     assert all_rows(screen) == ["y" * 30, "$"]  # (joined at the new width on the way back)
+
+
+def test_sideways_scroll_bar_only_when_needed(qtbot, panel):
+    view, bar = panel.view, panel.hscroll_bar
+    view.set_word_wrap(False)
+    view.feed(b"\x1b[2J\x1b[3J\x1b[Hshort\r\n")
+    view._after_output()
+    assert not bar.isVisibleTo(panel)  # (nothing wider than the window)
+    height = view.height()
+    view.feed(b"y" * 200 + b"\r\n")
+    view._after_output()
+    assert bar.isVisibleTo(panel) and bar.maximum() > 0
+    assert bar.maximum() < terminal.NO_WRAP_COLUMNS * view.cell_width - view.width()  # (to the text's end)
+    qtbot.wait(50)
+    assert view.height() == height  # (its room was kept: the terminal didn't change size)
+    view.feed(b"\x1b[2J\x1b[3J\x1b[H")  # (clear: no wide text any more)
+    view._after_output()
+    assert not bar.isVisibleTo(panel)
+    view.set_word_wrap(True)
+    assert not bar.isVisibleTo(panel)
+
+
+def test_tab_stops_follow_the_width():
+    screen = screen_of(80, 3)
+    screen.resize(3, 200)
+    screen.stream.feed(b"a" + b"\t" * 12 + b"b")  # (ls aligns its columns with tabs)
+    assert screen.cursor.x == 97 and screen.buffer[0][96].data == "b"
+    screen.resize(3, 40)
+    assert max(screen.tabstops) < 40

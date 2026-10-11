@@ -359,6 +359,12 @@ class TerminalScreen(pyte.Screen):
         lines, columns = lines or self.lines, columns or self.columns
         if (lines, columns) == (self.lines, self.columns):
             return
+        if columns != self.columns:
+            # Tab stops every 8 columns across the new width (pyte sets them
+            # once, for the first width: a tab past it went to the last column).
+            self.tabstops = {x for x in self.tabstops if x < columns}
+            first_new = (min(self.columns, columns) + 7) // 8 * 8  # (the old ones stopped before the old width)
+            self.tabstops.update(range(max(8, first_new), columns, 8))
         if self.alternate:  # (full-screen programs redraw themselves at the new size)
             super().resize(lines, columns)
             self.cursor.y = min(self.cursor.y, self.lines - 1)
@@ -591,25 +597,59 @@ class TerminalView(QWidget):
     def _after_output(self):
         self._update_scroll_bar()
         self.ensure_cursor_visible()
+        self._update_hscroll_bar()
         self.update()
 
     # ------------------------------------------------- sideways (no wrap)
-    def _content_width(self) -> int:
-        return int(self.screen.columns * self.cell_width + 2 * PADDING)
+    def _used_columns(self) -> int:
+        """How far the text in view (and the cursor) reaches, in columns."""
+        screen = self.screen
+        first = len(screen.history) - self._scroll
+        cursor_row = len(screen.history) + screen.cursor.y - first
+        widest = screen.cursor.x + 1 if 0 <= cursor_row < screen.lines else 0
+        blank = screen.default_char
+        for n in range(first, first + screen.lines):
+            line = self.line(n)
+            if isinstance(line, list):
+                end = len(line)
+                while end > widest and line[end - 1] == blank:
+                    end -= 1
+            else:  # (a screen line: only the cells written are in it)
+                end = max((x + 1 for x, cell in line.items() if cell != blank), default=0)
+            widest = max(widest, min(end, screen.columns))
+        return widest
+
+    def _scroll_range(self) -> int:
+        """How far the view can scroll sideways (pixels): to the end of the
+        widest text in view, not the terminal's full width."""
+        if self.word_wrap:
+            return 0
+        return max(0, int(self._used_columns() * self.cell_width + 2 * PADDING) - self.width())
 
     def _update_hscroll_bar(self):
         bar = self.hscroll_bar
+        maximum = self._scroll_range()
+        self._hscroll = min(self._hscroll, maximum)
         if bar is None:
             return
-        maximum = 0 if self.word_wrap else max(0, self._content_width() - self.width())
-        self._hscroll = min(self._hscroll, maximum)
         bar.blockSignals(True)
         bar.setRange(0, maximum)
         bar.setPageStep(max(1, self.width()))
         bar.setSingleStep(max(1, int(self.cell_width * 4)))
         bar.setValue(self._hscroll)
         bar.blockSignals(False)
-        bar.setVisible(not self.word_wrap)
+        # Shown only when there's something to scroll to; without word wrap
+        # its room is kept while hidden, so the terminal's height (and the
+        # shell's idea of it) doesn't change as it comes and goes.
+        policy = bar.sizePolicy()
+        if policy.retainSizeWhenHidden() == self.word_wrap:
+            policy.setRetainSizeWhenHidden(not self.word_wrap)
+            bar.setSizePolicy(policy)
+            layout = bar.parentWidget().layout() if bar.parentWidget() else None
+            if layout is not None:  # (a hidden widget's new policy doesn't re-lay-out by itself)
+                layout.invalidate()
+                layout.activate()
+        bar.setVisible(maximum > 0)
 
     def _hscrolled(self, value: int):
         self._hscroll = value
@@ -617,8 +657,7 @@ class TerminalView(QWidget):
 
     def scroll_sideways(self, pixels: int):
         if not self.word_wrap:
-            maximum = max(0, self._content_width() - self.width())
-            self._hscroll = max(0, min(maximum, self._hscroll + pixels))
+            self._hscroll = max(0, min(self._scroll_range(), self._hscroll + pixels))
             self._update_hscroll_bar()
             self.update()
 
@@ -648,12 +687,14 @@ class TerminalView(QWidget):
 
     def _scrolled(self, value: int):
         self._scroll = max(0, len(self.screen.history) - value)
+        self._update_hscroll_bar()  # (the lines now in view may be wider or narrower)
         self.update()
 
     def scroll_lines(self, lines: int):
         """Scroll the view up (positive) or down through the scrollback."""
         self._scroll = max(0, min(len(self.screen.history), self._scroll + lines))
         self._update_scroll_bar()
+        self._update_hscroll_bar()
         self.update()
 
     # ------------------------------------------------------------ text
