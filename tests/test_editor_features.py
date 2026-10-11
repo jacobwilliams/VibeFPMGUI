@@ -226,3 +226,15 @@ def test_completion_popup_accepts(qtbot, window, project):
     QTest.keyClick(code, Qt.Key_Up)
     QTest.keyClick(code, Qt.Key_Return)
     assert line_text(editor, 4) == "  call bump()" and not code.completion_popup.isVisible()
+
+
+@needs_fortitude
+def test_lint_fix_after_the_colors_change(qtbot, lint_window, project):
+    # Recoloring the syntax isn't an edit: fortitude's fixes still apply.
+    editor = open_editor(lint_window, project / "src/lt.f90")
+    qtbot.waitUntil(lambda: any(i.code == "S101" for i in editor.editor.lint_issues), timeout=20_000)
+    lint_window.set_syntax_style("monokai")
+    qtbot.waitUntil(lambda: not editor.highlighter._full, timeout=5_000)
+    issue = next(i for i in editor.editor.lint_issues if i.code == "S101")
+    editor.apply_lint_fix(issue)
+    assert line_text(editor, 5) == "    x = 1"

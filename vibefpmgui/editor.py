@@ -121,12 +121,22 @@ def line_changes(opened: str, saved: str, current: str) -> tuple[dict[int, str],
     def diff(base: str):
         changed: set[int] = set()
         deleted: dict[int, int] = {}
-        matcher = difflib.SequenceMatcher(None, base.split("\n"), lines, autojunk=False)
+        old = base.split("\n")
+        # Only the middle differs (edits are usually in one place): skip the
+        # lines that are the same at the start and the end before diffing.
+        top, limit = 0, min(len(old), len(lines))
+        while top < limit and old[top] == lines[top]:
+            top += 1
+        bottom = 0
+        while bottom < limit - top and old[-1 - bottom] == lines[-1 - bottom]:
+            bottom += 1
+        matcher = difflib.SequenceMatcher(None, old[top:len(old) - bottom], lines[top:len(lines) - bottom],
+                                          autojunk=False)
         for tag, i1, i2, j1, j2 in matcher.get_opcodes():
             if tag in ("replace", "insert"):
-                changed.update(range(j1 + 1, j2 + 1))
+                changed.update(range(top + j1 + 1, top + j2 + 1))
             elif tag == "delete":
-                deleted[j1 + 1] = i2 - i1
+                deleted[top + j1 + 1] = i2 - i1
         return changed, deleted
 
     unsaved, unsaved_deleted = diff(saved)
@@ -362,7 +372,9 @@ class CodeEditor(QPlainTextEdit):
         return 22 + self.fontMetrics().horizontalAdvance("9") * digits
 
     def _update_gutter_width(self, *_):
-        self.setViewportMargins(self.gutter_width(), 0, 0, 0)
+        width = self.gutter_width()
+        if width != self.viewportMargins().left():  # (called on every repaint of the whole view)
+            self.setViewportMargins(width, 0, 0, 0)
 
     def _update_gutter(self, rect, dy):
         if dy:
@@ -1712,8 +1724,10 @@ class EditorTab(QWidget):
         process.errorOccurred.connect(self._lint_process_error)
         self._lint_process = process
         process.start(lint.executable(), lint.command(self.path))
-        self._lint_sent_revision = self.editor.document().revision()
-        process.write(self.editor.toPlainText().encode("utf-8"))
+        # (The text itself, not the document's revision: recoloring the
+        # syntax also counts as a revision.)
+        self._lint_sent_text = self.editor.toPlainText()
+        process.write(self._lint_sent_text.encode("utf-8"))
         process.closeWriteChannel()
 
     def _lint_process_finished(self, *_):
@@ -1732,7 +1746,7 @@ class EditorTab(QWidget):
         process.deleteLater()
         if self.can_lint():
             self._show_lint(lint.parse(output))
-            self._lint_revision = self._lint_sent_revision  # the text the issues are about
+            self._lint_text = self._lint_sent_text  # the text the issues are about
         if self._lint_again:
             self._lint_timer.start()
 
@@ -1742,7 +1756,7 @@ class EditorTab(QWidget):
         may be off, so check again first."""
         if not issue.fixable:
             return
-        if getattr(self, "_lint_revision", None) != self.editor.document().revision():
+        if getattr(self, "_lint_text", None) != self.editor.toPlainText():
             self._update_status("the file changed since fortitude checked it — try again in a moment")
             self._lint_timer.start()
             return

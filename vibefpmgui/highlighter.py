@@ -2,12 +2,17 @@
 
 The whole document is lexed at once (so multi-line strings and the like are
 handled correctly) and each text block then just applies the token formats
-that overlap it.
+that overlap it. After an edit (once typing pauses) the document is lexed
+again, on a thread for a big one, and only the lines whose colors changed
+are recolored.
 """
 
 from __future__ import annotations
 
+import sys
+import threading
 from bisect import bisect_right
+from contextlib import contextmanager
 from pathlib import Path
 from typing import ClassVar
 
@@ -144,8 +149,57 @@ def is_dark(palette: QPalette) -> bool:
     return palette.color(QPalette.Base).lightness() < 128
 
 
+LEX_IN_THREAD = 100_000  # characters: bigger documents are lexed on a thread (typing stays smooth)
+
+
+def _common_prefix(a: str, b: str) -> int:
+    """How many characters two texts start with in common (compared a
+    chunk at a time, so big texts are quick)."""
+    n, i, step = min(len(a), len(b)), 0, 4096
+    while i < n and a[i:i + step] == b[i:i + step]:
+        i += step
+    i = min(i, n)
+    while i < n and a[i] == b[i]:
+        i += 1
+    return i
+
+
+def _common_suffix(a: str, b: str, limit: int) -> int:
+    """How many characters two texts end with in common (at most ``limit``)."""
+    k, step = 0, 4096
+    while k < limit and a[len(a) - min(k + step, limit):len(a) - k] == b[len(b) - min(k + step, limit):len(b) - k]:
+        k = min(k + step, limit)
+    while k < limit and a[len(a) - k - 1] == b[len(b) - k - 1]:
+        k += 1
+    return k
+
+
+_switching_lock = threading.Lock()
+_switching_users = 0
+
+
+@contextmanager
+def _quick_thread_switching(interval: float = 0.0005):
+    """Python switches between threads more often while inside (for every
+    lexing thread at once; the normal interval comes back after the last)."""
+    global _switching_users
+    with _switching_lock:
+        if _switching_users == 0:
+            _quick_thread_switching.saved = sys.getswitchinterval()
+            sys.setswitchinterval(interval)
+        _switching_users += 1
+    try:
+        yield
+    finally:
+        with _switching_lock:
+            _switching_users -= 1
+            if _switching_users == 0:
+                sys.setswitchinterval(_quick_thread_switching.saved)
+
+
 class PygmentsHighlighter(QSyntaxHighlighter):
     relexed = Signal()  # the whole document has new colors (e.g. for the minimap)
+    _lexed = Signal(object)  # (text, tokens) from the lexing thread
 
     def __init__(self, document, lexer=None, style: str | None = None):
         super().__init__(document)
@@ -153,12 +207,19 @@ class PygmentsHighlighter(QSyntaxHighlighter):
         self._spans: list[tuple[int, int, QTextCharFormat]] = []
         self._starts: list[int] = []
         self._formats: dict = {}
+        self._text = ""          # the text the spans are for
+        self._full = True        # recolor every line next time (the style or lexer changed)
+        self._lexing = False     # a thread is lexing
+        self._generation = 0     # changes with the style or lexer (a thread's answer from before is stale)
         self._busy = False
-        # While typing, wait for a short pause before re-lexing the document.
+        self.style = None
+        self._style_name = None
+        # While typing, wait for a short pause before lexing again.
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setInterval(120)
         self._timer.timeout.connect(self._relex)
+        self._lexed.connect(self._apply)
         self.set_style(style or LIGHT_STYLE)
         document.contentsChange.connect(self._schedule)
 
@@ -168,12 +229,19 @@ class PygmentsHighlighter(QSyntaxHighlighter):
 
     def set_lexer(self, lexer):
         self.lexer = lexer
+        self._full = True
+        self._generation += 1
         self._relex()
 
     def set_style(self, name: str):
+        if name == self._style_name:
+            return
+        self._style_name = name
         self.style = get_style_by_name(name)
         self._formats.clear()
-        self._relex()
+        self._full = True
+        self._generation += 1
+        QTimer.singleShot(0, self._relex)  # (once, even when the text is set just after)
 
     def background(self) -> QColor:
         return QColor(self.style.background_color)
@@ -184,38 +252,116 @@ class PygmentsHighlighter(QSyntaxHighlighter):
             fmt = self._formats[ttype] = token_format(self.style, ttype)
         return fmt
 
+    @staticmethod
+    def _work(text: str, lexer, style, formats: dict, old_text: str, old_spans: list, full: bool):
+        """Lex ``text`` and work out what to recolor (on a thread for a big
+        document: no Qt objects but formats, which are plain values).
+        Returns (text, spans, starts, new formats, (start, end) or None for
+        everything); spans [] if lexing failed (plain text)."""
+        formats = dict(formats)  # (the window's own copy is not touched here)
+        added = {}
+        spans, pos = [], 0
+        try:
+            for ttype, value in lex(text, lexer):
+                # Pygments may append a trailing newline that isn't in the document.
+                length = min(len(value), len(text) - pos)
+                if length > 0:
+                    fmt = formats.get(ttype)
+                    if fmt is None:
+                        fmt = formats[ttype] = added[ttype] = token_format(style, ttype)
+                    spans.append((pos, length, fmt))
+                pos += len(value)
+        except Exception:  # noqa: BLE001 - never let highlighting break the editor
+            spans, full = [], True
+        starts = [s[0] for s in spans]
+        region = None if full else PygmentsHighlighter._changed(old_text, old_spans, text, spans)
+        return text, spans, starts, added, region
+
+    @staticmethod
+    def _changed(old_text: str, old: list, text: str, new: list) -> tuple[int, int]:
+        """The part of the new text whose colors may differ: the edited text,
+        and the tokens from the first difference to the last (e.g. an opened
+        string changes the rest of the file)."""
+        prefix = _common_prefix(old_text, text)
+        suffix = _common_suffix(old_text, text, min(len(old_text), len(text)) - prefix)
+        start, end = prefix, len(text) - suffix
+        shift = len(text) - len(old_text)
+        n = min(len(old), len(new))
+        i = 0
+        while i < n and old[i][0] == new[i][0] and old[i][1] == new[i][1] and old[i][2] is new[i][2]:
+            i += 1
+        j = 0
+        while j < n - i:
+            a, b = old[-1 - j], new[-1 - j]
+            if a[0] + shift != b[0] or a[1] != b[1] or a[2] is not b[2]:
+                break
+            j += 1
+        if i < len(new):
+            start = min(start, new[i][0])
+        last = len(new) - 1 - j
+        if last >= i:
+            end = max(end, new[last][0] + new[last][1])
+        return start, end
+
     def _relex(self, *_):
-        # rehighlight() itself emits contentsChange; don't recurse.
+        """Lex the text again (on a thread for a big document) and recolor
+        what changed."""
         if self._busy:
             return
-        self._busy = True
+        self._timer.stop()
+        text = self.document().toPlainText()
+        if text == self._text and not self._full:
+            return
+        if self._lexing:  # (the thread's answer is checked against the text then)
+            return
+        args = (text, self.lexer, self.style, self._formats, self._text, self._spans, self._full)
+        generation = self._generation
+        if len(text) > LEX_IN_THREAD:
+            self._lexing = True
+            threading.Thread(target=self._lex_in_thread, args=(generation, args),
+                             daemon=True, name="Syntax highlighting").start()
+        else:
+            self._apply((generation, self._work(*args)))
+
+    def _lex_in_thread(self, generation, args):
+        # The lexer is Python too: while it runs, the window's code waits its
+        # turn each time it runs (Python's GIL), up to the switch interval
+        # each time. A shorter interval while lexing keeps the window responsive.
+        with _quick_thread_switching():
+            result = self._work(*args)
+        self._lexed.emit((generation, result))
+
+    def _apply(self, result):
+        generation, (text, spans, starts, added, region) = result
+        self._lexing = False
+        if text != self.document().toPlainText() or generation != self._generation:
+            self._relex()  # (the text, style or lexer changed while lexing: again)
+            return
+        self._formats.update(added)
+        self._spans, self._starts, self._text = spans, starts, text
+        self._busy = True  # (recoloring changes the document's formats: not an edit)
         try:
-            self._lex_and_highlight()
-        except Exception:  # noqa: BLE001 - never let highlighting break the editor
-            self._spans, self._starts = [], []  # show it as plain text
-            self.rehighlight()
+            if self._full or region is None:
+                self.rehighlight()
+            else:
+                document = self.document()
+                block = document.findBlock(region[0])
+                while block.isValid() and block.position() <= region[1]:
+                    self.rehighlightBlock(block)
+                    block = block.next()
         finally:
             self._busy = False
+            self._full = False
         self.relexed.emit()
-
-    def _lex_and_highlight(self):
-        text = self.document().toPlainText()
-        spans, pos = [], 0
-        for ttype, value in lex(text, self.lexer):
-            # Pygments may append a trailing newline that isn't in the document.
-            length = min(len(value), len(text) - pos)
-            if length > 0:
-                spans.append((pos, length, self._format(ttype)))
-            pos += len(value)
-        self._spans = spans
-        self._starts = [s[0] for s in spans]
-        self.rehighlight()
 
     def highlightBlock(self, text: str):
         start = self.currentBlock().position()
         end = start + len(text)
-        first = max(bisect_right(self._starts, start) - 1, 0)
-        for pos, length, fmt in self._spans[first:]:
+        spans, count = self._spans, len(self._spans)
+        i = max(bisect_right(self._starts, start) - 1, 0)
+        while i < count:  # (by index: slicing the list would copy the rest of it for every line)
+            pos, length, fmt = spans[i]
+            i += 1
             if pos >= end:
                 break
             if pos + length <= start:
