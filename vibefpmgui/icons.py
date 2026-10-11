@@ -177,6 +177,13 @@ def _more(p: QPainter, c: QColor):
         p.drawPolyline([QPointF(x, 7), QPointF(x + 5, 12), QPointF(x, 17)])
 
 
+def _close(p: QPainter, c: QColor):
+    # A small "×" (editor tab close buttons).
+    p.setPen(_pen(c, 2.2))
+    p.drawLine(QPointF(7, 7), QPointF(17, 17))
+    p.drawLine(QPointF(17, 7), QPointF(7, 17))
+
+
 DRAWERS = {
     "build": _hammer,
     "run": _play,
@@ -188,6 +195,7 @@ DRAWERS = {
     "robot": _robot,
     "format": _format,
     "more": _more,
+    "close": _close,
 }
 
 

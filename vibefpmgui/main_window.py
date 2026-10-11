@@ -32,6 +32,7 @@ from qtpy.QtCore import (
 from qtpy.QtGui import (
     QAction,
     QActionGroup,
+    QColor,
     QDesktopServices,
     QFont,
     QFontDatabase,
@@ -60,6 +61,7 @@ from qtpy.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QStackedWidget,
+    QStyle,
     QTabBar,
     QTabWidget,
     QTextBrowser,
@@ -585,6 +587,9 @@ class MainWindow(QMainWindow):
                 editor.refresh_style()
             self.project_tree._apply_marks()
             self._update_command_icons()
+            for editor in self.editors():
+                if getattr(editor, "close_button", None) is not None:
+                    self._style_close_button(editor.close_button)
             self.build_monitor.set_package_colors(self.graph_view.package_colors())
         super().changeEvent(event)
 
@@ -1628,6 +1633,7 @@ class MainWindow(QMainWindow):
             editor.rename_ready.connect(self._preview_rename)
             editor.attach_lsp(self.lsp_client)
             self.tabs.addTab(editor, file.name)
+            self._add_close_button(editor)
             self._update_editor_title(editor)
             self._save_session()
         self.tabs.setCurrentWidget(editor)
@@ -1636,6 +1642,32 @@ class MainWindow(QMainWindow):
             editor.editor.go_to_line(diagnostics[0].line)
         else:
             editor.editor.setFocus()
+
+    def _add_close_button(self, editor: EditorTab):
+        """Our own × on an editor tab: macOS's dark-mode close button is
+        hard (or impossible) to see. On the side the platform puts it."""
+        button = QToolButton()
+        button.setAutoRaise(True)
+        button.setFixedSize(18, 18)
+        button.setIconSize(QSize(12, 12))
+        button.setCursor(Qt.ArrowCursor)
+        keys = self.close_tab_action.shortcut().toString(QKeySequence.NativeText)
+        button.setToolTip(f"Close ({keys})" if keys else "Close")
+        button.setStyleSheet("QToolButton { border: none; border-radius: 4px; padding: 0; }"
+                             "QToolButton:hover { background: rgba(128, 128, 128, 80); }")
+        button.clicked.connect(lambda _=False, e=editor: self.close_editor(self.tabs.indexOf(e)))
+        editor.close_button = button
+        self._style_close_button(button)
+        bar = self.tabs.tabBar()
+        side = (QTabBar.LeftSide if bar.style().styleHint(QStyle.SH_TabBar_CloseButtonPosition, None, bar) == 0
+                else QTabBar.RightSide)
+        bar.setTabButton(self.tabs.indexOf(editor), side, button)
+
+    @staticmethod
+    def _style_close_button(button: QToolButton):
+        color = QColor(QApplication.palette().color(QPalette.WindowText))
+        color.setAlpha(190)
+        button.setIcon(make_icon("close", color))
 
     def _fill_tab_list(self, menu: QMenu):
         """The tab-list menu: every open tab (the current one ticked)."""
