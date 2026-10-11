@@ -260,6 +260,7 @@ so every part of the GUI can be tried; its README lists what to click.
 ```sh
 pixi run test                       # all of them (pytest)
 pixi run test tests/test_editor.py  # one file; add -k word_wrap for one test
+pixi run coverage                   # all, with a code coverage report in web/coverage
 ```
 
 The tests in [tests/](tests) drive the real windows with
@@ -267,7 +268,9 @@ The tests in [tests/](tests) drive the real windows with
 platform, so no windows appear and they also run on CI machines without a
 display (they run on every push), and a settings file of their own, so your
 settings are never touched. To watch them, set `QT_QPA_PLATFORM=cocoa`
-(macOS), `xcb` (Linux) or `windows`.
+(macOS), `xcb` (Linux) or `windows`. CI publishes the
+[test coverage report](https://jacobwilliams.github.io/VibeFPMGUI/coverage/)
+with the website; it's linked from the API docs too.
 
 ## AI code review
 

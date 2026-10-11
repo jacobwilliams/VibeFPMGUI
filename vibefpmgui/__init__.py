@@ -120,6 +120,7 @@ menu item says "not found" and the feature is off; without fprettify the
 ```sh
 pixi run ruff check .     # lint the code
 pixi run test             # the tests (pytest + pytest-qt; no windows appear)
+pixi run coverage         # the same, with a code coverage report in web/coverage
 pixi run docs             # these API docs, into web/api
 pixi run docs-serve       # the same, live in the browser
 ```
@@ -128,7 +129,9 @@ The tests in `tests/` drive the real windows with
 [pytest-qt](https://pytest-qt.readthedocs.io), using Qt's offscreen platform
 (so they also run on CI machines without a display) and a settings file of
 their own (your settings are never touched). To watch them run, set
-`QT_QPA_PLATFORM=cocoa` (macOS), `xcb` (Linux) or `windows`.
+`QT_QPA_PLATFORM=cocoa` (macOS), `xcb` (Linux) or `windows`. CI runs them on
+every push and publishes the [test coverage report](../coverage/index.html)
+(which lines of the code the tests run) next to these docs.
 
 Docstrings are Markdown with Google-style sections (`Args:`, `Returns:`,
 `Raises:`); a name in backticks, such as `vibefpmgui.lsp.LspClient`,

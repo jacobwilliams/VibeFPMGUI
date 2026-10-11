@@ -67,3 +67,11 @@ testpaths = ["tests"]
 pythonpath = [".", "tests"]   # (the package from this checkout; conftest helpers)
 qt_api = "pyside6"
 timeout = 120            # pytest-timeout: a test waiting on a dialog fails instead of hanging
+
+[tool.coverage.run]
+source = ["vibefpmgui"]
+branch = true
+
+[tool.coverage.html]
+directory = "web/coverage"   # deployed with the website, linked from the API docs
+title = "VibeFPMGUI test coverage"

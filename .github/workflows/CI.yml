@@ -27,10 +27,15 @@ jobs:
         cache: true
         cache-write: ${{ github.ref == 'refs/heads/master' }}
 
-    # GUI and unit tests (pytest + pytest-qt). There's no display on the
-    # runner: Qt draws offscreen (tests/conftest.py sets this too).
-    - name: Run tests
-      run: pixi run test
+    # GUI and unit tests (pytest + pytest-qt), with an HTML code coverage
+    # report in web/coverage (deployed with the website, linked from the API
+    # docs). There's no display on the runner: Qt draws offscreen
+    # (tests/conftest.py sets this too). coverage.py puts a .gitignore of "*"
+    # in the report's folder, which would keep it out of the gh-pages commit.
+    - name: Run tests (with code coverage)
+      run: |
+        pixi run coverage
+        rm -f web/coverage/.gitignore
       env:
         QT_QPA_PLATFORM: offscreen
 

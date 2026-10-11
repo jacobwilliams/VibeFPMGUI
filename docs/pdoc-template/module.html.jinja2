@@ -1,7 +1,9 @@
-{#- pdoc's module page, with one change: the sidebar's "API Documentation"
-    heading is only shown when the module has public members to list under it.
+{#- pdoc's module page, with two changes: the sidebar's "API Documentation"
+    heading is only shown when the module has public members to list under it
     (pdoc checks for any members, so a package whose only members are private,
-    like vibefpmgui's __version__, got the heading with nothing under it.) -#}
+    like vibefpmgui's __version__, got the heading with nothing under it); and
+    the sidebar ends with a link to the test coverage report, which is
+    published next to the API docs (web/coverage, from "pixi run coverage"). -#}
 {% extends "default/module.html.jinja2" %}
 {% block nav_members %}
     {% set listed = namespace(any=false) %}
@@ -12,4 +14,10 @@
         <h2>API Documentation</h2>
         {{ nav_members(module.members.values()) }}
     {% endif %}
+{% endblock %}
+{% block nav_footer %}
+    {#- (vibefpmgui.html is in api/, vibefpmgui/editor.html in api/vibefpmgui/…) -#}
+    <a class="coverage-link" href="{{ "../" * (module.modulename.count(".") + 1) }}coverage/index.html"
+       title="Which lines of the code the tests run">Test coverage report</a>
+    {{ super() }}
 {% endblock %}

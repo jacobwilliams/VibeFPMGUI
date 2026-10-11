@@ -25,3 +25,12 @@
 :root[data-theme="dark"] .pdoc .alert.important { color: #8ce6f5; background-color: rgba(57, 197, 207, 0.12); border-color: rgba(57, 197, 207, 0.4); }
 :root[data-theme="dark"] .pdoc .alert.warning { color: #f2cc60; background-color: rgba(187, 128, 9, 0.15); border-color: rgba(187, 128, 9, 0.45); }
 :root[data-theme="dark"] .pdoc .alert a { color: var(--link); }
+
+/* The sidebar's link to the test coverage report (above "built with pdoc"). */
+.pdoc .coverage-link {
+    display: block; margin: 1.2rem 0 0.4rem; padding: 0.4rem 0.6rem;
+    border: 1px solid var(--accent2); border-radius: 6px;
+    color: var(--link); text-decoration: none; font-size: 0.9rem;
+}
+.pdoc .coverage-link::before { content: "✓ "; color: var(--def); }
+.pdoc .coverage-link:hover { background: var(--accent); color: var(--link-hover); }
