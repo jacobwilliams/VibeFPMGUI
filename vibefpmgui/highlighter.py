@@ -8,11 +8,14 @@ that overlap it.
 from __future__ import annotations
 
 from bisect import bisect_right
+from pathlib import Path
+from typing import ClassVar
 
 from pygments import lex
 from pygments.lexers import (
     FortranFixedLexer,
     FortranLexer,
+    JsonLexer,
     TextLexer,
     TOMLLexer,
     get_lexer_for_filename,
@@ -80,6 +83,18 @@ def apply_style(widget, highlighter):
 # Fortran extensions Pygments doesn't know (or maps to another language).
 _FIXED_FORM = {".for", ".ftn", ".f77"}
 _FREE_FORM = {".f95", ".f03", ".f08", ".fpp", ".inc"}
+# "JSON with Comments" (as VS Code calls it): workspace files, .jsonc, and the
+# .json files in a .vscode folder (settings, launch, tasks…).
+_JSONC = {".code-workspace", ".jsonc"}
+
+
+class JsonWithCommentsLexer(JsonLexer):
+    """Pygments' JSON lexer already accepts // and /* */ comments (and
+    trailing commas); this just gives it VS Code's name for the format."""
+
+    name = "JSON with Comments"
+    aliases: ClassVar[list[str]] = ["jsonc"]
+    filenames: ClassVar[list[str]] = ["*.jsonc", "*.code-workspace"]
 
 
 def lexer_for_path(path) -> object:
@@ -90,6 +105,8 @@ def lexer_for_path(path) -> object:
         return FortranFixedLexer()
     if suffix in _FREE_FORM:
         return FortranLexer()
+    if suffix in _JSONC or (suffix == ".json" and Path(name).parent.name == ".vscode"):
+        return JsonWithCommentsLexer()
     try:
         return get_lexer_for_filename(name)
     except ClassNotFound:
