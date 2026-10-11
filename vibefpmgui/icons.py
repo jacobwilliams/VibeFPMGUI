@@ -332,3 +332,51 @@ def app_icon() -> QIcon:
         p.end()
         icon.addPixmap(pixmap)
     return icon
+
+
+# ------------------------------------------------------------ symbol kinds
+# Outline icons: a coloured badge with a letter for each kind of Fortran
+# symbol (like the symbol icons of other editors).
+SYMBOL_BADGES = {
+    "module": ("M", "#8e44ad"),
+    "submodule": ("M", "#b15dcc"),
+    "program": ("P", "#5f3dc4"),
+    "subroutine": ("S", "#1c7ed6"),
+    "function": ("F", "#e8590c"),
+    "type": ("T", "#0ca678"),
+    "interface": ("I", "#2f9e44"),
+    "enum": ("E", "#f08c00"),
+    "constructor": ("C", "#c2255c"),
+}
+SYMBOL_INDENT = 12  # logical pixels per nesting level in lists of symbols
+_symbol_icons: dict = {}
+
+
+def symbol_icon(kind: str) -> QIcon:
+    """A 16 px badge for a kind of symbol ("function", "module"…)."""
+    if kind in _symbol_icons:
+        return _symbol_icons[kind]
+    letter, color = SYMBOL_BADGES.get(kind, ((kind[:1] or "?").upper(), "#868e96"))
+    width, height = 16, 16
+    icon = QIcon()
+    for ratio in (1, 2, 3):
+        pixmap = QPixmap(int(width * ratio), int(height * ratio))
+        pixmap.setDevicePixelRatio(ratio)
+        pixmap.fill(Qt.transparent)
+        p = QPainter(pixmap)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.TextAntialiasing)
+        box = QRectF(1, 1, 14, 14)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(color))
+        p.drawRoundedRect(box, 3.5, 3.5)
+        font = p.font()
+        font.setPixelSize(10)
+        font.setBold(True)
+        p.setFont(font)
+        p.setPen(QColor("white"))
+        p.drawText(box, Qt.AlignCenter, letter)
+        p.end()
+        icon.addPixmap(pixmap)
+    _symbol_icons[kind] = icon
+    return icon

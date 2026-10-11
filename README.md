@@ -91,7 +91,9 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
     opens where it is defined, including in a dependency's sources. *Go Back*
     / *Go Forward* (⌘[ / ⌘]; Alt+←/→ elsewhere) return.
   * An outline drop-down above the editor lists the file's modules, types
-    and procedures, follows the cursor, and jumps to the one you pick.
+    and procedures, follows the cursor, and jumps to the one you pick. A
+    coloured badge shows each one's kind (M module, P program, S subroutine,
+    F function, T type, I interface), indented to show what is inside what.
   * *Edit → Go to Symbol in Project…* (⌘T) finds a module, type or
     procedure by name in the project and its dependencies.
   * Completion: after two letters of a name (or a `%`, for a derived

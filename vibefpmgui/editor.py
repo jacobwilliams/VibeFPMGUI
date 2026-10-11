@@ -52,6 +52,9 @@ from qtpy.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPlainTextEdit,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTextBrowser,
     QTextEdit,
     QToolButton,
@@ -70,6 +73,7 @@ from .highlighter import (
     is_dark,
     lexer_for_path,
 )
+from .icons import SYMBOL_INDENT, symbol_icon
 
 INDENT = "    "
 MAX_FIND_HIGHLIGHTS = 2000
@@ -786,6 +790,42 @@ class FindBar(QWidget):
                                  else f"{len(matches)}{more} matches")
 
 
+DEPTH_ROLE = Qt.UserRole + 7  # outline entries: how deeply nested
+
+
+class _OutlineDelegate(QStyledItemDelegate):
+    """Draws the outline's entries with the badge and name together,
+    indented one step per nesting level (row background across the full
+    width)."""
+
+    def paint(self, painter, option, index):
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        style = opt.widget.style() if opt.widget else QApplication.style()
+        selected = bool(opt.state & QStyle.State_Selected) or bool(opt.state & QStyle.State_MouseOver)
+        painter.save()
+        if selected:
+            painter.fillRect(opt.rect, opt.palette.color(QPalette.Active, QPalette.Highlight))
+        else:
+            style.drawPrimitive(QStyle.PE_PanelItemViewItem, opt, painter, opt.widget)
+        x = opt.rect.left() + 8 + SYMBOL_INDENT * int(index.data(DEPTH_ROLE) or 0)
+        size = opt.decorationSize
+        top = opt.rect.top() + (opt.rect.height() - size.height()) // 2
+        opt.icon.paint(painter, QRect(x, top, size.width(), size.height()))
+        painter.setPen(opt.palette.color(QPalette.Active, QPalette.HighlightedText) if selected
+                       else opt.palette.color(QPalette.Text))
+        painter.setFont(opt.font)
+        text_rect = QRect(x + size.width() + 6, opt.rect.top(), opt.rect.right() - x - size.width() - 6,
+                          opt.rect.height())
+        painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, opt.text)
+        painter.restore()
+
+    def sizeHint(self, option, index):
+        hint = super().sizeHint(option, index)
+        return QSize(hint.width() + 16 + SYMBOL_INDENT * int(index.data(DEPTH_ROLE) or 0),
+                     max(hint.height(), 22))
+
+
 class EditorTab(QWidget):
     """One open file: editor + find bar + status line."""
 
@@ -822,6 +862,8 @@ class EditorTab(QWidget):
         self.outline_box.setMinimumContentsLength(30)
         self.outline_box.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
         self.outline_box.setToolTip("Outline: jump to a module, type or procedure in this file")
+        self.outline_box.setIconSize(QSize(16, 16))
+        self.outline_box.setItemDelegate(_OutlineDelegate(self.outline_box))
         self.outline_box.activated.connect(self._outline_chosen)
         self.outline_bar = QWidget()
         bar = QHBoxLayout(self.outline_bar)
@@ -965,8 +1007,13 @@ class EditorTab(QWidget):
         self._outline = lsp_mod.outline(result, lambda n: document.findBlockByNumber(n - 1).text())
         self.outline_box.blockSignals(True)
         self.outline_box.clear()
-        for depth, kind, name, _first, _last in self._outline:
-            self.outline_box.addItem("    " * depth + f"{name}  ({kind})")
+        # Each entry: a badge for its kind, then its name; the list indents
+        # nested entries (see _OutlineDelegate).
+        for depth, kind, name, first, _last in self._outline:
+            self.outline_box.addItem(symbol_icon(kind), name)
+            row = self.outline_box.count() - 1
+            self.outline_box.setItemData(row, f"{kind} {name} (line {first})", Qt.ToolTipRole)
+            self.outline_box.setItemData(row, depth, DEPTH_ROLE)
         self.outline_box.setPlaceholderText(f"Outline ({len(self._outline)})" if self._outline
                                             else "Outline (no procedures)")
         self.outline_box.blockSignals(False)
