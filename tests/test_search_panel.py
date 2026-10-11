@@ -69,8 +69,8 @@ def test_results_follow_unsaved_edits(qtbot, window, project):
 
 def test_clicking_a_result_opens_the_match(qtbot, window, project):
     panel = search_for(qtbot, window, "count", deps_check=False)
-    item = panel._items[(project / "test/check.f90").resolve()]
-    panel._open(item.child(0))
+    item = panel.tree.items[(project / "test/check.f90").resolve()]
+    panel.tree.open_item(item.child(0))
     editor = window.current_editor()
     assert editor.path.name == "check.f90"
     cursor = editor.editor.textCursor()
@@ -122,11 +122,11 @@ def test_replace_one_match_and_dismiss(qtbot, window, project):
 def test_result_lines_are_syntax_colored(qtbot, window, project):
     panel = search_for(qtbot, window, "bump", deps_check=False)
     path = (project / "src/foo.f90").resolve()
-    formats = panel.line_formats(path, 5)  # "  subroutine bump()"
+    formats = panel.tree.line_formats(path, 5)  # "  subroutine bump()"
     keyword, name = formats[2], formats[13]
     assert keyword is not None and keyword.foreground().color() != name.foreground().color()
     # A line inside a C block comment is colored as a comment (lexed with the lines before it).
     c_file = project / "src/x.c"
     c_file.write_text("int a;\n/* start\n   bump inside\n*/\nint bump;\n")
-    inside, code = panel.line_formats(c_file, 3), panel.line_formats(c_file, 5)
+    inside, code = panel.tree.line_formats(c_file, 3), panel.tree.line_formats(c_file, 5)
     assert inside[3].foreground().color() != code[0].foreground().color()

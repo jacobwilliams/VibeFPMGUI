@@ -20,12 +20,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import NamedTuple
 
-from pygments import lex
-from pygments.styles import get_style_by_name
-from qtpy.QtCore import QRect, QSize, Qt, QThread, QTimer, Signal
-from qtpy.QtGui import QColor, QFont, QFontMetrics, QPalette
+from qtpy.QtCore import Qt, QThread, QTimer, Signal
 from qtpy.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -34,26 +30,26 @@ from qtpy.QtWidgets import (
     QLineEdit,
     QMenu,
     QPushButton,
-    QStyle,
-    QStyledItemDelegate,
-    QStyleOptionViewItem,
     QToolButton,
-    QTreeWidget,
-    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-from . import highlighter as hl
 from . import manifest as m
 from .lsp import TextEdit
 from .project_tree import SKIP_DIRS, SKIP_SUFFIXES, GitIgnore
+from .result_tree import (
+    RESULT_ROLE,
+    Match,
+    ResultTree,
+    Root,
+    file_labels,
+    make_match,
+    read_text,
+    root_for,
+)
 
 MAX_RESULTS = 10_000          # matches shown (the search stops there)
-MAX_FILE_SIZE = 8 * 1024 * 1024
-PREVIEW_BEFORE = 50           # characters of the line shown before a match
-PREVIEW_AFTER = 200
-CONTEXT_LINES = 40            # lexed before a result's line, for its syntax colors
 
 
 # ------------------------------------------------------------------ search
@@ -68,24 +64,6 @@ class Query:
     exclude: str = ""
     ignored: bool = False     # also files ignored by git, and hidden files
     dependencies: bool = True
-
-
-class Root(NamedTuple):
-    """A package folder to search."""
-    name: str
-    directory: Path
-    dependency: bool
-
-
-class Match(NamedTuple):
-    line: int        # 1-based
-    column: int      # 0-based
-    end_line: int
-    end_column: int
-    before: str      # the line's text around the match, for the results list
-    text: str        # (the matched part of the first line)
-    after: str
-    start: int = 0   # the column ``before`` starts at (after any "…")
 
 
 @dataclass
@@ -212,23 +190,6 @@ def is_searched(root: Root, path: Path, query: Query, others: set[Path] = frozen
     return (not include or glob_matches(relative, include)) and not (exclude and glob_matches(relative, exclude))
 
 
-def read_text(path: Path) -> str | None:
-    """A file's text ("\\n" line ends), or None for binary or huge files."""
-    try:
-        if path.stat().st_size > MAX_FILE_SIZE:
-            return None
-        raw = path.read_bytes()
-    except OSError:
-        return None
-    if b"\0" in raw[:8192]:
-        return None
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        text = raw.decode("latin-1")
-    return text.replace("\r\n", "\n")
-
-
 def _position(text: str, offset: int) -> tuple[int, int]:
     """(line 0-based, column) of an offset."""
     line = text.count("\n", 0, offset)
@@ -250,14 +211,8 @@ def find_matches(text: str, pattern: re.Pattern, limit: int = MAX_RESULTS) -> li
         line_end = len(text) if line_end < 0 else line_end
         end_line = line + text.count("\n", start, end)
         end_column = end - (text.rfind("\n", 0, end) + 1)
-        column = start - line_start
-        before = text[line_start:start].lstrip()
-        first = column - len(before)
-        if len(before) > PREVIEW_BEFORE:
-            before, first = "…" + before[-PREVIEW_BEFORE:], column - PREVIEW_BEFORE
-        out.append(Match(line + 1, column, end_line + 1, end_column, before,
-                         text[start:min(end, line_end)][:PREVIEW_AFTER],
-                         text[min(end, line_end):line_end][:PREVIEW_AFTER], first))
+        out.append(make_match(text[line_start:line_end], line + 1, start - line_start,
+                              end_line + 1, end_column))
         if len(out) >= limit:
             break
     return out
@@ -358,131 +313,9 @@ class SearchWorker(QThread):
 
 
 # ------------------------------------------------------------------- panel
-PARTS_ROLE = Qt.UserRole + 1    # how a row is drawn (see _ResultDelegate)
-RESULT_ROLE = Qt.UserRole + 2   # (path, Match or None)
-
 # Saved options: settings key -> SearchPanel attribute.
 OPTIONS = {"case": "case_button", "word": "word_button", "regex": "regex_button",
            "dependencies": "deps_check", "ignored": "ignored_check"}
-
-MATCH_COLOR = QColor(242, 201, 76, 110)
-REMOVED_COLOR = QColor(255, 107, 107, 90)
-ADDED_COLOR = QColor(64, 192, 87, 100)
-
-
-class _ResultDelegate(QStyledItemDelegate):
-    """Draws a file row (name, folder, package, count) or a match row (line
-    number and the line, with the match highlighted, or the replacement
-    shown when replacing)."""
-
-    def __init__(self, panel: "SearchPanel"):
-        super().__init__(panel)
-        self.panel = panel
-
-    def sizeHint(self, option, index):
-        size = super().sizeHint(option, index)
-        return QSize(size.width(), max(size.height(), QFontMetrics(self.panel.mono).height() + 6))
-
-    def paint(self, painter, option, index):
-        parts = index.data(PARTS_ROLE)
-        if parts is None:
-            super().paint(painter, option, index)
-            return
-        opt = QStyleOptionViewItem(option)
-        self.initStyleOption(opt, index)
-        opt.text = ""
-        style = opt.widget.style() if opt.widget else QApplication.style()
-        style.drawControl(QStyle.CE_ItemViewItem, opt, painter, opt.widget)
-        selected = bool(opt.state & QStyle.State_Selected)
-        group = QPalette.Active if opt.state & QStyle.State_Active else QPalette.Inactive
-        color = opt.palette.color(group, QPalette.HighlightedText if selected else QPalette.Text)
-        dim = QColor(color)
-        dim.setAlpha(140)
-        rect = opt.rect
-        x = rect.left() + 4
-        painter.save()
-        painter.setClipRect(rect)
-
-        def draw(text, font, pen, background=None, strike=False, formats=None, column=0):
-            """Draw text from x on; ``formats``: the syntax colors of the
-            line's columns (``text`` starts at ``column``)."""
-            nonlocal x
-            if not text:
-                return
-            runs = [(text, None)]
-            if formats:  # split where the syntax color changes
-                runs, start = [], 0
-                fmt_at = [formats[column + i] if column + i < len(formats) else None
-                          for i in range(len(text))]
-                for i in range(1, len(text) + 1):
-                    if i == len(text) or fmt_at[i] is not fmt_at[start]:
-                        runs.append((text[start:i], fmt_at[start]))
-                        start = i
-            pieces = []
-            for piece, fmt in runs:
-                f = QFont(font)
-                f.setStrikeOut(strike)
-                if fmt is not None:
-                    f.setBold(fmt.fontWeight() >= QFont.Bold)
-                    f.setItalic(fmt.fontItalic())
-                pieces.append((piece, f, fmt, QFontMetrics(f).horizontalAdvance(piece)))
-            if background is not None:
-                width = sum(p[3] for p in pieces)
-                painter.fillRect(QRect(x, rect.top() + 2, width, rect.height() - 4), background)
-            for piece, f, fmt, width in pieces:
-                painter.setFont(f)
-                brush = fmt.foreground() if fmt is not None else None
-                painter.setPen(brush.color() if brush is not None and brush.style() != Qt.NoBrush
-                               else pen)
-                painter.drawText(QRect(x, rect.top(), width, rect.height()), Qt.AlignVCenter | Qt.AlignLeft,
-                                 piece)
-                x += width
-
-        if parts[0] == "file":
-            _kind, name, folder, package, count = parts
-            icon = self.panel.icon_for(Path(index.data(RESULT_ROLE)[0])) if self.panel.icon_for else None
-            if icon is not None and not icon.isNull():
-                size = QFontMetrics(opt.font).height()
-                icon.paint(painter, QRect(x, rect.top() + (rect.height() - size) // 2, size, size))
-                x += size + 5
-            bold = QFont(opt.font)
-            bold.setBold(True)
-            draw(name, bold, color)
-            draw(f"   {folder}" if folder else "", opt.font, dim)
-            draw(f"   {package}" if package else "", opt.font, dim)
-            # The count at the right, in a small pill.
-            text = str(count)
-            fm = QFontMetrics(opt.font)
-            w = fm.horizontalAdvance(text) + 12
-            pill = QRect(rect.right() - w - 6, rect.top() + 3, w, rect.height() - 6)
-            fill = QColor(color)
-            fill.setAlpha(40)
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(fill)
-            painter.drawRoundedRect(pill, pill.height() / 2, pill.height() / 2)
-            painter.setPen(color)
-            painter.setFont(opt.font)
-            painter.drawText(pill, Qt.AlignCenter, text)
-        else:
-            _kind, path, found = parts
-            mono = self.panel.mono
-            # Syntax colors (none on a selected row: its text color reads best there).
-            formats = None if selected else self.panel.line_formats(path, found.line)
-            draw(f"{found.line:>5}  ", mono, dim)
-            before = found.before
-            if before.startswith("…") and found.column - found.start < len(before):
-                draw("…", mono, dim)
-                before = before[1:]
-            draw(before, mono, color, formats=formats, column=found.start)
-            if self.panel.replacing():
-                draw(found.text, mono, color, REMOVED_COLOR, strike=True, formats=formats,
-                     column=found.column)
-                draw(self.panel.preview(found.text), mono, color, ADDED_COLOR)
-            else:
-                draw(found.text, mono, color, MATCH_COLOR, formats=formats, column=found.column)
-            draw(found.after, mono, color, formats=formats, column=found.column + len(found.text))
-        painter.restore()
-
 
 def _toggle(text: str, tip: str) -> QToolButton:
     button = QToolButton()
@@ -508,20 +341,13 @@ class SearchPanel(QWidget):
         self.settings = settings
         # Set by the window: () -> (roots to search, {path: text of open editors}, project folder).
         self.provider: Callable[[], tuple[list[Root], dict[Path, str], Path | None]] | None = None
-        self.mono = QFont()
-        self.icon_for: Callable[[Path], object] | None = None  # set by the window: a file's QIcon
         self._results: dict[Path, FileResult] = {}
-        self._items: dict[Path, QTreeWidgetItem] = {}
         self._query: Query | None = None      # what the results are for
         self._pattern: re.Pattern | None = None
         self._project_dir: Path | None = None
         self._worker: SearchWorker | None = None
         self._old_workers: set[SearchWorker] = set()
         self._changed: set[Path] = set()
-        self._style = get_style_by_name(hl.LIGHT_STYLE)  # (see refresh_style)
-        self._formats: dict = {}                        # token type -> format
-        self._file_lines: dict[Path, list[str]] = {}    # for syntax colors
-        self._line_formats: dict[tuple[Path, int], list | None] = {}
 
         self.replace_toggle = QToolButton()
         self.replace_toggle.setCheckable(True)
@@ -575,14 +401,10 @@ class SearchPanel(QWidget):
         self.clear_button.setToolTip("Clear the results")
         self.clear_button.setAutoRaise(True)
 
-        self.tree = QTreeWidget()
-        self.tree.setHeaderHidden(True)
-        self.tree.setUniformRowHeights(True)
-        self.tree.setItemDelegate(_ResultDelegate(self))
+        self.tree = ResultTree()
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._context_menu)
-        self.tree.itemClicked.connect(self._open)
-        self.tree.itemActivated.connect(self._open)
+        self.tree.open_requested.connect(self.open_requested)
 
         find_row = QHBoxLayout()
         find_row.setSpacing(2)
@@ -693,76 +515,14 @@ class SearchPanel(QWidget):
         self.replace_toggle.setArrowType(Qt.DownArrow if on else Qt.RightArrow)
         self.replace_toggle.setToolTip("Hide the Replace field" if on else "Show the Replace field")
         self.replace_row.setVisible(on)
+        self.tree.replacement = self.preview if on else None
         self.tree.viewport().update()
         self._update_buttons()
-
-    def replacing(self) -> bool:
-        return self.replace_row.isVisible() or (self.replace_toggle.isChecked() and not self.isVisible())
 
     def preview(self, match_text: str) -> str:
         if self._pattern is None or self._query is None:
             return self.replace_edit.text()
         return preview_replacement(match_text, self._pattern, self._query, self.replace_edit.text())
-
-    # --------------------------------------------------- syntax colors
-    def refresh_style(self):
-        """Use the editor's syntax colors (View → Syntax Colors), on its
-        background."""
-        self._style = get_style_by_name(hl.style_name(QApplication.palette()))
-        self._formats.clear()
-        self._line_formats.clear()
-        palette = self.tree.palette()
-        palette.setColor(QPalette.Base, QColor(self._style.background_color))
-        palette.setColor(QPalette.Text, hl.style_text_color(self._style))
-        self.tree.setPalette(palette)
-        self.tree.viewport().update()
-
-    def _forget(self, path: Path):
-        """A file changed: lex it again when its lines are drawn."""
-        self._file_lines.pop(path, None)
-        for key in [k for k in self._line_formats if k[0] == path]:
-            del self._line_formats[key]
-
-    def line_formats(self, path: Path, line: int) -> list | None:
-        """The syntax format of each column of a line (None: plain), lexed
-        with the lines before it for context (so a line inside a
-        multi-line string or comment is colored as one)."""
-        key = (path, line)
-        if key in self._line_formats:
-            return self._line_formats[key]
-        lines = self._file_lines.get(path)
-        if lines is None:
-            text = self.provider()[1].get(path) if self.provider is not None else None
-            if text is None:
-                text = read_text(path) or ""
-            lines = text.split("\n")
-            if len(self._file_lines) > 100:  # (keep the most recent files)
-                self._file_lines.pop(next(iter(self._file_lines)))
-            self._file_lines[path] = lines
-        result = None
-        if 0 < line <= len(lines):
-            limit = 4000  # (long lines: only their start is shown anyway)
-            context = [s[:limit] for s in lines[max(0, line - 1 - CONTEXT_LINES):line]]
-            chunk = "\n".join(context)
-            offset = len(chunk) - len(context[-1])
-            lexer = hl.lexer_for_path(path)
-            lexer.stripnl = False  # (keep the positions as they are)
-            result = [None] * len(context[-1])
-            pos = 0
-            try:
-                for ttype, value in lex(chunk, lexer):
-                    end = pos + len(value)
-                    if end > offset:
-                        fmt = self._formats.get(ttype)
-                        if fmt is None:
-                            fmt = self._formats[ttype] = hl.token_format(self._style, ttype)
-                        for i in range(max(pos, offset), min(end, len(chunk))):
-                            result[i - offset] = fmt
-                    pos = end
-            except Exception:  # noqa: BLE001 - never let highlighting break the list
-                result = None
-        self._line_formats[key] = result
-        return result
 
     # ----------------------------------------------------------- search
     def start_search(self):
@@ -858,74 +618,23 @@ class SearchPanel(QWidget):
         self._update_buttons()
 
     def _clear_results(self):
-        self._file_lines.clear()
-        self._line_formats.clear()
         self.collapse_button.setText("Collapse All")
-        self.tree.clear()
+        self.tree.clear_results()
         self._results.clear()
-        self._items.clear()
         self._query = self._pattern = None
 
     # ---------------------------------------------------------- results
-    def _file_parts(self, result: FileResult):
-        relative = result.relative
-        folder, _, name = relative.rpartition("/")
-        if not result.root.dependency and self._project_dir is not None:
-            try:  # (the project's own files: relative to the project)
-                folder = str(result.path.parent.relative_to(self._project_dir.resolve()).as_posix())
-                folder = "" if folder == "." else folder
-            except ValueError:
-                pass
-        package = f"· {result.root.name}" if result.root.dependency else ""
-        return ("file", name, folder, package, len(result.matches))
-
-    def _fill_file_item(self, item: QTreeWidgetItem, result: FileResult):
-        item.takeChildren()
-        item.setText(0, result.relative)
-        item.setToolTip(0, str(result.path))
-        item.setData(0, PARTS_ROLE, self._file_parts(result))
-        item.setData(0, RESULT_ROLE, (str(result.path), None))
-        for found in result.matches:
-            child = QTreeWidgetItem([f"{found.line}: {found.before}{found.text}{found.after}"])
-            child.setToolTip(0, f"{result.path}:{found.line}")
-            child.setData(0, PARTS_ROLE, ("match", result.path, found))
-            child.setData(0, RESULT_ROLE, (str(result.path), found))
-            item.addChild(child)
-
-    def _add_file_item(self, result: FileResult, index: int | None = None):
-        item = QTreeWidgetItem()
-        self._fill_file_item(item, result)
-        if index is None:
-            self.tree.addTopLevelItem(item)
-        else:
-            self.tree.insertTopLevelItem(index, item)
-        item.setExpanded(True)
-        self._items[result.path] = item
+    def _add_file_item(self, result: FileResult):
+        self.tree.set_file(result.path, result.matches,
+                           *file_labels(result.path, result.root, self._project_dir))
 
     def _remove_file(self, path: Path):
-        item = self._items.pop(path, None)
         self._results.pop(path, None)
-        if item is not None:
-            self.tree.takeTopLevelItem(self.tree.indexOfTopLevelItem(item))
+        self.tree.remove_file(path)
 
     def _toggle_collapse(self):
-        items = [self.tree.topLevelItem(i) for i in range(self.tree.topLevelItemCount())]
-        expand = not any(item.isExpanded() for item in items)
-        for item in items:
-            item.setExpanded(expand)
-        self.collapse_button.setText("Collapse All" if expand else "Expand All")
-
-    def _open(self, item: QTreeWidgetItem, _column: int = 0):
-        data = item.data(0, RESULT_ROLE)
-        if not data:
-            return
-        path, found = data
-        if found is None:
-            if item.childCount():
-                found = item.child(0).data(0, RESULT_ROLE)[1]
-            else:
-                return
-        self.open_requested.emit(path, found.line, found.column, found.end_line, found.end_column)
+        expanded = self.tree.toggle_collapse()
+        self.collapse_button.setText("Collapse All" if expanded else "Expand All")
 
     # ---------------------------------------- keeping results up to date
     def file_changed(self, path: Path):
@@ -949,7 +658,7 @@ class SearchPanel(QWidget):
         roots, open_texts, _ = self.provider()
         for path in paths:
             path = Path(path).resolve()
-            self._forget(path)
+            self.tree.forget(path)
             result = self._results.get(path)
             if result is None:
                 root = self._root_for(path, roots)
@@ -960,13 +669,8 @@ class SearchPanel(QWidget):
             if text is None:
                 text = read_text(path) or ""
             result.matches = find_matches(text, self._pattern)
-            item = self._items.get(path)
             if not result.matches:
                 self._remove_file(path)
-            elif item is not None:
-                expanded = item.isExpanded()
-                self._fill_file_item(item, result)
-                item.setExpanded(expanded)
             else:
                 self._results[path] = result
                 self._add_file_item(result)
@@ -976,11 +680,7 @@ class SearchPanel(QWidget):
         """The package an open file belongs to, if it would be searched."""
         if self._query is None:
             return None
-        best = None
-        for root in roots:
-            top = root.directory.resolve()
-            if (top in path.parents) and (best is None or len(str(top)) > len(str(best.directory.resolve()))):
-                best = root
+        best = root_for(path, roots)
         if best is None or (best.dependency and not self._query.dependencies):
             return None
         others = {r.directory.resolve() for r in roots if r is not best}
@@ -1035,9 +735,7 @@ class SearchPanel(QWidget):
         if found is None or not result.matches:
             self._remove_file(path)
         else:
-            item = self._items[path]
-            self._fill_file_item(item, result)
-            item.setExpanded(True)
+            self._add_file_item(result)
         self._show_counts()
 
     def _context_menu(self, pos):
@@ -1047,7 +745,7 @@ class SearchPanel(QWidget):
         path, found = item.data(0, RESULT_ROLE)
         path = Path(path)
         menu = QMenu(self)
-        menu.addAction("Open", lambda: self._open(item))
+        menu.addAction("Open", lambda: self.tree.open_item(item))
         menu.addSeparator()
         enabled = self._worker is None
         if found is None:

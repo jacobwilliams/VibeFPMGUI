@@ -1,19 +1,19 @@
 """The "References" tab: every use of a name, from Find References.
 
-Results are grouped by file (project files first, then dependencies), each
-with its line of code; click one to open the file there.
+Results are grouped by file (project files first, then dependencies), shown
+like the *Search* tab's (`vibefpmgui.result_tree`): each file with its icon,
+each use with its line in the editor's syntax colors and the name
+highlighted. Click one to open the file there.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from pathlib import Path
 
-from qtpy.QtCore import Qt, Signal
-from qtpy.QtGui import QFont
-from qtpy.QtWidgets import QLabel, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget
+from qtpy.QtCore import Signal
+from qtpy.QtWidgets import QLabel, QVBoxLayout, QWidget
 
-LOCATION_ROLE = Qt.UserRole + 1
+from .result_tree import ResultTree, Root, file_labels, make_match, root_for
 
 
 def short_path(path: Path, project_dir: Path | None) -> str:
@@ -26,64 +26,42 @@ def short_path(path: Path, project_dir: Path | None) -> str:
 
 
 class ReferencesPanel(QWidget):
-    open_requested = Signal(str, int, int)  # file, line (1-based), column (0-based)
+    open_requested = Signal(str, int, int, int, int)  # file, line, column, end line, end column
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.title = QLabel("Use Find References (⇧F12) on a name in the editor to list its uses here.")
         self.title.setWordWrap(True)
         self.title.setContentsMargins(8, 6, 8, 2)
-        self.tree = QTreeWidget()
-        self.tree.setHeaderHidden(True)
-        self.tree.setUniformRowHeights(True)
-        self.tree.setRootIsDecorated(True)
-        self.tree.itemClicked.connect(self._open)
-        self.tree.itemActivated.connect(self._open)
+        self.tree = ResultTree()
+        self.tree.open_requested.connect(self.open_requested)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
         layout.addWidget(self.title)
         layout.addWidget(self.tree, 1)
 
-    def show_results(self, name: str, results: list[tuple[Path, int, int, int]],
-                     line_text: Callable[[Path, int], str], project_dir: Path | None,
-                     mono: QFont | None = None):
+    def show_results(self, name: str, results: list[tuple[Path, int, int, int]], roots: list[Root],
+                     project_dir: Path | None):
         """``results``: (file, 1-based line, start column, end column);
-        ``line_text(file, line)`` gives a line of a file."""
-        self.tree.clear()
-        files: dict[Path, list] = {}
-        for r in results:
-            files.setdefault(r[0], []).append(r)
+        ``roots``: the packages, to label the dependencies' files."""
+        self.tree.clear_results()
+        files: dict[Path, list[tuple[int, int, int]]] = {}
+        for path, line, start, end in results:
+            files.setdefault(Path(path).resolve(), []).append((line, start, end))
         if not results:
             self.title.setText(f"No references to <b>{name}</b> found.")
             return
         self.title.setText(f"<b>{name}</b>: {len(results)} reference{'s' * (len(results) != 1)} "
                            f"in {len(files)} file{'s' * (len(files) != 1)}")
-
-        def outside(path: Path) -> bool:  # dependencies after the project's own files
-            return project_dir is None or project_dir.resolve() not in path.parents or \
-                "dependencies" in path.relative_to(project_dir.resolve()).parts[:2]
-
-        for path in sorted(files, key=lambda p: (outside(p), short_path(p, project_dir))):
-            refs = files[path]
-            node = QTreeWidgetItem([f"{short_path(path, project_dir)}  ({len(refs)})"])
-            node.setToolTip(0, str(path))
-            font = QFont(node.font(0))
-            font.setBold(True)
-            node.setFont(0, font)
-            node.setData(0, LOCATION_ROLE, (str(path), refs[0][1], refs[0][2]))
-            self.tree.addTopLevelItem(node)
-            for _path, line, column, _end in refs:
-                text = line_text(path, line).strip()
-                child = QTreeWidgetItem([f"{line}:  {text}"])
-                if mono is not None:
-                    child.setFont(0, mono)
-                child.setToolTip(0, f"{path}:{line}")
-                child.setData(0, LOCATION_ROLE, (str(path), line, column))
-                node.addChild(child)
-            node.setExpanded(True)
-
-    def _open(self, item: QTreeWidgetItem, _column: int = 0):
-        location = item.data(0, LOCATION_ROLE)
-        if location:
-            self.open_requested.emit(*location)
+        rows = []
+        for path, places in files.items():
+            root = root_for(path, roots)
+            folder, package = file_labels(path, root, project_dir)
+            lines = self.tree.file_lines(path)
+            matches = [make_match(lines[line - 1] if 0 < line <= len(lines) else "", line, start, line, end)
+                       for line, start, end in sorted(places)]
+            outside = root is None or root.dependency  # (dependencies after the project's own files)
+            rows.append(((outside, package, folder, path.name), path, matches, folder, package))
+        for _key, path, matches, folder, package in sorted(rows, key=lambda r: r[0]):
+            self.tree.set_file(path, matches, folder, package)

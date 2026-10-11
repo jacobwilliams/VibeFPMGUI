@@ -539,16 +539,20 @@ class MainWindow(QMainWindow):
         self.review_monitor.finding_selected.connect(self._go_to_finding)
         self.monitor_tabs.addTab(self.review_monitor, "Review")
         self.references_panel = ReferencesPanel()
-        self.references_panel.open_requested.connect(self.navigate_to)
+        self.references_panel.open_requested.connect(self._open_search_match)
         self.monitor_tabs.addTab(self.references_panel, "References")
         self.search_panel = SearchPanel(self.settings)
         self.search_panel.provider = self._search_sources
-        self.search_panel.icon_for = self.project_tree.icon_for
-        self.search_panel.mono = self._mono_font()
         self.search_panel.open_requested.connect(self._open_search_match)
         self.search_panel.replace_requested.connect(self._replace_in_files)
-        self.search_panel.refresh_style()
         self.monitor_tabs.addTab(self.search_panel, "Search")
+        # The two lists of places in files (vibefpmgui.result_tree), drawn alike.
+        self.result_trees = [self.references_panel.tree, self.search_panel.tree]
+        for tree in self.result_trees:
+            tree.icon_for = self.project_tree.icon_for
+            tree.text_for = self._open_text
+            tree.mono = self._mono_font()
+            tree.refresh_style()
         self.bottom_split = QSplitter(Qt.Horizontal)
         self.bottom_split.addWidget(self.monitor_tabs)
         self.bottom_split.addWidget(console_box)
@@ -575,8 +579,8 @@ class MainWindow(QMainWindow):
     def _apply_highlight_style(self):
         """The chosen Pygments style, or one matching the system's light/dark mode."""
         hl.apply_style(self.manifest_view, self.toml_highlighter)
-        if hasattr(self, "search_panel"):
-            self.search_panel.refresh_style()
+        for tree in getattr(self, "result_trees", []):
+            tree.refresh_style()
 
     def _fill_style_menu(self):
         """View → Syntax Colors: Automatic, then every installed Pygments style."""
@@ -735,8 +739,9 @@ class MainWindow(QMainWindow):
         self.test_monitor.refresh_fonts()
         self.run_monitor.refresh_fonts()
         self.review_monitor.refresh_fonts()
-        self.search_panel.mono = mono
-        self.search_panel.tree.doItemsLayout()
+        for tree in self.result_trees:
+            tree.mono = mono
+            tree.doItemsLayout()
         self.graph_view.refresh_fonts()
         if self.graph:
             self.show_package(self.graph_view.selected or self.graph.root)
@@ -1605,20 +1610,8 @@ class MainWindow(QMainWindow):
         return self._read_source(path)[0]
 
     def _show_references(self, name: str, results: list):
-        cache: dict[Path, list[str]] = {}
-
-        def line_text(path: Path, line: int) -> str:
-            if path not in cache:
-                try:
-                    cache[path] = self._file_text(path).split("\n")
-                except OSError:
-                    cache[path] = []
-            lines = cache[path]
-            return lines[line - 1] if 0 < line <= len(lines) else ""
-
-        self.references_panel.show_results(name, results, line_text,
-                                           self.manifest_path.parent if self.manifest_path else None,
-                                           self._mono_font())
+        roots, _texts, project_dir = self._search_sources()
+        self.references_panel.show_results(name, results, roots, project_dir)
         self.monitor_tabs.setCurrentWidget(self.references_panel)
         self.statusBar().showMessage(f"{len(results)} reference{'s' * (len(results) != 1)} to {name}", 5000)
 
@@ -1674,6 +1667,11 @@ class MainWindow(QMainWindow):
             self.right_split.setSizes([max(200, sum(sizes) - 300), 300])
         self.monitor_tabs.setCurrentWidget(self.search_panel)
         self.search_panel.open_find(text, replace)
+
+    def _open_text(self, path: Path) -> str | None:
+        """The text of a file open in the editor (unsaved changes included)."""
+        editor = self._open_editor_for(path)
+        return editor.editor.toPlainText() if editor is not None else None
 
     def _search_sources(self):
         """For the Search tab: (packages to search, open files' text, project folder)."""
