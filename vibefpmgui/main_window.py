@@ -123,6 +123,28 @@ def _signature(graph: m.DependencyGraph):
             sorted((e.parent, e.child, e.dev) for e in graph.edges))
 
 
+class ScrollingTabBar(QTabBar):
+    """A tab bar where the mouse wheel or a trackpad scrolls the tabs
+    sideways when they don't all fit, rather than switching tabs."""
+
+    def wheelEvent(self, event):
+        arrows = [b for b in self.findChildren(QToolButton) if b.isVisible() and b.arrowType() in
+                  (Qt.LeftArrow, Qt.RightArrow)]
+        if not arrows:
+            super().wheelEvent(event)
+            return
+        delta = event.angleDelta()
+        step = delta.x() if abs(delta.x()) > abs(delta.y()) else delta.y()
+        self._wheel_rest = getattr(self, "_wheel_rest", 0) + step
+        while abs(self._wheel_rest) >= 120:  # one notch (or that much trackpad travel) per tab
+            back = self._wheel_rest > 0
+            self._wheel_rest -= 120 if back else -120
+            for button in arrows:
+                if button.arrowType() == (Qt.LeftArrow if back else Qt.RightArrow) and button.isEnabled():
+                    button.click()
+        event.accept()
+
+
 class MainWindow(QMainWindow):
     def __init__(self, manifest_path: str | None = None):
         super().__init__()
@@ -378,7 +400,26 @@ class MainWindow(QMainWindow):
         self._apply_highlight_style()
 
         self.tabs = QTabWidget()
+        self.tabs.setTabBar(ScrollingTabBar())  # (before any tabs are added)
         self.tabs.setDocumentMode(True)
+        # With many files open, scroll the tab bar (arrows, wheel or trackpad)
+        # rather than squeezing every tab; macOS's style turns the arrows off
+        # and shortens the names by default.
+        self.tabs.setUsesScrollButtons(True)
+        self.tabs.setElideMode(Qt.ElideNone)
+        self.tabs.tabBar().setExpanding(False)
+        # A list of every open tab, at the right end of the tab bar.
+        self.tab_list_button = QToolButton()
+        self.tab_list_button.setArrowType(Qt.DownArrow)
+        self.tab_list_button.setAutoRaise(True)
+        self.tab_list_button.setToolTip("All open tabs")
+        self.tab_list_button.setPopupMode(QToolButton.InstantPopup)
+        # Just the one arrow (a button with a menu also gets a menu indicator).
+        self.tab_list_button.setStyleSheet("QToolButton::menu-indicator { image: none; width: 0px; }")
+        tab_list = QMenu(self.tab_list_button)
+        tab_list.aboutToShow.connect(lambda: self._fill_tab_list(tab_list))
+        self.tab_list_button.setMenu(tab_list)
+        self.tabs.setCornerWidget(self.tab_list_button, Qt.TopRightCorner)
         self.tabs.addTab(graph_tab, "Dependency graph")
         self.tabs.addTab(self.manifest_view, "fpm.toml")
         self.outputs_view = bo.BuildOutputsView()
@@ -1474,6 +1515,32 @@ class MainWindow(QMainWindow):
             editor.editor.go_to_line(diagnostics[0].line)
         else:
             editor.editor.setFocus()
+
+    def _fill_tab_list(self, menu: QMenu):
+        """The tab-list menu: every open tab (the current one ticked)."""
+        menu.clear()
+        current = self.tabs.currentIndex()
+        for index in range(self.tabs.count()):
+            action = menu.addAction(self.tabs.tabText(index))
+            action.setCheckable(True)
+            action.setChecked(index == current)
+            action.setToolTip(self.tabs.tabToolTip(index))
+            action.triggered.connect(lambda _checked=False, i=index: self.tabs.setCurrentIndex(i))
+            if index == 2 and self.tabs.count() > 3:
+                menu.addSeparator()  # the fixed tabs, then the open files
+        menu.addSeparator()
+        close_all = menu.addAction("Close All Editor Tabs")
+        close_all.setToolTip("Close every file open in the editor (unsaved changes are asked about)")
+        close_all.setEnabled(bool(self.editors()))
+        close_all.triggered.connect(self.close_all_editor_tabs)
+        menu.setToolTipsVisible(True)
+
+    def close_all_editor_tabs(self):
+        """The tab list's Close All Editor Tabs (Cancel on an unsaved file
+        keeps them all open)."""
+        if self.close_all_editors():
+            self._save_session()  # so they don't come back next time
+            self._update_editor_actions()
 
     def _mono_font(self, editor: bool = False) -> QFont:
         base = self._base_font.pointSizeF()
