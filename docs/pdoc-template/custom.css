@@ -18,3 +18,10 @@
 :root[data-theme="dark"] .pdoc-code { color: #f8f8f2; }
 /* the search box and the source "view" buttons */
 :root[data-theme="dark"] .pdoc input[type=search] { background: var(--code); color: var(--text); border-color: var(--accent2); }
+
+/* pdoc's callout boxes (> [!NOTE] etc.) have fixed light colors: dark versions */
+:root[data-theme="dark"] .pdoc .alert.note { color: #a5c8ff; background-color: rgba(56, 139, 253, 0.12); border-color: rgba(56, 139, 253, 0.4); }
+:root[data-theme="dark"] .pdoc .alert.tip { color: #9be9a8; background-color: rgba(46, 160, 67, 0.12); border-color: rgba(46, 160, 67, 0.4); }
+:root[data-theme="dark"] .pdoc .alert.important { color: #8ce6f5; background-color: rgba(57, 197, 207, 0.12); border-color: rgba(57, 197, 207, 0.4); }
+:root[data-theme="dark"] .pdoc .alert.warning { color: #f2cc60; background-color: rgba(187, 128, 9, 0.15); border-color: rgba(187, 128, 9, 0.45); }
+:root[data-theme="dark"] .pdoc .alert a { color: var(--link); }

@@ -1,5 +1,12 @@
 """A desktop GUI for the Fortran Package Manager (fpm).
 
+> [!NOTE]
+> These are the **API docs** for the `vibefpmgui` Python package, generated
+> with [pdoc](https://pdoc.dev) from the docstrings in the source code. They
+> describe the code; for what the app does and how to use it, see the
+> [website](https://jacobwilliams.github.io/VibeFPMGUI/) or the
+> [README](https://github.com/jacobwilliams/VibeFPMGUI#readme).
+
 VibeFPMGUI opens an `fpm.toml` and runs fpm's commands (build, run, test,
 update, clean) with live progress, shows the project's dependencies as an
 interactive graph, and has a built-in Fortran editor with a language server,
