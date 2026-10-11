@@ -26,6 +26,7 @@ WIDTH = 104        # the minimap's width
 LEFT = 6           # text starts after the change bars
 TAB = 4            # columns a tab counts as
 WORD_RE = re.compile(r"\S+")
+ERROR_SEVERITIES = {"error", "fatal error", "lint error"}  # drawn as a band across the minimap
 
 
 class Minimap(QWidget):
@@ -169,10 +170,17 @@ class Minimap(QWidget):
                 painter.drawPolygon(QPolygonF([QPointF(0, y - 2.5), QPointF(4, y), QPointF(0, y + 2.5)]))
 
         # Compiler / lint / AI markers (right edge), at least 3 px tall to be seen.
+        # Errors (compiler errors, fortitude syntax errors) get a red band
+        # across the whole width, so they stand out.
         for line, notes in editor.markers.items():
             y = (line - 1) * LINE_HEIGHT - offset
             if -3 <= y <= self.height():
-                color = QColor(MARKER_COLORS.get(worst_severity(notes), "#868e96"))
+                worst = worst_severity(notes)
+                color = QColor(MARKER_COLORS.get(worst, "#868e96"))
+                if worst in ERROR_SEVERITIES:
+                    band = QColor(color)
+                    band.setAlpha(200)
+                    painter.fillRect(QRectF(0, y - 0.5, self.width(), max(LINE_HEIGHT, 3)), band)
                 painter.fillRect(QRectF(self.width() - 4, y - 0.5, 4, max(LINE_HEIGHT, 3)), color)
 
         # The view box's outline, on top.
