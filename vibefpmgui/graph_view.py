@@ -12,6 +12,7 @@ depends on and everything that depends on it.
 
 from __future__ import annotations
 
+import html
 import math
 import os
 import time
@@ -24,7 +25,16 @@ os.environ.setdefault("PYQTGRAPH_QT_LIB", qtpy.API_NAME)
 
 import numpy as np
 import pyqtgraph as pg
-from qtpy.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, Signal
+from qtpy.QtCore import (
+    QEvent,
+    QPoint,
+    QPointF,
+    QRectF,
+    QStringListModel,
+    Qt,
+    QTimer,
+    Signal,
+)
 from qtpy.QtGui import (
     QBrush,
     QColor,
@@ -36,7 +46,14 @@ from qtpy.QtGui import (
     QPalette,
     QPen,
 )
-from qtpy.QtWidgets import QApplication, QLabel, QStackedLayout, QWidget
+from qtpy.QtWidgets import (
+    QApplication,
+    QCompleter,
+    QLabel,
+    QLineEdit,
+    QStackedLayout,
+    QWidget,
+)
 
 from . import manifest as m
 
@@ -107,6 +124,9 @@ def resolve_theme(key: str) -> dict:
     return THEMES.get(key, THEMES["light"])
 
 
+CONFLICT_COLOR = "#f08c00"  # the version-conflict badge
+
+
 def node_border(theme: dict, kind: str) -> QColor:
     if theme["border"]:
         return QColor(theme["border"][kind])
@@ -123,6 +143,7 @@ class NodeItem(pg.GraphicsObject):
         self.hovered = False
         self.selected = False
         self.dimmed = False
+        self.conflict: list[m.Declaration] = []  # different declarations of this package
         self._drag_offset = QPointF()
         self._last_click = 0.0
         self._make_fonts()
@@ -156,8 +177,18 @@ class NodeItem(pg.GraphicsObject):
             tip.append(package.description)
         if package.error:
             tip.append(f"<i>{package.error}</i>")
+        if self.conflict:
+            tip.append("<b style='color:#e8590c'>⚠ Version conflict</b> — asked for differently:")
+            used = m.spec_key(self.conflict[0])
+            tip += [f"&nbsp;&nbsp;{html.escape(d.parent)}: {html.escape(m.describe_spec(d.spec))}"
+                    + (" <i>(used)</i>" if i == 0 else " <i>(the same)</i>" if m.spec_key(d) == used else "")
+                    for i, d in enumerate(self.conflict)]
         self.setToolTip("<br>".join(tip))
         self.update()
+
+    def set_conflict(self, declarations: list[m.Declaration] | None):
+        self.conflict = list(declarations or [])
+        self.set_package(self.package)  # (the tooltip)
 
     # geometry helpers (view coordinates)
     def center(self) -> QPointF:
@@ -225,6 +256,17 @@ class NodeItem(pg.GraphicsObject):
         painter.setPen(QColor(theme["subtext"]))
         painter.drawText(QRectF(0, PAD_Y + th, self.rect.width(), self.rect.height() - th - 2 * PAD_Y),
                          Qt.AlignCenter, self.subtitle)
+
+        if self.conflict:  # an orange "!" badge on the top-right corner
+            badge = QRectF(self.rect.right() - 11, self.rect.top() - 9, 20, 20)
+            painter.setPen(QPen(QColor("white"), 1.5))
+            painter.setBrush(QColor(CONFLICT_COLOR))
+            painter.drawEllipse(badge)
+            font = QFont(self.title_font)
+            font.setPointSizeF(max(self.sub_font.pointSizeF(), 9))
+            painter.setFont(font)
+            painter.setPen(QColor("white"))
+            painter.drawText(badge, Qt.AlignCenter, "!")
 
     # pyqtgraph mouse events
     def hoverEvent(self, ev):
@@ -566,6 +608,7 @@ class DependencyGraphView(QWidget):
         self.theme_key = AUTO_THEME
         self.theme = resolve_theme(self.theme_key)
         self.graph: m.DependencyGraph | None = None
+        self.conflicts: dict[str, list[m.Declaration]] = {}
         self.nodes: dict[str, NodeItem] = {}
         self.edges: list[EdgeItem] = []
         self.selected: str | None = None
@@ -577,6 +620,28 @@ class DependencyGraphView(QWidget):
         self.vb.invertY(True)  # y grows downward, like the screen
         self.vb.setMenuEnabled(False)
         self.plot.scene().sigMouseClicked.connect(self._scene_clicked)
+
+        # "Find package…": over the graph's top-left corner.
+        self.search = QLineEdit(self.plot)
+        self.search.setPlaceholderText("Find package…")
+        self.search.setClearButtonEnabled(True)
+        self.search.setFixedWidth(220)
+        # Readable on every graph theme (light, dark, blueprint, neon).
+        self.search.setStyleSheet("QLineEdit { background: rgba(128, 128, 128, 55); border: 1px solid "
+                                  "rgba(128, 128, 128, 140); border-radius: 7px; padding: 4px 8px; }"
+                                  "QLineEdit:focus { border-color: rgba(77, 148, 255, 220); }")
+        self.search.setToolTip("Type to highlight matching packages; Enter selects the next match, "
+                               "Esc clears")
+        self.search_model = QStringListModel(self)
+        completer = QCompleter(self.search_model, self.search)
+        completer.setCaseSensitivity(Qt.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchContains)
+        completer.activated.connect(lambda text: self._jump_to_match(text))
+        self.search.setCompleter(completer)
+        self.search.textChanged.connect(self._highlight_matches)
+        self.search.returnPressed.connect(lambda: self._jump_to_match(None))
+        self.search.installEventFilter(self)
+        self.search.move(10, 10)
 
         self.message = QLabel()
         self.message.setAlignment(Qt.AlignCenter)
@@ -649,14 +714,19 @@ class DependencyGraphView(QWidget):
         parts = [f'<span style="background:{theme["fill"][k]}; color:{theme["text"]}">'
                  f'&nbsp;<span style="color:{node_border(theme, k).name()}">●</span>'
                  f'&nbsp;{KIND_LABELS[k]}&nbsp;</span>' for k in KIND_ORDER]
-        return (" ".join(parts)
+        text = (" ".join(parts)
                 + f" &nbsp;<span style='color:{theme['down']}'>━</span> depends on"
                 + f" &nbsp;<span style='color:{theme['up']}'>━</span> used by"
                 + " &nbsp;<i>dashed = dev</i>")
+        if self.conflicts:
+            text += (f" &nbsp;<span style='color:{CONFLICT_COLOR}'><b>!</b> version conflict"
+                     f"{'s' * (len(self.conflicts) != 1)}</span>")
+        return text
 
     # -------------------------------------------------------------- graph
     def clear(self, message="Open an fpm.toml file to see its dependency graph."):
         self.graph = None
+        self.conflicts = {}
         self._clear_items()
         self.message.setText(message)
         self.stack.setCurrentWidget(self.message)
@@ -686,6 +756,7 @@ class DependencyGraphView(QWidget):
             edge.add_to(self.vb)
             edge.apply_style()
             self.edges.append(edge)
+        self._mark_conflicts()
         self.relayout(animate=False)
 
     def update_packages(self, graph: m.DependencyGraph):
@@ -694,7 +765,15 @@ class DependencyGraphView(QWidget):
         for name, node in self.nodes.items():
             if name in graph.packages:
                 node.set_package(graph.packages[name])
+        self._mark_conflicts()
         self._update_edges()
+
+    def _mark_conflicts(self):
+        self.conflicts = m.conflicts(self.graph) if self.graph else {}
+        for name, node in self.nodes.items():
+            node.set_conflict(self.conflicts.get(name))
+        names = sorted(self.nodes, key=str.lower)
+        self.search_model.setStringList(names)
 
     def relayout(self, animate: bool = True):
         """Place every package with the current layout (undoing any drags)."""
@@ -777,6 +856,50 @@ class DependencyGraphView(QWidget):
             pair = (edge.source.package.name, edge.target.package.name)
             edge.state = "down" if pair in links else "dim"
             edge.apply_style()
+
+    # ---------------------------------------------------------- searching
+    def focus_search(self):
+        self.search.setFocus()
+        self.search.selectAll()
+
+    def _matches(self, text: str) -> list[str]:
+        """Package names containing ``text``: ones starting with it first."""
+        text = text.strip().lower()
+        if not text:
+            return []
+        names = sorted(self.nodes, key=str.lower)
+        return ([n for n in names if n.lower().startswith(text)]
+                + [n for n in names if text in n.lower() and not n.lower().startswith(text)])
+
+    def _highlight_matches(self, text: str):
+        """While typing: the matching packages stand out, the rest are dimmed."""
+        if not text.strip():
+            self.select(self.selected, center=False) if self.selected else self.select(None)
+            return
+        matches = set(self._matches(text))
+        for name, node in self.nodes.items():
+            node.selected = False
+            node.dimmed = name not in matches
+            node.update()
+        for edge in self.edges:
+            ends = {edge.source.package.name, edge.target.package.name}
+            edge.state = "normal" if ends <= matches else "dim"
+            edge.apply_style()
+
+    def _jump_to_match(self, name: str | None):
+        """Enter: select (and center) the next matching package."""
+        matches = [name] if name in self.nodes else self._matches(self.search.text())
+        if not matches:
+            return
+        index = (matches.index(self.selected) + 1) % len(matches) if self.selected in matches else 0
+        self.select(matches[index], center=True)
+
+    def eventFilter(self, obj, event):
+        if obj is self.search and event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape:
+            self.search.clear()
+            self.plot.setFocus()
+            return True
+        return super().eventFilter(obj, event)
 
     def _reachable(self, name: str | None, forward: bool) -> set[str]:
         if name is None or not self.graph:

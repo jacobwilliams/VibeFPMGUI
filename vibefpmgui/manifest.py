@@ -60,10 +60,22 @@ class Edge:
 
 
 @dataclass
+class Declaration:
+    """One place a dependency is declared: which package asks for it, and how."""
+    parent: str
+    spec: object       # as written in the parent's fpm.toml
+    dev: bool = False
+    parent_dir: Path | None = None  # (for resolving a relative ``path``)
+
+
+@dataclass
 class DependencyGraph:
     root: str
     packages: dict[str, Package] = field(default_factory=dict)
     edges: list[Edge] = field(default_factory=list)
+    # Every declaration of each dependency, closest to the root first (the
+    # first is the one fpm uses).
+    declarations: dict[str, list[Declaration]] = field(default_factory=dict)
 
     def children(self, name: str) -> list[Edge]:
         return [e for e in self.edges if e.parent == name]
@@ -164,6 +176,8 @@ def resolve(manifest_path: str | Path) -> DependencyGraph:
         is_root = parent is root
         for name, spec, dev in _collect_deps(parent_data, is_root):
             graph.edges.append(Edge(parent.name, name, dev))
+            graph.declarations.setdefault(name, []).append(
+                Declaration(parent.name, spec, dev, parent.directory or root_dir))
             if name in graph.packages:
                 continue
             pkg, pkg_data = _locate(name, spec, parent, root_dir, cache.get(name, {}))
@@ -279,3 +293,62 @@ def project_profiles(data: dict) -> dict[str, list[str]]:
         return {}
     return {str(name): [str(f) for f in value] if isinstance(value, list) else []
             for name, value in table.items()}
+
+
+# ------------------------------------------------------------ conflicts
+def _git_url(url: str) -> str:
+    """A git URL in a form where the same repository compares equal."""
+    url = url.strip().rstrip("/").lower()
+    url = re.sub(r"\.git$", "", url)
+    url = re.sub(r"^git@([^:]+):", r"https://\1/", url)   # git@github.com:a/b -> https://github.com/a/b
+    return re.sub(r"^(https?|git|ssh)://(www\.)?", "", url)
+
+
+def spec_key(declaration: Declaration) -> tuple:
+    """What a declaration asks for, so that different ways of writing the
+    same thing compare equal."""
+    spec = declaration.spec
+    if isinstance(spec, str):
+        return ("version", spec.strip())
+    if not isinstance(spec, dict):
+        return ("other", repr(spec))
+    if "path" in spec:
+        return ("path", str(((declaration.parent_dir or Path()) / str(spec["path"])).resolve()))
+    if "git" in spec:
+        for key in ("tag", "branch", "rev"):
+            if key in spec:
+                value = str(spec[key]).strip()
+                # A commit may be written short or long: compare 7 characters.
+                return ("git", _git_url(str(spec["git"])), key, value[:7] if key == "rev" else value)
+        return ("git", _git_url(str(spec["git"])), "", "")
+    return ("registry", *sorted((str(k), str(v)) for k, v in spec.items()))
+
+
+def describe_spec(spec) -> str:
+    """A declaration in a few words: "tag v0.5.0", "path ../lib", "any version"…"""
+    if isinstance(spec, str):
+        return "any version" if spec.strip() == "*" else f"version {spec}"
+    if not isinstance(spec, dict):
+        return repr(spec)
+    if "path" in spec:
+        return f"path {spec['path']}"
+    if "git" in spec:
+        for key in ("tag", "branch", "rev"):
+            if key in spec:
+                value = str(spec[key])
+                return f"{key} {value[:7] if key == 'rev' else value} of {spec['git']}"
+        return f"default branch of {spec['git']}"
+    if "v" in spec:
+        return f"version {spec['v']}"
+    return ", ".join(f"{k} {v}" for k, v in spec.items())
+
+
+def conflicts(graph: DependencyGraph) -> dict[str, list[Declaration]]:
+    """Dependencies that different packages ask for differently (another
+    tag, commit, branch, repository or path). fpm uses only the declaration
+    closest to the project, silently: these are worth knowing about."""
+    out = {}
+    for name, declarations in graph.declarations.items():
+        if len({spec_key(d) for d in declarations}) > 1:
+            out[name] = declarations
+    return out

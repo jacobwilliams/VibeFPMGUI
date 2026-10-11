@@ -179,6 +179,14 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
     around. Click a package to highlight everything it depends on and
     everything that uses it (click the background to clear); double-click to
     open its `fpm.toml`. Export to PNG or SVG.
+  * *Find package…* (top left of the graph, or ⌘F with the graph in front):
+    typing highlights the packages whose names match; Enter selects and
+    centers the next match, Esc clears.
+  * Version conflicts: when packages ask for the same dependency in
+    different ways (another tag, commit, branch, repository or path), it
+    gets an orange **!** badge, the legend and status bar say so, and its
+    details list who asks for what and which one fpm uses (the declaration
+    closest to the project; fpm doesn't warn about the others).
   * Right-click a package for its menu: open its `fpm.toml`, show it in
     *Project Files* or Finder, *Open as Project* (e.g. to work on a local
     library), open its repository, checked-out commit or homepage, *Check for

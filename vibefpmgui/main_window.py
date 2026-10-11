@@ -1247,6 +1247,7 @@ class MainWindow(QMainWindow):
             self.graph_view.set_graph(self.graph)
         else:
             self.graph_view.update_packages(self.graph)
+        self._update_legend()  # (it mentions version conflicts when there are any)
         self.show_package(self.graph.root)
         self.project_tree.set_project(self.graph, self.manifest_path.parent)
         self._update_language_server()
@@ -1257,6 +1258,10 @@ class MainWindow(QMainWindow):
         msg = f"{len(self.graph.packages) - 1} dependencies"
         if missing:
             msg += f" ({missing} not downloaded — run Update deps or Build)"
+        conflicts = m.conflicts(self.graph)
+        if conflicts:
+            msg += (f" · ⚠ {len(conflicts)} version conflict{'s' * (len(conflicts) != 1)}: "
+                    + ", ".join(sorted(conflicts)) + " (see the graph)")
         self.statusBar().showMessage(msg)
 
     def show_package(self, name: str):
@@ -1301,6 +1306,20 @@ class MainWindow(QMainWindow):
         body += f"<table>{table}</table>"
         if pkg.error:
             body += f"<p style='color:#c92a2a'>{e(pkg.error)}</p>"
+        conflict = m.conflicts(self.graph).get(name)
+        if conflict:
+            used = m.spec_key(conflict[0])
+            items = "".join(f"<li><b>{e(d.parent)}</b>{' (dev)' if d.dev else ''} asks for "
+                            f"{e(m.describe_spec(d.spec))}"
+                            + (" — <b>used</b>" if i == 0 else " <i>(the same)</i>" if m.spec_key(d) == used
+                               else "") + "</li>"
+                            for i, d in enumerate(conflict))
+            body += ("<p style='color:#e8590c'><b>⚠ Version conflict</b></p>"
+                     f"<p>{e(name)} is asked for in different ways:</p><ul>{items}</ul>"
+                     "<p>fpm uses only one of them (the declaration closest to the project), "
+                     "so the others get a version they didn't ask for. Pinning the same version "
+                     "everywhere — or overriding it in the project's own fpm.toml — avoids "
+                     "surprises.</p>")
         if pkg.manifest:
             body += "<p><i>Double-click the node to open its fpm.toml.</i></p>"
         self.details.setHtml(body)
@@ -1761,12 +1780,19 @@ class MainWindow(QMainWindow):
             widget.deleteLater()
             self._save_session()
 
+    def _find(self):
+        if self.tabs.currentIndex() == 0:  # the dependency graph
+            self.graph_view.focus_search()
+        else:
+            self._with_editor(lambda e: e.find_bar.open_bar())
+
     def _update_editor_actions(self, *_):
         has_editor = self.current_editor() is not None
         for action in (self.save_action, self.save_as_action, self.close_tab_action,
                        self.find_action, self.replace_action, self.find_next_action,
                        self.find_previous_action, self.goto_action):
             action.setEnabled(has_editor)
+        self.find_action.setEnabled(has_editor or self.tabs.currentIndex() == 0)
         editor = self.current_editor()
         self.format_action.setEnabled(editor is not None and formatter.can_format(editor.path)
                                       and formatter.executable() is not None)
@@ -1840,6 +1866,9 @@ class MainWindow(QMainWindow):
             return action
 
         self.find_action = editor_action("Find…", QKeySequence.Find, lambda e: e.find_bar.open_bar())
+        # With the dependency graph in front, Find goes to its package search.
+        self.find_action.triggered.disconnect()
+        self.find_action.triggered.connect(self._find)
         self.replace_action = editor_action("Find and Replace…", "Ctrl+Alt+F",
                                             lambda e: e.find_bar.open_bar(replace=True))
         self.find_next_action = editor_action("Find Next", QKeySequence.FindNext,
