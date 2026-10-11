@@ -84,6 +84,8 @@ LSP_SYNC_MS = 300    # send edits to the language server once typing pauses this
 COMPLETE_MS = 120    # ask for completions once typing pauses this long
 AUTO_COMPLETE_MIN = 2  # characters of a name typed before completions appear by themselves
 WORD_RE = re.compile(r"[A-Za-z0-9_]")
+MODIFIER_KEYS = {Qt.Key_Shift, Qt.Key_Control, Qt.Key_Meta, Qt.Key_Alt, Qt.Key_AltGr,
+                 Qt.Key_CapsLock, Qt.Key_Super_L, Qt.Key_Super_R}
 
 
 def worst_severity(notes: list[tuple[str, str]]) -> str:
@@ -526,8 +528,13 @@ class CodeEditor(QPlainTextEdit):
 
     # ------------------------------------------------------------ editing
     def keyPressEvent(self, event):
-        self.hover_popup.hide()
         key = event.key()
+        if key in MODIFIER_KEYS:
+            # ⌘/⇧/⌥/⌃ on their own (e.g. to ⌘-click, or for a screenshot):
+            # keep the hover popup open.
+            super().keyPressEvent(event)
+            return
+        self.hover_popup.hide()
         popup = self.completion_popup
         plain = not event.modifiers() & (Qt.ShiftModifier | Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)
         if popup.isVisible():
