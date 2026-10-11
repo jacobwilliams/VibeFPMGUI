@@ -11,6 +11,7 @@ line endings) and of noticing when it changes on disk.
 
 from __future__ import annotations
 
+import html
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -210,12 +211,32 @@ class LineNumberArea(QWidget):
         if event.type() == event.Type.ToolTip:
             line = self.editor.line_at_y(event.pos().y())
             notes = self.editor.markers.get(line)
-            if notes:
+            issues = [i for i in self.editor.lint_issues if i.line == line]
+            popup = self.editor.hover_popup
+            if issues:  # the same card as hovering the text (with its fix links)
+                if not (popup.isVisible() and popup.anchor == ("gutter", line)):
+                    others = [m for severity, m in notes or [] if not severity.startswith("lint")]
+                    popup.show_at(event.globalPos(), self.editor.lint_card_html(issues, others), ("gutter", line))
+                QToolTip.hideText()
+            elif notes:
                 QToolTip.showText(event.globalPos(), "\n".join(m for _, m in notes), self)
             else:
                 QToolTip.hideText()
             return True
         return super().event(event)
+
+    def mouseMoveEvent(self, event):
+        popup = self.editor.hover_popup
+        if popup.isVisible() and popup.anchor and popup.anchor[0] == "gutter":
+            if popup.anchor == ("gutter", self.editor.line_at_y(event.position().toPoint().y())):
+                popup.keep()
+            else:
+                popup.schedule_hide()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):
+        self.editor.hover_popup.schedule_hide()  # (unless the mouse went into it)
+        super().leaveEvent(event)
 
     def mousePressEvent(self, event):
         # Clicking a number selects that line.
@@ -376,6 +397,26 @@ class CodeEditor(QPlainTextEdit):
             return None  # a number
         return cursor.blockNumber() + 1, start, word
 
+    def lint_card_html(self, issues, other_notes=()) -> str:
+        """fortitude's messages for ``issues`` (with fix links), plus any
+        other notes for the line (compiler, AI review) as plain paragraphs."""
+        hover_card.set_text_color(self.palette().color(QPalette.Text))
+        text = hover_card.lint_notes_html(issues, [self.lint_issues.index(i) for i in issues])
+        for note in other_notes:
+            text += f"<p style='margin:4px 0 0 0'>{html.escape(note)}</p>"
+        return text
+
+    def _lint_visible(self, issue) -> bool:
+        """Is the start of an issue's underline within the visible text area
+        (not scrolled off to the side, as a long line's S001 usually is)?"""
+        span = self._lint_span(issue)
+        if span is None:
+            return False
+        cursor = QTextCursor(self.document())
+        cursor.setPosition(span[0])
+        x = self.cursorRect(cursor).left()
+        return 0 <= x < self.viewport().width()
+
     def hover_key(self, point: QPoint):
         """What the mouse is on, for deciding when the hover popup is stale:
         the name (line, start column), or else the character position."""
@@ -386,14 +427,23 @@ class CodeEditor(QPlainTextEdit):
         if event.type() == event.Type.ToolTip:
             if self.hover_popup.isVisible() and self.hover_popup.anchor == self.hover_key(event.pos()):
                 return True  # already showing (and maybe scrolled): leave it
-            pos = self.cursorForPosition(event.pos()).position()
+            cursor = self.cursorForPosition(event.pos())
+            pos = cursor.position()
             notes = [i for i in self.lint_issues
                      if (span := self._lint_span(i)) and span[0] <= pos <= span[1]]
-            hover_card.set_text_color(self.palette().color(QPalette.Text))
-            lint_html = hover_card.lint_notes_html(notes, [self.lint_issues.index(i) for i in notes])
+            key = self.hover_key(event.pos())
+            if not notes:
+                # An issue whose underline is scrolled out of view (a long
+                # line's S001 starts at column 101) shows anywhere on its line.
+                line = cursor.blockNumber() + 1
+                notes = [i for i in self.lint_issues if i.line == line and not self._lint_visible(i)]
+                if notes:
+                    key = ("line", line)
+                    if self.hover_popup.isVisible() and self.hover_popup.anchor == key:
+                        return True
+            lint_html = self.lint_card_html(notes) if notes else ""
             word = self.word_at(event.pos()) if self.hover_provider is not None else None
             self._hover_word = word[:2] if word else None
-            key = self.hover_key(event.pos())
             if notes:
                 self.hover_popup.show_at(event.globalPos(), lint_html, key)
             elif self.hover_popup.anchor != key:
@@ -491,7 +541,11 @@ class CodeEditor(QPlainTextEdit):
     def mouseMoveEvent(self, event):
         super().mouseMoveEvent(event)
         if self.hover_popup.isVisible():
-            if self.hover_key(event.position().toPoint()) == self.hover_popup.anchor:
+            point = event.position().toPoint()
+            anchor = self.hover_popup.anchor
+            on_line = (isinstance(anchor, tuple) and anchor[:1] == ("line",)
+                       and self.cursorForPosition(point).blockNumber() + 1 == anchor[1])
+            if on_line or self.hover_key(point) == anchor:
                 self.hover_popup.keep()
             else:
                 self.hover_popup.schedule_hide()
