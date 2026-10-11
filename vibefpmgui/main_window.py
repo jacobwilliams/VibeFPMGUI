@@ -1666,6 +1666,7 @@ class MainWindow(QMainWindow):
         self.settings.setValue("lint", on)
         for editor in self.editors():
             editor.set_lint_enabled(on)
+        self._update_editor_actions()  # (the Fix … Issues items)
 
     def open_file(self, path: str, diagnostics: list | None = None, force_editor: bool = False):
         """Open a file in the built-in editor (or the default application),
@@ -1836,6 +1837,8 @@ class MainWindow(QMainWindow):
         editor = self.current_editor()
         self.format_action.setEnabled(editor is not None and formatter.can_format(editor.path)
                                       and formatter.executable() is not None)
+        for action in (self.fix_safe_action, self.fix_all_action):
+            action.setEnabled(editor is not None and editor.can_lint())
         for action in (self.definition_action, self.references_action, self.rename_action,
                        self.complete_action):
             action.setEnabled(editor is not None and editor.lsp is not None)
@@ -1843,6 +1846,29 @@ class MainWindow(QMainWindow):
         self.back_action.setEnabled(bool(self._back))
         self.forward_action.setEnabled(bool(self._forward))
         self._update_review_actions()
+
+    def fix_lint_issues(self, editor: EditorTab, unsafe: bool):
+        """Edit → Fix All … Issues: fortitude --fix on the editor's text (one Undo step)."""
+        if not editor.can_lint():
+            return
+        expected = sum(1 for i in editor.editor.lint_issues if i.fixable and (unsafe or i.fix_safe))
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            text = editor.editor.toPlainText()
+            fixed, error = lint.fix_text(text, editor.path, unsafe=unsafe)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if fixed is None:
+            QMessageBox.warning(self, "fortitude", f"{editor.path.name} could not be fixed:\n\n{error}")
+            return
+        if fixed == text:
+            kind = "fixable" if unsafe else "safely fixable"
+            self.statusBar().showMessage(f"{editor.path.name}: no {kind} issues", 4000)
+            return
+        editor.replace_text(fixed)
+        count = f"{expected} " if expected else ""
+        self.statusBar().showMessage(f"Applied {count}fortitude fix{'es' * (expected != 1)} to {editor.path.name} "
+                                     "(Undo to revert; not saved yet)", 6000)
 
     def format_file(self, editor: EditorTab):
         """Format the editor's (Fortran) text with fprettify."""
@@ -1953,6 +1979,14 @@ class MainWindow(QMainWindow):
                                       "with fprettify (undo to revert)")
         self.format_action.setStatusTip("Re-indent and re-space the Fortran file in the editor "
                                         "with fprettify")
+        self.fix_safe_action = editor_action("Fix All Safe Issues (fortitude)", "",
+                                             lambda e: self.fix_lint_issues(e, unsafe=False))
+        self.fix_safe_action.setStatusTip("Apply fortitude's safe fixes (they don't change what the "
+                                          "code does) to the file in the editor; Undo reverts")
+        self.fix_all_action = editor_action("Fix All Issues, Including Unsafe (fortitude)", "",
+                                            lambda e: self.fix_lint_issues(e, unsafe=True))
+        self.fix_all_action.setStatusTip("Also apply fortitude's unsafe fixes, which can change what the "
+                                         "code does: check them before saving; Undo reverts")
 
     def export_graph(self):
         if not self.graph:

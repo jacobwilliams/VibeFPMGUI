@@ -86,6 +86,12 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   `fortitude.toml`) apply. *View → Lint Fortran Files* turns it off.
   fortitude is part of the pixi environment; for a pip install, add it
   with `pip install fortitude-lint`.
+  fortitude can fix many issues itself: hover one and click *Apply fix* (or
+  right-click it → *Fix: …*) to apply just that fix, or use *Edit → Fix All
+  Safe Issues* for the whole file. *Safe* fixes don't change what the code
+  does; *Edit → Fix All Issues, Including Unsafe* also applies the others
+  (marked "unsafe — check it"), which you should review. Either way it's a
+  single Undo step and nothing is saved until you save.
 * Formatting: **Format** (toolbar, or *Edit → Format with fprettify*,
   ⇧⌘I) re-indents and re-spaces the free-form Fortran file in the editor
   with [fprettify](https://github.com/fortran-lang/fprettify). Unsaved text

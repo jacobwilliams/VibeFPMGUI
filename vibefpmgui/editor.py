@@ -113,6 +113,7 @@ class HoverPopup(QFrame):
         self.browser = QTextBrowser()
         self.browser.setFrameShape(QFrame.NoFrame)
         self.browser.setOpenLinks(False)
+        self.browser.anchorClicked.connect(self._link_clicked)
         self.browser.setFont(QToolTip.font())
         self.browser.document().setDocumentMargin(9)
         self.browser.viewport().setAutoFillBackground(False)
@@ -160,6 +161,16 @@ class HoverPopup(QFrame):
         self.move(x, y)
         self.browser.verticalScrollBar().setValue(0)
         self.show()
+
+    def _link_clicked(self, url):
+        """The card's "Apply fix" link (fix:N = the editor's Nth lint issue)."""
+        if url.scheme() == "fix":
+            try:
+                issue = self.editor.lint_issues[int(url.path())]
+            except (ValueError, IndexError):
+                return
+            self.hide()
+            self.editor.lint_fix_requested.emit(issue)
 
     def schedule_hide(self):
         if self.isVisible() and not self._hide_timer.isActive():
@@ -220,6 +231,7 @@ class CodeEditor(QPlainTextEdit):
     definition_requested = Signal()  # ⌘/Ctrl-click on a name (or the right-click menu)
     references_requested = Signal()  # right-click menu → Find References
     rename_requested = Signal()      # right-click menu → Rename Symbol…
+    lint_fix_requested = Signal(object)  # a lint.LintIssue whose fix to apply (hover link or menu)
     typed = Signal(str)                # a key that changed the text (after it did; "\b" = Backspace)
     completion_chosen = Signal(object)  # Enter/Tab in the completion list
 
@@ -378,7 +390,7 @@ class CodeEditor(QPlainTextEdit):
             notes = [i for i in self.lint_issues
                      if (span := self._lint_span(i)) and span[0] <= pos <= span[1]]
             hover_card.set_text_color(self.palette().color(QPalette.Text))
-            lint_html = hover_card.lint_notes_html(notes)
+            lint_html = hover_card.lint_notes_html(notes, [self.lint_issues.index(i) for i in notes])
             word = self.word_at(event.pos()) if self.hover_provider is not None else None
             self._hover_word = word[:2] if word else None
             key = self.hover_key(event.pos())
@@ -436,6 +448,19 @@ class CodeEditor(QPlainTextEdit):
         """The usual Cut/Copy/Paste menu, plus the language server's commands
         for the name that was right-clicked (when one is attached)."""
         menu = self.createStandardContextMenu(event.pos())
+        # fortitude's fixes for the issues at that spot.
+        spot = (self.cursorForPosition(event.pos()).position() if event.reason() == event.Reason.Mouse
+                else self.textCursor().position())
+        fixes = [i for i in self.lint_issues if i.fixable
+                 and (span := self._lint_span(i)) and span[0] <= spot <= span[1]]
+        if fixes:
+            first = menu.actions()[0] if menu.actions() else None
+            for issue in fixes:
+                label = f"Fix: {issue.fix or issue.message}" + ("" if issue.fix_safe else "  (unsafe — check it)")
+                action = QAction(label, menu)
+                action.triggered.connect(lambda _=False, i=issue: self.lint_fix_requested.emit(i))
+                menu.insertAction(first, action)
+            menu.insertSeparator(first)
         if self.hover_provider is not None:
             on_name = False
             if event.reason() == event.Reason.Mouse:
@@ -911,6 +936,7 @@ class EditorTab(QWidget):
         self.editor.definition_requested.connect(self.go_to_definition)
         self.editor.references_requested.connect(self.find_references)
         self.editor.rename_requested.connect(self.rename_symbol)
+        self.editor.lint_fix_requested.connect(self.apply_lint_fix)
         self._complete_timer = QTimer(self)
         self._complete_timer.setSingleShot(True)
         self._complete_timer.setInterval(COMPLETE_MS)
@@ -1287,6 +1313,7 @@ class EditorTab(QWidget):
                                       self._lint_finished(process))
         self._lint_process = process
         process.start(lint.executable(), lint.command(self.path))
+        self._lint_sent_revision = self.editor.document().revision()
         process.write(self.editor.toPlainText().encode("utf-8"))
         process.closeWriteChannel()
 
@@ -1298,8 +1325,22 @@ class EditorTab(QWidget):
         process.deleteLater()
         if self.can_lint():
             self._show_lint(lint.parse(output))
+            self._lint_revision = self._lint_sent_revision  # the text the issues are about
         if self._lint_again:
             self._lint_timer.start()
+
+    def apply_lint_fix(self, issue):
+        """Apply fortitude's fix for one issue (one Undo step). Only if the
+        text is still the one fortitude checked: otherwise the positions
+        may be off, so check again first."""
+        if not issue.fixable:
+            return
+        if getattr(self, "_lint_revision", None) != self.editor.document().revision():
+            self._update_status("the file changed since fortitude checked it — try again in a moment")
+            self._lint_timer.start()
+            return
+        self.apply_text_edits(issue.edits)
+        self._update_status(f"applied fix: {issue.fix or issue.code}")
 
     def stop_lint(self):
         """Before the tab is closed: don't leave fortitude running."""

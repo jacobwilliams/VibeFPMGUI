@@ -44,12 +44,18 @@ def badge(kind: str) -> str:
             f"font-size:small'>&nbsp;{html.escape(letter.upper() if len(letter) > 1 else letter)}&nbsp;</span>")
 
 
-def lint_notes_html(issues) -> str:
-    """fortitude's messages: a colored rule code, the message, and the fix."""
+def lint_notes_html(issues, fix_ids: list[int] | None = None) -> str:
+    """fortitude's messages: a colored rule code, the message, and the fix.
+    With ``fix_ids`` (each issue's number in the editor), fixable issues get
+    an "Apply fix" link (``fix:N``)."""
     rows = []
-    for issue in issues:
+    for n, issue in enumerate(issues):
         color = LINT_COLORS.get(issue.severity, "#0ca678")
-        fix = (f"<br><span style='color:{_muted()}; font-size:small'>Fix: {html.escape(issue.fix)}</span>"
+        link = ""
+        if fix_ids is not None and getattr(issue, "fixable", False):
+            note = "" if issue.fix_safe else f" <i style='color:{_muted()}'>(unsafe — check it)</i>"
+            link = f" &nbsp;<span style='font-size:small'><a href='fix:{fix_ids[n]}'>Apply fix</a>{note}</span>"
+        fix = (f"<br><span style='color:{_muted()}; font-size:small'>Fix: {html.escape(issue.fix)}</span>{link}"
                if issue.fix else "")
         rows.append(f"<tr><td valign='top' style='padding-right:6px'><span style='background-color:{color}; "
                     f"color:white; font-weight:700; font-size:small'>&nbsp;{html.escape(issue.code)}&nbsp;"
