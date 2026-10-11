@@ -1,0 +1,45 @@
+/* Colors for the API docs: pdoc's own (light), and a dark set used when
+   <html data-theme="dark"> (set by the toggle button, see frame.html.jinja2). */
+:root {
+    --pdoc-background: #fff;
+}
+
+.pdoc {
+    --text: #212529;
+    --muted: #6c757d;
+    --link: #3660a5;
+    --link-hover: #1659c5;
+    --code: #f8f8f8;
+    --active: #fff598;
+
+    --accent: #eee;
+    --accent2: #c1c1c1;
+
+    --nav-hover: rgba(255, 255, 255, 0.5);
+    --name: #0066BB;
+    --def: #008800;
+    --annotation: #007020;
+}
+
+/* dark: the website's background, GitHub-like text and link colors */
+:root[data-theme="dark"] {
+    --pdoc-background: #0f1117;
+    color-scheme: dark;
+}
+
+:root[data-theme="dark"] .pdoc {
+    --text: #e6e9ef;
+    --muted: #9aa3b2;
+    --link: #79b8ff;
+    --link-hover: #a5d0ff;
+    --code: #1b1e27;
+    --active: #4a3f12;
+
+    --accent: #161922;
+    --accent2: #2a2f3b;
+
+    --nav-hover: rgba(255, 255, 255, 0.06);
+    --name: #79c0ff;
+    --def: #7ee787;
+    --annotation: #56d364;
+}

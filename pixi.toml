@@ -8,8 +8,8 @@ version = "0.0.3"
 [tasks]
 start = "python -m vibefpmgui"
 demo = "python -m vibefpmgui examples/demo"
-docs = "pdoc -o web/api vibefpmgui"       # API docs (HTML) from the docstrings, into the website
-docs-serve = "pdoc vibefpmgui"            # the same, live in the browser while you edit
+docs = "pdoc -t docs/pdoc-template -o web/api vibefpmgui"   # API docs (HTML) from the docstrings, into the website
+docs-serve = "pdoc -t docs/pdoc-template vibefpmgui"        # the same, live in the browser while you edit
 
 [dependencies]
 gfortran = "15.*"

@@ -1,0 +1,41 @@
+{#- pdoc's page frame, plus a light/dark mode toggle. The choice is remembered
+    under the same key as the VibeFPMGUI website, so the two stay in step. -#}
+{% extends "default/frame.html.jinja2" %}
+{% block head %}
+    {{ super() }}
+    <script>
+        // Pick the theme before the page draws (no flash of the wrong colors).
+        (function () {
+            var theme = null;
+            try { theme = localStorage.getItem("vibefpmgui-theme"); } catch (e) { /* storage blocked */ }
+            if (!theme) theme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+            document.documentElement.setAttribute("data-theme", theme);
+        })();
+    </script>
+{% endblock %}
+{% block body %}
+    {{ super() }}
+    <button class="pdoc theme-toggle" id="theme-toggle" type="button" aria-label="Switch between light and dark mode"
+            title="Switch between light and dark mode">
+        <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+        <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 1.5v2.5M12 20v2.5M4.6 4.6l1.8 1.8M17.6 17.6l1.8 1.8M1.5 12H4M20 12h2.5M4.6 19.4l1.8-1.8M17.6 6.4l1.8-1.8"/></svg>
+    </button>
+    <script>
+        (function () {
+            var root = document.documentElement, button = document.getElementById("theme-toggle");
+            button.addEventListener("click", function () {
+                var theme = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+                root.setAttribute("data-theme", theme);
+                try { localStorage.setItem("vibefpmgui-theme", theme); } catch (e) { /* storage blocked */ }
+            });
+            // Follow the system while no choice has been made.
+            try {
+                matchMedia("(prefers-color-scheme: dark)").addEventListener("change", function (e) {
+                    var saved = null;
+                    try { saved = localStorage.getItem("vibefpmgui-theme"); } catch (err) { /* ignore */ }
+                    if (!saved) root.setAttribute("data-theme", e.matches ? "dark" : "light");
+                });
+            } catch (e) { /* old browsers */ }
+        })();
+    </script>
+{% endblock body %}
