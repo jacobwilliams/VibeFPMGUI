@@ -127,6 +127,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("VibeFPMGUI")
         self.resize(1300, 850)
         self.settings = make_settings()
+        self._session_busy = False  # restoring the open files (don't save meanwhile)
         self.lsp_client = lsp.LspClient(self)  # fortls, for the editor (see _update_language_server)
         self.lsp_client.stopped.connect(self._language_server_stopped)
         self.lsp_client.message.connect(lambda text: self.statusBar().showMessage(f"fortls: {text}", 8000))
@@ -725,6 +726,7 @@ class MainWindow(QMainWindow):
         self._set_graph_edges(s.value("graph_edges", next(iter(EDGE_STYLES))))
 
     def closeEvent(self, event):
+        self._save_session()
         for editor in self.editors():
             self.tabs.setCurrentWidget(editor)
             if not editor.maybe_save():
@@ -767,7 +769,9 @@ class MainWindow(QMainWindow):
 
     def open_manifest(self, filename: str | Path):
         path = Path(filename).resolve()
-        if path != self.manifest_path:
+        new_project = path != self.manifest_path
+        if new_project:
+            self._save_session()  # the old project's open files, for next time
             # The open files belong to the old project: ask about unsaved
             # changes first (Cancel keeps the current project open).
             if not self.close_all_editors():
@@ -788,6 +792,8 @@ class MainWindow(QMainWindow):
         self.setWindowFilePath(str(self.manifest_path))  # macOS title-bar proxy icon
         self.setWindowTitle(f"VibeFPMGUI — {self.manifest_path.parent.name}")
         self.reload()
+        if new_project:
+            self._restore_session()
 
     # ------------------------------------------------------ recent manifests
     MAX_RECENT = 10
@@ -836,6 +842,64 @@ class MainWindow(QMainWindow):
 
     def clear_recent_manifests(self):
         self.settings.setValue("recent_manifests", [])
+
+    # -------------------------------------------------------------- session
+    # Per project: the files open in the editor (with cursor and scroll
+    # positions), the tab in front, and the Project files tree's open
+    # folders, restored when the project is opened again.
+    def _session_key(self) -> str:
+        return "session/" + hashlib.sha1(str(self.manifest_path).encode()).hexdigest()[:16]
+
+    def _save_session(self):
+        if self.manifest_path is None or self._session_busy:
+            return
+        files = []
+        for editor in self.editors():
+            cursor = editor.editor.textCursor()
+            files.append({"path": str(editor.path), "line": cursor.blockNumber() + 1,
+                          "column": cursor.positionInBlock(),
+                          "scroll": editor.editor.verticalScrollBar().value()})
+        current = self.current_editor()
+        state = {"files": files, "current": str(current.path) if current else None,
+                 "tab": self.tabs.currentIndex()}
+        tree = self.project_tree.view_state()
+        if tree is None:  # filtered: keep what was saved before
+            try:
+                tree = json.loads(self.settings.value(self._session_key(), "{}")).get("tree")
+            except (TypeError, ValueError):
+                tree = None
+        state["tree"] = tree
+        self.settings.setValue(self._session_key(), json.dumps(state))
+
+    def _restore_session(self):
+        try:
+            state = json.loads(self.settings.value(self._session_key(), "") or "{}")
+        except (TypeError, ValueError):
+            return
+        if state.get("tree"):
+            self.project_tree.restore_view_state(state["tree"])
+        self._session_busy = True
+        try:
+            for f in state.get("files") or []:
+                path = Path(f.get("path", ""))
+                if not path.is_file():
+                    continue  # deleted or moved since
+                self.open_file(str(path), force_editor=True)
+                editor = self._open_editor_for(path)
+                if editor is None:
+                    continue
+                editor.editor.go_to_position(int(f.get("line", 1)), int(f.get("column", 0)))
+                scroll = int(f.get("scroll", 0))
+                # (after the tab's first layout, or the scroll position is clamped)
+                QTimer.singleShot(0, lambda e=editor, v=scroll: e.editor.verticalScrollBar().setValue(v))
+        finally:
+            self._session_busy = False
+        current = self._open_editor_for(Path(state["current"])) if state.get("current") else None
+        if current is not None:
+            self.tabs.setCurrentWidget(current)
+        elif isinstance(state.get("tab"), int) and 0 <= state["tab"] < self.tabs.count() \
+                and not isinstance(self.tabs.widget(state["tab"]), EditorTab):
+            self.tabs.setCurrentIndex(state["tab"])
 
     # -------------------------------------------------------- build outputs
     def _config_records(self) -> bo.ConfigRecords:
@@ -1361,6 +1425,7 @@ class MainWindow(QMainWindow):
             editor.attach_lsp(self.lsp_client)
             self.tabs.addTab(editor, file.name)
             self._update_editor_title(editor)
+            self._save_session()
         self.tabs.setCurrentWidget(editor)
         if diagnostics:
             editor.show_diagnostics(diagnostics)
@@ -1408,6 +1473,7 @@ class MainWindow(QMainWindow):
             widget.close_down()
             self.tabs.removeTab(index)
             widget.deleteLater()
+            self._save_session()
 
     def _update_editor_actions(self, *_):
         has_editor = self.current_editor() is not None

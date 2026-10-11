@@ -14,7 +14,10 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   stops, shows the last 200 lines when the command ends, and *Full Output…*
   shows the file the whole output was saved to.
   *File → Recent Manifests* reopens any of the last 10 projects (missing
-  ones are greyed out); the last one is reopened at startup.
+  ones are greyed out); the last one is reopened at startup. Each project
+  remembers the files open in the editor (with their cursor and scroll
+  positions), the tab in front and the folders open in the *Project files*
+  tree, and restores them when it is opened again.
 * *Features* menu: tick any of the features declared in the project's
   `[features]` table to build/run/test with `--features …` (remembered per
   project). The *Profile* list also offers the project's own `[profiles]`;

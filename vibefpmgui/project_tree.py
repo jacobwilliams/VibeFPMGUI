@@ -631,6 +631,19 @@ class ProjectTree(QWidget):
                 return item
         return None
 
+    def view_state(self) -> dict | None:
+        """The open folders and the selected entry (to restore next time),
+        or None while the tree is filtered (everything is expanded then)."""
+        if self.filter_edit.text().strip():
+            return None
+        return {"expanded": sorted(self._expanded_paths()), "selected": self._selected_path()}
+
+    def restore_view_state(self, state: dict):
+        self._restore_expanded(set(state.get("expanded") or []))
+        selected = state.get("selected")
+        if selected and Path(selected).exists():
+            self.reveal(selected, expand=False)
+
     def _selected_path(self) -> str | None:
         index = self.view.currentIndex()
         return index.data(PATH_ROLE) if index.isValid() else None
