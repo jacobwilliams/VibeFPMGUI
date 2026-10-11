@@ -688,6 +688,11 @@ class BuildMonitor(SortableTable, QWidget):
         layout.addLayout(header)
         layout.addLayout(progress_row)
         layout.addWidget(self.table, 1)
+        # Shown instead of the table (and its column headers) while it's empty.
+        self.empty = QLabel()
+        self.empty.setAlignment(Qt.AlignCenter)
+        self.empty.setWordWrap(True)
+        layout.addWidget(self.empty, 1)
 
         # Drives the spinner, the live times and the finish flash.
         self._timer = QTimer(self)
@@ -703,6 +708,7 @@ class BuildMonitor(SortableTable, QWidget):
         self.is_light = app_is_light()
         self.palette_colors = PALETTES["light" if self.is_light else "dark"]
         self.setStyleSheet(panel_stylesheet(self.objectName(), self.palette_colors))
+        self.empty.setStyleSheet(f"color: {self.palette_colors['muted']};")
         self._style_chips()
         self._update_header()
         self.table.viewport().update()
@@ -1062,6 +1068,24 @@ class BuildMonitor(SortableTable, QWidget):
         else:
             text = f"{muted}Run Build, Run or Test to see progress</span>"
         self.progress_label.setText(text)
+        self._update_empty()
+
+    def _update_empty(self):
+        """While nothing has been compiled, a message instead of the table."""
+        if self.table.rowCount():
+            message = ""
+        elif self._result == "uptodate" or (self._result == "ok" and not self.targets):
+            message = "Nothing needed compiling — the project is up to date."
+        elif self._result in ("failed", "stopped"):
+            message = "Nothing was compiled — see the output."
+        elif self._active:
+            message = "Waiting for fpm…"
+        else:
+            message = "Run Build, Run or Test to see each file fpm compiles here."
+        if self.empty.text() != message:
+            self.empty.setText(message)
+        self.empty.setVisible(bool(message))
+        self.table.setVisible(not message)
 
     def _tick(self):
         self.spinner_angle = (self.spinner_angle + 18) % 360
