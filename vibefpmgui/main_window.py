@@ -163,6 +163,8 @@ class MainWindow(QMainWindow):
         self.lsp_client = lsp.LspClient(self)  # fortls, for the editor (see _update_language_server)
         self.lsp_client.stopped.connect(self._language_server_stopped)
         self.lsp_client.message.connect(lambda text: self.statusBar().showMessage(f"fortls: {text}", 8000))
+        self.lsp_client.diagnostics.connect(self._lsp_diagnostics)
+        self._lsp_diagnostics_by_file: dict[Path, list] = {}  # the latest, to show again when turned on
         self.manifest_path: Path | None = None
         self.graph: m.DependencyGraph | None = None
         self.process: QProcess | None = None
@@ -279,6 +281,14 @@ class MainWindow(QMainWindow):
         self.lint_action.setStatusTip("Check free-form Fortran files in the editor with fortitude "
                                       "as you type; findings are underlined and marked in the gutter")
         view_menu.addAction(self.lint_action)
+        self.lsp_diagnostics_action = QAction("Language Server Diagnostics (fortls)", self, checkable=True)
+        EditorTab.lsp_diagnostics_enabled = self.settings.value("lsp_diagnostics", True, type=bool)
+        self.lsp_diagnostics_action.setChecked(EditorTab.lsp_diagnostics_enabled)
+        self.lsp_diagnostics_action.toggled.connect(self.set_lsp_diagnostics_enabled)
+        self.lsp_diagnostics_action.setStatusTip(
+            "Show the problems fortls finds in a Fortran file when it's opened or saved (e.g. USE after "
+            "IMPLICIT, misplaced CONTAINS, interface mismatches), marked like fortitude's")
+        view_menu.addAction(self.lsp_diagnostics_action)
         self.minimap_action = QAction("Show Minimap", self, checkable=True)
         EditorTab.minimap_enabled = self.settings.value("minimap", True, type=bool)
         self.minimap_action.setChecked(EditorTab.minimap_enabled)
@@ -1825,6 +1835,19 @@ class MainWindow(QMainWindow):
             editor.editor.set_word_wrap(on)
         self.terminal_panel.set_word_wrap(on)
 
+    def set_lsp_diagnostics_enabled(self, on: bool):
+        EditorTab.lsp_diagnostics_enabled = on
+        self.settings.setValue("lsp_diagnostics", on)
+        for editor in self.editors():
+            editor.show_lsp_diagnostics(self._lsp_diagnostics_by_file.get(editor.path, []))
+
+    def _lsp_diagnostics(self, path: Path, issues: list):
+        """fortls checked a file (opened or saved): show it in its tab."""
+        self._lsp_diagnostics_by_file[path] = issues
+        editor = self._open_editor_for(path)
+        if editor is not None:
+            editor.show_lsp_diagnostics(issues)
+
     def set_lint_enabled(self, on: bool):
         EditorTab.lint_enabled = on
         self.settings.setValue("lint", on)
@@ -2004,8 +2027,8 @@ class MainWindow(QMainWindow):
                                       and formatter.executable() is not None)
         for action in (self.fix_safe_action, self.fix_all_action):
             action.setEnabled(editor is not None and editor.can_lint())
-        for action in (self.definition_action, self.references_action, self.rename_action,
-                       self.complete_action):
+        for action in (self.definition_action, self.implementation_action, self.references_action,
+                       self.rename_action, self.complete_action):
             action.setEnabled(editor is not None and editor.lsp is not None)
         self.symbol_action.setEnabled(self.lsp_client.is_running())
         self.back_action.setEnabled(bool(self._back))
@@ -2122,6 +2145,10 @@ class MainWindow(QMainWindow):
         self.definition_action = editor_action("Go to Definition", "F12", lambda e: e.go_to_definition())
         self.definition_action.setStatusTip("Open the definition of the name at the cursor "
                                             "(or ⌘/Ctrl-click the name)")
+        self.implementation_action = editor_action("Go to Implementation", "Ctrl+F12",
+                                                   lambda e: e.go_to_implementation())
+        self.implementation_action.setStatusTip("For a type-bound procedure, open the procedure it binds; for a "
+                                                "generic interface, its first module procedure")
         self.references_action = editor_action("Find References", "Shift+F12", lambda e: e.find_references())
         self.references_action.setStatusTip("List every use of the name at the cursor (References tab)")
         self.rename_action = editor_action("Rename Symbol…", "F2", lambda e: e.rename_symbol())

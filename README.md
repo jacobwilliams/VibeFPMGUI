@@ -143,6 +143,10 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   * *Go to Definition* (F12, or ⌘-click a name; Ctrl-click on Linux/Windows)
     opens where it is defined, including in a dependency's sources. *Go Back*
     / *Go Forward* (⌘[ / ⌘]; Alt+←/→ elsewhere) return.
+  * *Go to Implementation* (⌃F12) goes one step further for type-bound
+    procedures: from `call shape%area()` to the procedure the binding names
+    (Go to Definition stops at `procedure :: area => circle_area`); for a
+    generic interface, to its first module procedure.
   * An outline drop-down above the editor lists the file's modules, types
     and procedures, follows the cursor, and jumps to the one you pick. A
     colored badge shows each one's kind (M module, P program, S subroutine,
@@ -160,8 +164,13 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
     declaration and documentation.
   * *Find References* (⇧F12) lists every use of the name at the cursor in
     the *References* tab, grouped by file; click one to go there.
-  * Go to Definition, Find References and Rename Symbol are also at the top
-    of the editor's right-click menu, for the name you right-click.
+  * Go to Definition and Implementation, Find References and Rename Symbol
+    are also at the top of the editor's right-click menu, for the name you
+    right-click.
+  * fortls's own checks of a file (when it's opened or saved), e.g. USE
+    after IMPLICIT, a variable declared twice, a misplaced CONTAINS, are
+    marked like fortitude's issues (in their own color, under *FORTLS* in the
+    hover card). *View → Language Server Diagnostics* turns them off.
   * *Rename Symbol…* (F2) renames a module, procedure, type or variable
     everywhere it is used, after a preview of every file and line it will
     change. Files open in the editor are changed there (unsaved; Undo
@@ -174,7 +183,11 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   `.fortls.json` or `.fortls`), fortls indexes only the fpm folders (`src`,
   `app`, `test`, `example`, `include`, any `source-dir`) of the project and of
   each dependency, so e.g. a Python environment inside the project isn't
-  searched. *View → Fortran Language Server* turns it off. fortls is part of
+  searched. When an `fpm.toml` has a `[preprocess.cpp]` section, fortls is
+  also given its `macros` (`{version}` filled in), `suffixes` and the
+  packages' include folders, so `#ifdef` branches read as fpm compiles them;
+  without one, fortls's defaults are used. *View → Fortran Language
+  Server* turns it off. fortls is part of
   the pixi environment; for a pip install, `pip install .[fortran]` adds
   fortls, fortitude and fprettify.
 * AI code review, fully local: *AI → Review Current File* (⌥⌘R) sends the

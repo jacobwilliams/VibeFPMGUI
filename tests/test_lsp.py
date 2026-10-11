@@ -285,3 +285,116 @@ def test_editor_context_menu_commands(qtbot, lsp_window, project):
     qtbot.waitUntil(lambda: lsp_window.current_editor() is foo, timeout=20_000)
     blank = main.editor.context_menu(main.editor.cursorRect().center() + main.editor.cursorRect().bottomRight() * 40)
     assert not {a.text(): a for a in blank.actions()}["Go to Definition"].isEnabled()  # (not on a name)
+
+
+# ------------------------------------- preprocessor, diagnostics, implementation
+SHAPES = """\
+module shapes
+  implicit none
+  type :: circle
+    real :: r
+  contains
+    procedure :: area => circle_area
+  end type circle
+contains
+  real function circle_area(self)
+    class(circle), intent(in) :: self
+    circle_area = 3.14 * self%r**2
+  end function circle_area
+end module shapes
+"""
+BAD = "module bad\n  implicit none\n  use shapes\n  integer :: x\n  integer :: x\nend module bad\n"
+PP = ("module pp\n  implicit none\ncontains\n#ifdef USE_FAST\n  subroutine fast_path()\n  end subroutine fast_path\n"
+      "#else\n  subroutine slow_path()\n  end subroutine slow_path\n#endif\nend module pp\n")
+
+
+@pytest.fixture
+def oo_project(tmp_path):
+    from conftest import write_files
+
+    return write_files(tmp_path / "oo", {
+        "fpm.toml": 'name = "oo"\nversion = "1.2.0"\n[preprocess]\n[preprocess.cpp]\n'
+                    'macros = ["USE_FAST", "N=3", "VER={version}"]\nsuffixes = ["F90"]\n',
+        "src/shapes.f90": SHAPES, "src/bad.f90": BAD, "src/pp.F90": PP,
+        "include/defs.h": "#define X 1\n",
+        "app/main.f90": "program main\n  use shapes\n  type(circle) :: c\n  c%r = 1.0\n  print *, c%area()\n"
+                        "end program main\n",
+    })
+
+
+def test_preprocessor_args(oo_project, project):
+    import json
+
+    from vibefpmgui import manifest as m
+
+    args = lsp.preprocessor_args(m.resolve(oo_project / "fpm.toml"), oo_project)
+    assert json.loads(args[args.index("--pp_defs") + 1]) == {"USE_FAST": "", "N": "3", "VER": "1.2.0"}
+    assert args[args.index("--pp_suffixes") + 1] == ".F90"
+    assert args[args.index("--include_dirs") + 1] == str((oo_project / "include").resolve())
+    assert "--pp_defs" in lsp.server_args(m.resolve(oo_project / "fpm.toml"), oo_project)
+    # No preprocessor settings: fortls's defaults, as before.
+    assert lsp.preprocessor_args(m.resolve(project / "fpm.toml"), project) == []
+    # A .fortlsrc says it all.
+    (oo_project / ".fortlsrc").write_text("{}")
+    assert "--pp_defs" not in lsp.server_args(m.resolve(oo_project / "fpm.toml"), oo_project)
+
+
+def test_diagnostic_issues():
+    issues = lsp.diagnostic_issues([
+        {"range": rng(2, 2, 2, 12), "message": "USE statements after\n IMPLICIT statement", "severity": 1},
+        {"range": rng(4, 0), "message": "a warning"},
+        {"message": "no range"},
+    ])
+    assert [(i.line, i.column, i.severity, i.message) for i in issues] == [
+        (3, 3, "fortls error", "USE statements after IMPLICIT statement"), (5, 1, "fortls", "a warning")]
+    assert not issues[0].fixable and issues[0].describe().startswith("fortls: ")
+
+
+@pytest.fixture
+def oo_window(make_window, oo_project, settings_file):
+    settings_file.write_text("[General]\nfortls=true\nlint=false\n")
+    return make_window(oo_project / "fpm.toml")
+
+
+@needs_fortls
+def test_diagnostics_in_the_editor(qtbot, oo_window, oo_project):
+    editor = open_editor(oo_window, oo_project / "src/bad.f90")
+    qtbot.waitUntil(lambda: len(editor._lsp_issues) == 2, timeout=20_000)
+    # (fortls marks the IMPLICIT line for "USE after IMPLICIT")
+    assert {(i.line, i.severity) for i in editor._lsp_issues} == {(2, "fortls error"), (5, "fortls error")}
+    assert {2, 5} <= set(editor.editor.markers) and "2 fortls issues" in editor.status.text()
+    card = editor.editor.lint_card_html([i for i in editor.editor.lint_issues if i.line == 2])
+    assert "FORTLS (checks the saved file)" in card and "USE statements after IMPLICIT" in card
+    oo_window.lsp_diagnostics_action.setChecked(False)
+    assert not editor._lsp_issues and 2 not in editor.editor.markers
+    oo_window.lsp_diagnostics_action.setChecked(True)  # (the latest come back at once)
+    assert len(editor._lsp_issues) == 2
+    assert oo_window.settings.value("lsp_diagnostics") in (True, "true")
+
+
+@needs_fortls
+def test_go_to_implementation(qtbot, oo_window, oo_project):
+    shapes = open_editor(oo_window, oo_project / "src/shapes.f90")
+    main = open_editor(oo_window, oo_project / "app/main.f90")
+    qtbot.waitUntil(lambda: main.editor.hover_provider is not None, timeout=20_000)
+    cursor_at(main, 5, 15)  # area, in c%area()
+    oo_window.definition_action.trigger()  # (the binding)
+    qtbot.waitUntil(lambda: oo_window.current_editor() is shapes
+                    and shapes.editor.textCursor().blockNumber() == 5, timeout=20_000)
+    oo_window.tabs.setCurrentWidget(main)
+    cursor_at(main, 5, 15)
+    actions = {a.text(): a for a in main.editor.context_menu(main.editor.cursorRect().center()).actions()}
+    actions["Go to Implementation"].trigger()  # (the procedure it binds)
+    qtbot.waitUntil(lambda: oo_window.current_editor() is shapes
+                    and shapes.editor.textCursor().blockNumber() == 8, timeout=20_000)
+    assert oo_window.implementation_action.shortcut().toString() == "Ctrl+F12"
+    cursor_at(shapes, 4, 4)  # (real: no implementation)
+    shapes.go_to_implementation()
+    qtbot.waitUntil(lambda: "no implementation found" in shapes.status.text(), timeout=20_000)
+
+
+@needs_fortls
+def test_preprocessor_branches_follow_fpm_toml(qtbot, oo_window, oo_project):
+    pp = open_editor(oo_window, oo_project / "src/pp.F90")
+    qtbot.waitUntil(lambda: pp.outline_box.count() == 2, timeout=20_000)
+    assert pp.outline_box.itemText(1) == "fast_path"  # (USE_FAST is defined in fpm.toml)

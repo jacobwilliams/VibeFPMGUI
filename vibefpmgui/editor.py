@@ -86,9 +86,11 @@ INDENT = "    "
 MAX_FIND_HIGHLIGHTS = 2000
 MARKER_COLORS = {"error": "#e03131", "fatal error": "#e03131", "warning": "#f08c00",
                  "review": "#7048e8", "remark": "#1c7ed6",
-                 "lint error": "#e03131", "lint": "#0ca678"}
+                 "lint error": "#e03131", "lint": "#0ca678",
+                 "fortls error": "#e03131", "fortls": "#1098ad"}
 # Which marker color wins when a line has several kinds of note.
-MARKER_PRIORITY = ["fatal error", "error", "lint error", "warning", "review", "lint", "remark"]
+MARKER_PRIORITY = ["fatal error", "error", "lint error", "fortls error", "warning", "review", "lint",
+                   "fortls", "remark"]
 LINT_DELAY_MS = 600  # lint once typing pauses this long
 LSP_SYNC_MS = 300    # send edits to the language server once typing pauses this long
 COMPLETE_MS = 120    # ask for completions once typing pauses this long
@@ -329,6 +331,7 @@ class CodeEditor(QPlainTextEdit):
     auto-indent and soft tabs."""
 
     definition_requested = Signal()  # ⌘/Ctrl-click on a name (or the right-click menu)
+    implementation_requested = Signal()  # right-click menu → Go to Implementation
     references_requested = Signal()  # right-click menu → Find References
     rename_requested = Signal()      # right-click menu → Rename Symbol…
     lint_fix_requested = Signal(object)  # a lint.LintIssue whose fix to apply (hover link or menu)
@@ -671,6 +674,7 @@ class CodeEditor(QPlainTextEdit):
                 on_name = self.word_at(rect.center()) is not None
             first = menu.actions()[0] if menu.actions() else None
             for text, keys, signal in (("Go to Definition", "F12", self.definition_requested),
+                                       ("Go to Implementation", "Ctrl+F12", self.implementation_requested),
                                        ("Find References", "Shift+F12", self.references_requested),
                                        ("Rename Symbol…", "F2", self.rename_requested)):
                 action = QAction(text, menu)
@@ -1260,6 +1264,7 @@ class EditorTab(QWidget):
     """One open file: editor + find bar + status line."""
 
     lint_enabled = True  # lint Fortran files with fortitude (View menu)
+    lsp_diagnostics_enabled = True  # show fortls's own checks (View menu)
     minimap_enabled = True  # View → Show Minimap
     word_wrap = False       # View → Word Wrap
 
@@ -1279,6 +1284,9 @@ class EditorTab(QWidget):
         self._compiler_markers: dict[int, list[tuple[str, str]]] = {}
         self._review_markers: dict[int, list[tuple[str, str]]] = {}
         self._lint_markers: dict[int, list[tuple[str, str]]] = {}
+        self._lsp_markers: dict[int, list[tuple[str, str]]] = {}
+        self._fortitude_issues: list = []  # (the editor underlines these and fortls's together)
+        self._lsp_issues: list = []
         self._lint_process: QProcess | None = None
         self._lint_again = False  # the text changed while fortitude was running
         self.lsp: lsp_mod.LspClient | None = None  # the language server, for Fortran files
@@ -1343,6 +1351,7 @@ class EditorTab(QWidget):
         self._lsp_timer.setInterval(LSP_SYNC_MS)
         self._lsp_timer.timeout.connect(self._lsp_sync)
         self.editor.definition_requested.connect(self.go_to_definition)
+        self.editor.implementation_requested.connect(self.go_to_implementation)
         self.editor.references_requested.connect(self.find_references)
         self.editor.rename_requested.connect(self.rename_symbol)
         self.editor.lint_fix_requested.connect(self.apply_lint_fix)
@@ -1447,6 +1456,32 @@ class EditorTab(QWidget):
             self.navigate_requested.emit(str(path), to_line, to_column)
 
         self.lsp.definition(self.path, line, column, answered)
+
+    def go_to_implementation(self):
+        """For a type-bound procedure: the procedure it binds (Go to
+        Definition stops at the binding); for a generic interface: its first
+        module procedure."""
+        if self.lsp is None:
+            return
+        self._flush_lsp()
+        word = self._name_at_cursor()
+        if word is not None:
+            line, column = word[0], word[1]
+        else:
+            cursor = self.editor.textCursor()
+            line, column = cursor.blockNumber() + 1, cursor.positionInBlock()
+
+        def answered(result):
+            found = lsp_mod.first_location(result)
+            if found is None:
+                name = f"'{word[2]}'" if word else "the name at the cursor"
+                self._update_status(f"no implementation found for {name} (only type-bound procedures "
+                                    "and generic interfaces have one)")
+                return
+            path, to_line, to_column = found
+            self.navigate_requested.emit(str(path), to_line, to_column)
+
+        self.lsp.implementation(self.path, line, column, answered)
 
     def refresh_outline(self):
         if self.lsp is None:
@@ -1780,11 +1815,27 @@ class EditorTab(QWidget):
             process.waitForFinished(1000)
 
     def _show_lint(self, issues: list[lint.LintIssue]):
+        self._fortitude_issues = list(issues)
+        self._lint_markers = self._markers_for(issues)
+        self._show_issues()
+
+    def show_lsp_diagnostics(self, issues: list):
+        """fortls's check of this file (it sends one when the file is opened
+        or saved), shown like fortitude's issues (View menu: on or off)."""
+        issues = list(issues) if self.lsp_diagnostics_enabled else []
+        self._lsp_issues = issues
+        self._lsp_markers = self._markers_for(issues)
+        self._show_issues()
+
+    @staticmethod
+    def _markers_for(issues) -> dict[int, list[tuple[str, str]]]:
         markers: dict[int, list[tuple[str, str]]] = {}
         for issue in issues:
             markers.setdefault(issue.line, []).append((issue.severity, issue.describe()))
-        self._lint_markers = markers
-        self.editor.set_lint(issues)
+        return markers
+
+    def _show_issues(self):
+        self.editor.set_lint(self._fortitude_issues + self._lsp_issues)
         self._apply_markers()
 
     # ------------------------------------------------------------- files
@@ -1937,6 +1988,9 @@ class EditorTab(QWidget):
         if self._lint_markers:
             count = sum(len(ns) for ns in self._lint_markers.values())
             parts.append(f"{count} fortitude issue{'s' * (count != 1)}")
+        if self._lsp_markers:
+            count = sum(len(ns) for ns in self._lsp_markers.values())
+            parts.append(f"{count} fortls issue{'s' * (count != 1)}")
         if self.editor.extra_cursors:
             parts.insert(1, f"{len(self.editor.extra_cursors) + 1} cursors (Esc: back to one)")
         if note:
@@ -1965,7 +2019,7 @@ class EditorTab(QWidget):
 
     def _apply_markers(self):
         merged: dict[int, list[tuple[str, str]]] = {}
-        for source in (self._compiler_markers, self._review_markers, self._lint_markers):
+        for source in (self._compiler_markers, self._review_markers, self._lint_markers, self._lsp_markers):
             for line, notes in source.items():
                 merged.setdefault(line, []).extend(notes)
         self.editor.set_markers(merged)

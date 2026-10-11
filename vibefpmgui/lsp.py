@@ -83,14 +83,109 @@ def source_dirs(graph: m.DependencyGraph | None, project_dir: Path) -> list[str]
     return [f"{folder}/**" for folder in kept]
 
 
+def _packages(graph: m.DependencyGraph | None, project_dir: Path) -> list[tuple[Path, str]]:
+    """(folder, version) of the project and of every dependency on disk."""
+    out = [(project_dir, "")]
+    if graph is not None:
+        root = graph.packages.get(graph.root)
+        out[0] = (project_dir, (root.version if root else "") or "")
+        out += [(p.directory, p.version or "") for p in graph.packages.values()
+                if p.name != graph.root and p.kind not in (m.META, m.MISSING)
+                and p.directory and p.directory.is_dir()]
+    return out
+
+
+def preprocessor_args(graph: m.DependencyGraph | None, project_dir: Path) -> list[str]:
+    """fortls options for the C preprocessor settings in the fpm.toml files
+    (``[preprocess.cpp]``: macros, suffixes) and the packages' include
+    folders, so #ifdef branches are read as fpm compiles them. [] when no
+    package has preprocessor settings (fortls's own defaults then)."""
+    macros: dict[str, str] = {}
+    suffixes: list[str] = []
+    includes: list[str] = []
+    found = False
+    for directory, version in reversed(_packages(graph, project_dir)):  # (the project's own win)
+        manifest = directory / "fpm.toml"
+        try:
+            data = m.load_toml(manifest) if manifest.is_file() else {}
+        except Exception:  # noqa: BLE001 - an unreadable manifest has no settings
+            data = {}
+        cpp = (data.get("preprocess") or {}).get("cpp") if isinstance(data.get("preprocess"), dict) else None
+        if not isinstance(cpp, dict):
+            continue
+        found = True
+        for macro in cpp.get("macros") or []:
+            name, _, value = str(macro).partition("=")
+            if name.strip():
+                macros[name.strip()] = value.strip().replace("{version}", version)
+        for suffix in cpp.get("suffixes") or []:
+            suffix = "." + str(suffix).lstrip(".")
+            if suffix not in suffixes:
+                suffixes.append(suffix)
+        includes += [f for f, role in fpm_folders(manifest).items() if role == "include" and f not in includes]
+    if not found:
+        return []
+    args = []
+    if macros:
+        args += ["--pp_defs", json.dumps(macros)]
+    if suffixes:
+        args += ["--pp_suffixes", *suffixes]
+    if includes:
+        args += ["--include_dirs", *includes]
+    return args
+
+
 def server_args(graph: m.DependencyGraph | None, project_dir: Path) -> list[str]:
     args = ["--disable_autoupdate",  # it would otherwise ask PyPI for updates
             "--hover_signature",
             "--use_signature_help",    # complete names only; arguments are hinted on "("
             "--lowercase_intrinsics"]  # complete "size", not "SIZE"
-    if not has_config(project_dir):
+    if not has_config(project_dir):  # (a .fortlsrc says it all)
         args += ["--source_dirs", *source_dirs(graph, project_dir)]
+        args += preprocessor_args(graph, project_dir)
     return args
+
+
+# --------------------------------------------------------- diagnostics
+class LspIssue(NamedTuple):
+    """A problem fortls found in a file (it checks a file when it's opened
+    or saved: the saved text), shown like fortitude's issues."""
+    line: int        # 1-based
+    column: int      # 1-based
+    end_line: int
+    end_column: int
+    message: str
+    level: int = 2   # LSP: 1 error, 2 warning, 3 information, 4 hint
+    code: str = "fortls"
+    fix: str = ""
+    fix_safe: bool = False
+    edits: tuple = ()
+    source: str = "fortls"
+
+    @property
+    def fixable(self) -> bool:
+        return False
+
+    @property
+    def severity(self) -> str:
+        return "fortls error" if self.level == 1 else "fortls"
+
+    def describe(self) -> str:
+        return f"fortls: {self.message}"
+
+
+def diagnostic_issues(diagnostics) -> list[LspIssue]:
+    """publishDiagnostics' list -> issues (anything malformed is skipped)."""
+    out = []
+    for d in diagnostics or []:
+        try:
+            r = d["range"]
+            out.append(LspIssue(r["start"]["line"] + 1, r["start"]["character"] + 1,
+                                r["end"]["line"] + 1, r["end"]["character"] + 1,
+                                " ".join(str(d.get("message", "")).split()), int(d.get("severity") or 2)))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
 
 
 # fortls's hover text for an intrinsic is a manual page in markdown that
@@ -259,6 +354,7 @@ class LspClient(QObject):
 
     stopped = Signal(str)  # the server exited on its own (with why)
     message = Signal(str)  # something the server wants the user to know
+    diagnostics = Signal(object, object)  # file (Path), [LspIssue]: fortls's check of a file
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -402,7 +498,11 @@ class LspClient(QObject):
                 text = (message.get("params") or {}).get("message")
                 if text:
                     self.message.emit(str(text))
-            return  # other notifications (diagnostics, logs) aren't used
+            elif message["method"] == "textDocument/publishDiagnostics":
+                params = message.get("params") or {}
+                if params.get("uri"):
+                    self.diagnostics.emit(from_uri(params["uri"]), diagnostic_issues(params.get("diagnostics")))
+            return  # other notifications (logs) aren't used
         callback = self._callbacks.pop(message.get("id"), None)
         if callback is not None:
             try:
@@ -461,6 +561,11 @@ class LspClient(QObject):
 
     def definition(self, path: Path, line: int, column: int, callback: Callable) -> bool:
         return self.request("textDocument/definition", self._at(path, line, column), callback)
+
+    def implementation(self, path: Path, line: int, column: int, callback: Callable) -> bool:
+        """For a type-bound procedure, the procedure it binds; for a generic
+        interface, its first module procedure."""
+        return self.request("textDocument/implementation", self._at(path, line, column), callback)
 
     def document_symbols(self, path: Path, callback: Callable) -> bool:
         return self.request("textDocument/documentSymbol",

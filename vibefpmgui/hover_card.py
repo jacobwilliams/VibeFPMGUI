@@ -19,7 +19,9 @@ from .icons import SYMBOL_BADGES
 # Kinds the outline has no badge for.
 EXTRA_BADGES = {"variable": ("V", "#495057"), "parameter": ("K", "#5c940d"),
                 "intrinsic": ("intrinsic", "#4263eb")}
-LINT_COLORS = {"lint error": "#e03131", "lint": "#0ca678"}
+LINT_COLORS = {"lint error": "#e03131", "lint": "#0ca678", "fortls error": "#e03131", "fortls": "#1098ad"}
+# The heading over each tool's notes.
+SOURCE_TITLES = {"fortitude": "FORTITUDE", "fortls": "FORTLS (checks the saved file)"}
 
 
 _text_color = None  # the card's text color (set by the editor, see set_text_color)
@@ -45,11 +47,13 @@ def badge(kind: str) -> str:
 
 
 def lint_notes_html(issues, fix_ids: list[int] | None = None) -> str:
-    """fortitude's messages: a colored rule code, the message, and the fix.
+    """fortitude's (and fortls's) messages: a colored rule code, the
+    message, and the fix, under a heading per tool.
     With ``fix_ids`` (each issue's number in the editor), fixable issues get
     an "Apply fix" link (``fix:N``)."""
-    rows = []
+    groups: dict[str, list[str]] = {}
     for n, issue in enumerate(issues):
+        rows = groups.setdefault(getattr(issue, "source", "fortitude"), [])
         color = LINT_COLORS.get(issue.severity, "#0ca678")
         link = ""
         if fix_ids is not None and getattr(issue, "fixable", False):
@@ -60,11 +64,13 @@ def lint_notes_html(issues, fix_ids: list[int] | None = None) -> str:
         rows.append(f"<tr><td valign='top' style='padding-right:6px'><span style='background-color:{color}; "
                     f"color:white; font-weight:700; font-size:small'>&nbsp;{html.escape(issue.code)}&nbsp;"
                     f"</span></td><td>{html.escape(issue.message)}{fix}</td></tr>")
-    if not rows:
+    if not groups:
         return ""
-    return ("<table cellspacing='0' cellpadding='1' style='margin:0 0 2px 0'>"
-            f"<tr><td colspan='2'><span style='color:{_muted()}; font-size:small'>FORTITUDE</span></td></tr>"
-            + "".join(rows) + "</table>")
+    return "".join(
+        "<table cellspacing='0' cellpadding='1' style='margin:0 0 2px 0'>"
+        f"<tr><td colspan='2'><span style='color:{_muted()}; font-size:small'>"
+        f"{SOURCE_TITLES.get(source, source.upper())}</span></td></tr>" + "".join(rows) + "</table>"
+        for source, rows in groups.items())
 
 
 def card_html(info: lsp.HoverInfo | None, name: str, lint_html: str = "") -> str:
