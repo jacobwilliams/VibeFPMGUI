@@ -5,8 +5,9 @@ from __future__ import annotations
 import os
 import sys
 
+import pyte
 import pytest
-from qtpy.QtCore import Qt
+from qtpy.QtCore import QPointF, Qt
 from qtpy.QtTest import QTest
 from qtpy.QtWidgets import QApplication
 
@@ -265,3 +266,134 @@ def test_odd_sequences_do_not_stop_the_terminal(view):
     view.feed(b"before \x1b[>4;2m\x1b[?u after")
     view.feed(b"\r\nstill working")
     assert "before  after" in view.text() and "still working" in view.text()
+
+
+def test_word_wrap_off_makes_a_wide_terminal(qtbot, view):
+    sizes = []
+    view.size_changed.connect(lambda rows, cols: sizes.append(cols))
+    visible = view.screen.columns
+    long_line = "x" * 200
+    view.set_word_wrap(False)
+    assert view.screen.columns == terminal.NO_WRAP_COLUMNS and sizes[-1] == terminal.NO_WRAP_COLUMNS
+    view.feed(long_line.encode())
+    qtbot.waitUntil(lambda: view._hscroll > 0, timeout=2_000)  # (follows the cursor sideways)
+    assert view.text() == long_line  # (one line: not wrapped)
+    cell = view._cell_at(QPointF(terminal.PADDING + 1, terminal.PADDING + 1))
+    assert cell[1] == int(view._hscroll // view.cell_width)  # (the mouse sees the scrolled columns)
+    view.feed(b"\r\n$ ")
+    qtbot.waitUntil(lambda: view._hscroll == 0, timeout=2_000)  # (back to the left for the prompt)
+    view.set_word_wrap(True)
+    assert view.screen.columns == visible and sizes[-1] == visible
+    view.feed(b"\r\n" + long_line.encode())
+    assert long_line not in view.text().splitlines()  # (wrapped now)
+
+
+def test_word_wrap_setting_reaches_the_terminal(window):
+    assert window.terminal_panel.view.word_wrap is window.word_wrap_action.isChecked()
+    window.word_wrap_action.trigger()
+    assert window.terminal_panel.view.word_wrap is window.word_wrap_action.isChecked()
+    assert window.terminal_panel.hscroll_bar.isVisibleTo(window.terminal_panel) is not window.word_wrap_action.isChecked()
+
+
+def test_text_lines_up_with_the_cells(qtbot):
+    # Inside a widget with a smaller font (as the panel), with a font whose size isn't set.
+    from qtpy.QtGui import QColor, QFont
+    from qtpy.QtWidgets import QWidget
+
+    parent = QWidget()
+    parent.setFont(QFont(parent.font().family(), 7))
+    qtbot.addWidget(parent)
+    view = terminal.TerminalView(parent)
+    view.set_terminal_font(QFont("Menlo"))
+    view.resize(500, 80)
+    parent.show()
+    qtbot.waitExposed(parent)
+    view.feed(b"0123456789" * 3)
+    view._after_output()
+    image = view.grab().toImage()
+    background = QColor(view.background).rgb()
+    rows = range(terminal.PADDING + 1, int(terminal.PADDING + view.cell_height) - 1)
+    ink = [x for x in range(image.width()) if any(image.pixel(x, y) != background for y in rows)]
+    text_end = max(x for x in ink if x < terminal.PADDING + 30 * view.cell_width - 1)
+    assert text_end > terminal.PADDING + 29 * view.cell_width  # (the 30th character is in the 30th cell)
+
+
+# ------------------------------------------------------------------ reflow
+def screen_of(columns: int, lines: int) -> terminal.TerminalScreen:
+    screen = terminal.TerminalScreen(columns, lines)
+    screen.stream = pyte.ByteStream(terminal.SafeScreen(screen))
+    return screen
+
+
+def all_rows(screen) -> list[str]:
+    rows = ["".join(c.data for c in row).rstrip() for row in screen.history]
+    rows += ["".join(screen.buffer[y][x].data for x in range(screen.columns)).rstrip()
+             for y in range(screen.lines)]
+    while rows and not rows[-1]:
+        rows.pop()
+    return rows
+
+
+def logical_lines(screen) -> list[str]:
+    """The whole lines: wrapped rows joined (as the wrap marks say)."""
+    rows = [("".join(c.data for c in row), row.wrapped) for row in screen.history]
+    rows += [("".join(screen.buffer[y][x].data for x in range(screen.columns)),
+              terminal._wrapped(screen.buffer[y])) for y in range(screen.lines)]
+    lines, current = [], ""
+    for text, wrapped in rows:
+        current += text if wrapped else text.rstrip()
+        if not wrapped:
+            lines.append(current)
+            current = ""
+    while lines and not lines[-1]:
+        lines.pop()
+    return lines
+
+
+def test_narrower_rewraps_instead_of_cutting_off():
+    screen = screen_of(40, 5)
+    long_line = "".join(f"word{i} " for i in range(12)).strip()  # (82 characters)
+    screen.stream.feed(f"{long_line}\r\nshort\r\n$ ".encode())
+    screen.resize(5, 20)
+    assert all(len(r) <= 20 for r in all_rows(screen))
+    assert logical_lines(screen) == [long_line, "short", "$"]  # (all of it, wrapped at 20)
+    assert (screen.cursor.y, screen.cursor.x) == (screen.lines - 1, 2)  # (still after "$ ")
+
+
+def test_wider_joins_wrapped_lines():
+    screen = screen_of(20, 6)
+    long_line = "x" * 50
+    screen.stream.feed(f"{long_line}\r\nnext\r\n".encode())
+    assert all_rows(screen)[:3] == ["x" * 20, "x" * 20, "x" * 10]
+    screen.resize(6, 80)
+    assert all_rows(screen) == [long_line, "next"]  # (one line again; "next" stays its own)
+
+
+def test_reflow_keeps_the_cursor_on_its_character():
+    screen = screen_of(30, 4)
+    screen.stream.feed(("$ " + "a" * 40).encode())  # (a long command being typed: the cursor at its end)
+    screen.stream.feed(b"\x1b[5D")  # (5 characters back)
+    screen.resize(4, 15)
+    line = "".join(all_rows(screen))
+    row = len(screen.history) + screen.cursor.y
+    offset = sum(len("".join(c.data for c in r)) for r in screen.history) if row >= len(screen.history) else 0
+    assert line == "$ " + "a" * 40
+    assert screen.cursor.y * 15 + screen.cursor.x + offset == 2 + 40 - 5
+
+
+def test_scrollback_reflows_and_stays_above():
+    screen = screen_of(30, 3)
+    screen.stream.feed("".join(f"line {i} " + "-" * 30 + "\r\n" for i in range(6)).encode())
+    screen.resize(3, 60)
+    rows = all_rows(screen)
+    assert rows[:6] == [f"line {i} " + "-" * 30 for i in range(6)]
+
+
+def test_alternate_screen_is_not_reflowed_but_main_is_after():
+    screen = screen_of(20, 5)
+    screen.stream.feed(("y" * 30 + "\r\n$ ").encode())
+    screen.stream.feed(b"\x1b[?1049h" + b"z" * 30)  # (a full-screen program)
+    screen.resize(5, 40)
+    assert screen.alternate
+    screen.stream.feed(b"\x1b[?1049l")
+    assert all_rows(screen) == ["y" * 30, "$"]  # (joined at the new width on the way back)

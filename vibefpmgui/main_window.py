@@ -289,8 +289,8 @@ class MainWindow(QMainWindow):
         self.word_wrap_action.setShortcut(QKeySequence("Alt+Z"))
         EditorTab.word_wrap = self.settings.value("word_wrap", False, type=bool)
         self.word_wrap_action.setChecked(EditorTab.word_wrap)
-        self.word_wrap_action.setStatusTip("Wrap long lines in the editor at the window's edge "
-                                           "instead of scrolling sideways")
+        self.word_wrap_action.setStatusTip("Wrap long lines in the editor and the terminal at the "
+                                           "window's edge instead of scrolling sideways")
         self.word_wrap_action.toggled.connect(self.set_word_wrap)
         view_menu.addAction(self.word_wrap_action)
         view_menu.addSeparator()
@@ -556,6 +556,7 @@ class MainWindow(QMainWindow):
         self.monitor_tabs.addTab(self.search_panel, "Search")
         self.terminal_panel = TerminalPanel()
         self.terminal_panel.set_font(self._mono_font(editor=True))
+        self.terminal_panel.set_word_wrap(EditorTab.word_wrap)
         self.monitor_tabs.addTab(self.terminal_panel, "Terminal")
         # The two lists of places in files (vibefpmgui.result_tree), drawn alike.
         self.result_trees = [self.references_panel.tree, self.search_panel.tree]
@@ -1815,6 +1816,7 @@ class MainWindow(QMainWindow):
         self.settings.setValue("word_wrap", on)
         for editor in self.editors():
             editor.editor.set_word_wrap(on)
+        self.terminal_panel.set_word_wrap(on)
 
     def set_lint_enabled(self, on: bool):
         EditorTab.lint_enabled = on

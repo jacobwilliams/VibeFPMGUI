@@ -16,8 +16,9 @@ On macOS and Linux the shell runs in a pseudo-terminal read with a
 runs through pywinpty (ConPTY), read in a thread.
 
 The terminal is [pyte](https://github.com/selectel/pyte) (the screen: escape
-codes, colors, cursor) drawn by `TerminalView`, with scrollback and the
-alternate screen (full-screen programs: vim, less, htop) added in
+codes, colors, cursor) drawn by `TerminalView`, with scrollback, the
+alternate screen (full-screen programs: vim, less, htop) and reflow (long
+lines wrapped again when the terminal is resized) added in
 `TerminalScreen`. `TerminalView` handles the keys as xterm sends them
 (application cursor keys, function keys, modifiers), ⌘C/⌘V (macOS) or
 Ctrl+Shift+C/V (elsewhere) to copy and paste while Ctrl keys go to the
@@ -51,6 +52,7 @@ from qtpy.QtCore import (
 from qtpy.QtGui import QClipboard, QColor, QFont, QFontMetricsF, QPainter, QPalette
 from qtpy.QtWidgets import (
     QApplication,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QScrollBar,
@@ -278,6 +280,7 @@ class WinptyShell(QObject):
 
 # --------------------------------------------------------------- screen
 SCROLLBACK = 10_000  # lines kept above the screen
+NO_WRAP_COLUMNS = 300  # the terminal's width without word wrap (wider than the window: scroll sideways)
 
 # Private modes (pyte keeps them shifted, see pyte.modes).
 DECCKM = 1 << 5                 # application cursor keys
@@ -285,56 +288,140 @@ ALT_SCREEN = {47 << 5, 1047 << 5, 1049 << 5}
 BRACKETED_PASTE = 2004 << 5
 
 
+class Row(list):
+    """A line of the scrollback: its Chars (trailing blanks dropped, unless
+    it was wrapped), and whether it was wrapped (the next row continues it)."""
+    wrapped = False
+
+
+def _wrapped(line) -> bool:
+    return getattr(line, "wrapped", False)
+
+
 class TerminalScreen(pyte.Screen):
-    """pyte's screen, with scrollback (the lines that scroll off the top)
-    and the alternate screen full-screen programs draw on (pyte has
-    neither)."""
+    """pyte's screen, with what pyte lacks: scrollback (the lines that
+    scroll off the top), the alternate screen full-screen programs draw on,
+    and reflow: lines pyte wrapped at the right edge are marked, and joined
+    and wrapped again at the new width when the terminal is resized (pyte
+    would cut them off, or leave them wrapped short)."""
 
     def __init__(self, columns: int, lines: int):
-        self.history: deque = deque(maxlen=SCROLLBACK)  # lines (lists of Char) above the screen
+        self.history: deque = deque(maxlen=SCROLLBACK)  # Rows above the screen
         self.alternate = False
         self._saved_main = None
+        self._drawing = False
         self.reply = lambda data: None  # answers to the terminal's queries go to the shell
         super().__init__(columns, lines)
 
-    def _line(self, y: int) -> list:
+    # ------------------------------------------------------- wrapped lines
+    def draw(self, data):
+        self._drawing = True  # (a line feed now is pyte wrapping at the right edge)
+        try:
+            super().draw(data)
+        finally:
+            self._drawing = False
+
+    def linefeed(self):
+        # Mark the row being left: wrapped (it continues on the next) or not.
+        self.buffer[self.cursor.y].wrapped = self._drawing
+        super().linefeed()
+
+    def _row(self, y: int) -> Row:
         line = self.buffer[y]
-        return [line[x] for x in range(self.columns)]
+        row = Row(line[x] for x in range(self.columns))
+        row.wrapped = _wrapped(line)
+        if not row.wrapped:
+            while row and row[-1] == self.default_char:
+                row.pop()
+        return row
 
     def index(self):
         top, bottom = self.margins or pyte.screens.Margins(0, self.lines - 1)
         if self.cursor.y == bottom and top == 0 and not self.alternate:
-            self.history.append(self._line(0))
+            self.history.append(self._row(0))
         super().index()
 
     def erase_in_display(self, how=0, *args, **kwargs):
         if how == 3:  # ("clear" also clears the scrollback)
             self.history.clear()
+        rows = {0: range(self.cursor.y, self.lines), 1: range(self.cursor.y)}.get(how, range(self.lines))
+        for y in rows:
+            self.buffer[y].wrapped = False
         super().erase_in_display(how, *args, **kwargs)
 
+    def erase_in_line(self, how=0, private=False):
+        if how in (0, 2):  # (the end of the line is gone: it no longer continues)
+            self.buffer[self.cursor.y].wrapped = False
+        super().erase_in_line(how, private)
+
+    # -------------------------------------------------------------- resize
     def resize(self, lines=None, columns=None):
         lines, columns = lines or self.lines, columns or self.columns
-        if lines < self.lines:
-            # Keep the cursor's line: what's above it goes to the scrollback
-            # (pyte would drop the top lines even with empty ones below).
-            drop = max(0, self.cursor.y + 1 - lines)
-            if drop and not self.alternate:
-                self.history.extend(self._line(y) for y in range(drop))
-            for y in range(self.lines):
-                if y + drop < self.lines and y < lines:
-                    self.buffer[y] = self.buffer[y + drop]
-                else:
-                    self.buffer.pop(y, None)
-            self.cursor.y = max(0, self.cursor.y - drop)
-            self.lines = lines
-            self.set_margins()  # (the scroll region: the whole new screen)
-        super().resize(lines, columns)
-        self.cursor.y = min(self.cursor.y, self.lines - 1)
-        self.cursor.x = min(self.cursor.x, self.columns - 1)
+        if (lines, columns) == (self.lines, self.columns):
+            return
+        if self.alternate:  # (full-screen programs redraw themselves at the new size)
+            super().resize(lines, columns)
+            self.cursor.y = min(self.cursor.y, self.lines - 1)
+            self.cursor.x = min(self.cursor.x, self.columns - 1)
+            return
+        self._reflow(lines, columns)
 
+    def _reflow(self, lines: int, columns: int):
+        """Join the wrapped rows (scrollback and screen) into whole lines and
+        wrap them again at the new width, keeping the cursor on its character
+        and the bottom of the output at the bottom of the screen."""
+        last = max([self.cursor.y] + [y for y in range(self.lines) if self._row(y)])
+        rows = list(self.history) + [self._row(y) for y in range(last + 1)]
+        cursor_row = len(self.history) + self.cursor.y
+        # Whole lines (lists of Chars); where the cursor is in them.
+        logical, cursor_at = [], (0, 0)
+        current: list = []
+        for n, row in enumerate(rows):
+            if n == cursor_row:
+                cursor_at = (len(logical), len(current) + self.cursor.x)
+            current.extend(row)
+            if not row.wrapped or n == len(rows) - 1:
+                logical.append(current)
+                current = []
+        # Wrap them at the new width.
+        new_rows: list[Row] = []
+        cursor_pos = (0, 0)
+        for index, cells in enumerate(logical):
+            start_row = len(new_rows)
+            pieces = [cells[i:i + columns] for i in range(0, len(cells), columns)] or [[]]
+            for k, piece in enumerate(pieces):
+                row = Row(piece)
+                row.wrapped = k < len(pieces) - 1
+                new_rows.append(row)
+            if index == cursor_at[0]:
+                offset = cursor_at[1]
+                y, x = divmod(offset, columns)
+                if y >= len(pieces) and x == 0 and offset:  # (just past a full row: stay at its end)
+                    y, x = y - 1, columns
+                cursor_pos = (start_row + y, x)
+        while len(new_rows) <= cursor_pos[0]:
+            new_rows.append(Row())
+        top = max(0, len(new_rows) - lines, cursor_pos[0] - lines + 1)
+        top = min(top, cursor_pos[0])
+        self.history.clear()
+        self.history.extend(new_rows[:top])
+        self.buffer.clear()
+        for y, row in enumerate(new_rows[top:top + lines]):
+            line = self.buffer[y]
+            for x, char in enumerate(row):
+                line[x] = char
+            line.wrapped = row.wrapped
+        self.lines, self.columns = lines, columns
+        self.set_margins()
+        self.cursor.y = cursor_pos[0] - top
+        self.cursor.x = min(cursor_pos[1], columns)
+        self.dirty.update(range(lines))
+
+    # ---------------------------------------------------- alternate screen
     def set_mode(self, *modes, **kwargs):
         if kwargs.get("private") and not self.alternate and {m << 5 for m in modes} & ALT_SCREEN:
-            self._saved_main = (dict(self.buffer), self.cursor.x, self.cursor.y, self.cursor.attrs)
+            self._saved_main = (dict(self.buffer), self.cursor.x, self.cursor.y, self.cursor.attrs,
+                                self.lines, self.columns)
             self.alternate = True
             self.buffer.clear()
             self.dirty.update(range(self.lines))
@@ -343,11 +430,16 @@ class TerminalScreen(pyte.Screen):
     def reset_mode(self, *modes, **kwargs):
         super().reset_mode(*modes, **kwargs)
         if kwargs.get("private") and self.alternate and {m << 5 for m in modes} & ALT_SCREEN:
-            buffer, x, y, attrs = self._saved_main
+            buffer, x, y, attrs, lines, columns = self._saved_main
             self.alternate = False
+            new_size = self.lines, self.columns
+            # Back to the main screen as it was, then reflowed if the size changed meanwhile.
             self.buffer.clear()
             self.buffer.update(buffer)
-            self.cursor.x, self.cursor.y, self.cursor.attrs = min(x, self.columns - 1), min(y, self.lines - 1), attrs
+            self.lines, self.columns = lines, columns
+            self.cursor.x, self.cursor.y, self.cursor.attrs = x, y, attrs
+            self.set_margins()
+            self.resize(*new_size)
             self.dirty.update(range(self.lines))
 
     def write_process_input(self, data: str):
@@ -423,6 +515,9 @@ class TerminalView(QWidget):
         self.screen.reply = lambda data: self.write(data)
         self.stream = pyte.ByteStream(SafeScreen(self.screen))
         self.scroll_bar: QScrollBar | None = None
+        self.hscroll_bar: QScrollBar | None = None
+        self.word_wrap = True       # View → Word Wrap (off: a wide terminal, scrolled sideways)
+        self._hscroll = 0           # pixels scrolled to the right (without word wrap)
         self._scroll = 0            # lines scrolled up from the bottom (0: following the output)
         self._selection = None      # ((line, column), (line, column)) in all lines (scrollback + screen)
         self._colors: dict[str, QColor] = {}
@@ -441,14 +536,19 @@ class TerminalView(QWidget):
         self.update()
 
     def set_terminal_font(self, font: QFont):
+        # Family and size set explicitly: a size left unset would be measured
+        # at the application's default size but drawn at the widget's.
+        size = font.pointSizeF() if font.pointSizeF() > 0 else QApplication.font().pointSizeF()
         font = QFont(font)
+        font.setFamily(font.family())
+        font.setPointSizeF(size)
         font.setStyleHint(QFont.Monospace)
         font.setFixedPitch(True)
         font.setKerning(False)
         self.font_normal = font
         self.font_bold = QFont(font)
         self.font_bold.setBold(True)
-        metrics = QFontMetricsF(font)
+        metrics = QFontMetricsF(font, self)  # (as drawn on this widget: its screen's resolution)
         self.cell_width = metrics.horizontalAdvance("M")
         self.cell_height = metrics.lineSpacing()
         self.ascent = metrics.ascent()
@@ -459,6 +559,23 @@ class TerminalView(QWidget):
         self.scroll_bar = bar
         bar.valueChanged.connect(self._scrolled)
         self._update_scroll_bar()
+
+    def connect_hscroll_bar(self, bar: QScrollBar):
+        self.hscroll_bar = bar
+        bar.valueChanged.connect(self._hscrolled)
+        self._update_hscroll_bar()
+
+    def set_word_wrap(self, on: bool):
+        """With word wrap the terminal is as wide as the window and long
+        lines wrap; without, it's NO_WRAP_COLUMNS wide and the window shows
+        part of it (the shell is told the real width either way, so line
+        editing and full-screen programs stay right)."""
+        self.word_wrap = on
+        if on:
+            self._hscroll = 0
+        self._fit()
+        self._update_hscroll_bar()
+        self.update()
 
     # ----------------------------------------------------------- output
     def feed(self, data: bytes):
@@ -473,7 +590,50 @@ class TerminalView(QWidget):
 
     def _after_output(self):
         self._update_scroll_bar()
+        self.ensure_cursor_visible()
         self.update()
+
+    # ------------------------------------------------- sideways (no wrap)
+    def _content_width(self) -> int:
+        return int(self.screen.columns * self.cell_width + 2 * PADDING)
+
+    def _update_hscroll_bar(self):
+        bar = self.hscroll_bar
+        if bar is None:
+            return
+        maximum = 0 if self.word_wrap else max(0, self._content_width() - self.width())
+        self._hscroll = min(self._hscroll, maximum)
+        bar.blockSignals(True)
+        bar.setRange(0, maximum)
+        bar.setPageStep(max(1, self.width()))
+        bar.setSingleStep(max(1, int(self.cell_width * 4)))
+        bar.setValue(self._hscroll)
+        bar.blockSignals(False)
+        bar.setVisible(not self.word_wrap)
+
+    def _hscrolled(self, value: int):
+        self._hscroll = value
+        self.update()
+
+    def scroll_sideways(self, pixels: int):
+        if not self.word_wrap:
+            maximum = max(0, self._content_width() - self.width())
+            self._hscroll = max(0, min(maximum, self._hscroll + pixels))
+            self._update_hscroll_bar()
+            self.update()
+
+    def ensure_cursor_visible(self):
+        """Without word wrap: scroll sideways to the cursor (as you type, and
+        back to the left at a new prompt)."""
+        if self.word_wrap or self._scroll:
+            return
+        x = PADDING + self.screen.cursor.x * self.cell_width
+        margin = 4 * self.cell_width
+        if x < self._hscroll + margin:
+            self._hscroll = int(max(0, x - margin)) if x > self.width() - margin else 0
+        elif x + self.cell_width > self._hscroll + self.width() - margin:
+            self._hscroll = int(x + self.cell_width + margin - self.width())
+        self._update_hscroll_bar()
 
     def _update_scroll_bar(self):
         bar = self.scroll_bar
@@ -663,7 +823,7 @@ class TerminalView(QWidget):
     def _cell_at(self, pos) -> tuple[int, int]:
         """(line in scrollback + screen, column) under a point."""
         row = int((pos.y() - PADDING) // self.cell_height)
-        col = int((pos.x() - PADDING) // self.cell_width)
+        col = int((pos.x() + self._hscroll - PADDING) // self.cell_width)
         row = max(0, min(self.screen.lines - 1, row))
         col = max(0, min(self.screen.columns - 1, col))
         return len(self.screen.history) - self._scroll + row, col
@@ -707,6 +867,10 @@ class TerminalView(QWidget):
             self.update()
 
     def wheelEvent(self, event):
+        sideways = event.angleDelta().x() or (event.angleDelta().y() if event.modifiers() & Qt.ShiftModifier else 0)
+        if sideways:  # (a trackpad's sideways swipe, or Shift+wheel: without word wrap)
+            self.scroll_sideways(-sideways)
+            return
         steps = event.angleDelta().y() / 120 * 3
         if not steps:
             return
@@ -730,8 +894,11 @@ class TerminalView(QWidget):
 
     # -------------------------------------------------------- drawing
     def _fit(self):
-        """Columns and rows for the widget's size (the shell is told)."""
+        """Columns and rows for the widget's size, or wider without word
+        wrap (the shell is told)."""
         cols = max(2, int((self.width() - 2 * PADDING) // self.cell_width))
+        if not self.word_wrap:
+            cols = max(cols, NO_WRAP_COLUMNS)
         rows = max(1, int((self.height() - 2 * PADDING) // self.cell_height))
         if (rows, cols) != (self.screen.lines, self.screen.columns):
             self.screen.resize(rows, cols)
@@ -742,6 +909,7 @@ class TerminalView(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._fit()
+        self._update_hscroll_bar()
 
     def focusInEvent(self, event):
         super().focusInEvent(event)
@@ -768,6 +936,7 @@ class TerminalView(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.fillRect(self.rect(), self.background)
+        painter.translate(-self._hscroll, 0)  # (scrolled sideways, without word wrap)
         screen = self.screen
         history = len(screen.history)
         first = history - self._scroll
@@ -873,11 +1042,14 @@ class TerminalPanel(QWidget):
         self.view = TerminalView(self)
         self.scroll_bar = QScrollBar(Qt.Vertical)
         self.view.connect_scroll_bar(self.scroll_bar)
-        body = QHBoxLayout()
+        self.hscroll_bar = QScrollBar(Qt.Horizontal)  # (shown without word wrap)
+        self.view.connect_hscroll_bar(self.hscroll_bar)
+        body = QGridLayout()
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
-        body.addWidget(self.view, 1)
-        body.addWidget(self.scroll_bar)
+        body.addWidget(self.view, 0, 0)
+        body.addWidget(self.scroll_bar, 0, 1)
+        body.addWidget(self.hscroll_bar, 1, 0)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -947,6 +1119,10 @@ class TerminalPanel(QWidget):
 
     def set_font(self, font: QFont):
         self.view.set_terminal_font(font)
+
+    def set_word_wrap(self, on: bool):
+        """View → Word Wrap (see `TerminalView.set_word_wrap`)."""
+        self.view.set_word_wrap(on)
 
     def shutdown(self):
         if self.shell is not None:
