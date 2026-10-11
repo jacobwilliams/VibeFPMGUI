@@ -1356,12 +1356,17 @@ class MainWindow(QMainWindow):
                             + (" — <b>used</b>" if i == 0 else " <i>(the same)</i>" if m.spec_key(d) == used
                                else "") + "</li>"
                             for i, d in enumerate(conflict))
-            body += ("<p style='color:#e8590c'><b>⚠ Version conflict</b></p>"
+            # In a red box, so it stands out (Qt's rich text draws borders on tables only).
+            dark = self.details.palette().color(QPalette.Base).lightness() < 128
+            red, fill = ("#ff6b6b", "#3d2224") if dark else ("#e03131", "#fff0f0")
+            body += (f"<table width='100%' cellpadding='6' cellspacing='0' "
+                     f"style='margin-top:10px; border:1.5px solid {red}; border-collapse:collapse'><tr><td bgcolor='{fill}'>"
+                     f"<p style='color:{red}; margin-top:0'><b>⚠ Version conflict</b></p>"
                      f"<p>{e(name)} is asked for in different ways:</p><ul>{items}</ul>"
-                     "<p>fpm uses only one of them (the declaration closest to the project), "
-                     "so the others get a version they didn't ask for. Pinning the same version "
-                     "everywhere — or overriding it in the project's own fpm.toml — avoids "
-                     "surprises.</p>")
+                     "<p style='margin-bottom:0'>fpm uses only one of them (the declaration closest "
+                     "to the project), so the others get a version they didn't ask for. Pinning the "
+                     "same version everywhere — or overriding it in the project's own fpm.toml — "
+                     "avoids surprises.</p></td></tr></table>")
         if pkg.manifest:
             body += "<p><i>Double-click the node to open its fpm.toml.</i></p>"
         self.details.setHtml(body)
