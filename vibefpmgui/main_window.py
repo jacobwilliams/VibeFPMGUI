@@ -90,6 +90,7 @@ from .graph_view import (
 )
 from .highlighter import PygmentsHighlighter
 from .icons import app_icon, make_icon
+from .project_search import SearchPanel, search_roots
 from .project_tree import ProjectTree, reveal_in_file_manager
 from .references_panel import ReferencesPanel
 from .rename_dialog import RenamePreviewDialog
@@ -532,6 +533,12 @@ class MainWindow(QMainWindow):
         self.references_panel = ReferencesPanel()
         self.references_panel.open_requested.connect(self.navigate_to)
         self.monitor_tabs.addTab(self.references_panel, "References")
+        self.search_panel = SearchPanel(self.settings)
+        self.search_panel.provider = self._search_sources
+        self.search_panel.mono = self._mono_font()
+        self.search_panel.open_requested.connect(self._open_search_match)
+        self.search_panel.replace_requested.connect(self._replace_in_files)
+        self.monitor_tabs.addTab(self.search_panel, "Search")
         self.bottom_split = QSplitter(Qt.Horizontal)
         self.bottom_split.addWidget(self.monitor_tabs)
         self.bottom_split.addWidget(console_box)
@@ -716,6 +723,8 @@ class MainWindow(QMainWindow):
         self.test_monitor.refresh_fonts()
         self.run_monitor.refresh_fonts()
         self.review_monitor.refresh_fonts()
+        self.search_panel.mono = mono
+        self.search_panel.tree.doItemsLayout()
         self.graph_view.refresh_fonts()
         if self.graph:
             self.show_package(self.graph_view.selected or self.graph.root)
@@ -839,6 +848,7 @@ class MainWindow(QMainWindow):
         for editor in self.editors():
             editor.close_down()
         self.lsp_client.stop()
+        self.search_panel.shutdown()
         if self.process is not None:
             answer = QMessageBox.question(self, "fpm is running",
                                           "An fpm command is still running. Stop it and quit?")
@@ -1638,6 +1648,92 @@ class MainWindow(QMainWindow):
                                      + (f": {', '.join(parts)}" if parts else ""), 10000)
         self.project_tree.refresh()
 
+    # ---------------------------------------------------- find in files
+    def find_in_files(self, replace: bool = False):
+        """Show the Search tab, with the editor's selection to search for."""
+        text = ""
+        editor = self.current_editor()
+        if editor is not None:
+            selected = editor.editor.textCursor().selectedText()
+            if selected and "\u2029" not in selected:  # (one line only)
+                text = selected
+        sizes = self.right_split.sizes()
+        if len(sizes) == 2 and sizes[1] < 120:  # (the bottom panel is closed)
+            self.right_split.setSizes([max(200, sum(sizes) - 300), 300])
+        self.monitor_tabs.setCurrentWidget(self.search_panel)
+        self.search_panel.open_find(text, replace)
+
+    def _search_sources(self):
+        """For the Search tab: (packages to search, open files' text, project folder)."""
+        if self.manifest_path is None:
+            return [], {}, None
+        project_dir = self.manifest_path.parent
+        texts = {e.path: e.editor.toPlainText() for e in self.editors()}
+        return search_roots(self.graph, project_dir), texts, project_dir
+
+    def _open_search_match(self, path: str, line: int, column: int, end_line: int, end_column: int):
+        """Open a search result with the match selected."""
+        self.navigate_to(path, line, column)
+        editor = self.current_editor()
+        if editor is None or editor.path != Path(path).resolve():
+            return
+        doc = editor.editor.document()
+        start, end = doc.findBlockByNumber(line - 1), doc.findBlockByNumber(end_line - 1)
+        if start.isValid() and end.isValid():
+            cursor = editor.editor.textCursor()
+            cursor.setPosition(start.position() + min(column, start.length() - 1))
+            cursor.setPosition(end.position() + min(end_column, end.length() - 1), QTextCursor.KeepAnchor)
+            editor.editor.setTextCursor(cursor)
+
+    def _replace_in_files(self, plan: dict, ask: bool):
+        """Apply Find in Files replacements: open files are changed in the
+        editor (not saved; Undo reverts), the others are saved."""
+        places = sum(len(edits) for edits in plan.values())
+        on_disk = [p for p in plan if self._open_editor_for(p) is None]
+        if ask:
+            files = len(plan)
+            text = (f"Replace {places:,} match{'es' * (places != 1)} in {files:,} "
+                    f"file{'s' * (files != 1)} with “{self.search_panel.replace_edit.text()}”?")
+            info = []
+            if on_disk:
+                info.append(f"{len(on_disk):,} file{'s' * (len(on_disk) != 1)} will be changed and saved "
+                            "(this can't be undone).")
+            if len(on_disk) < files:
+                info.append("Files open in the editor are changed but not saved (Undo reverts them).")
+            box = QMessageBox(QMessageBox.Question, "Replace in Files", text,
+                              QMessageBox.Yes | QMessageBox.Cancel, self)
+            box.setInformativeText(" ".join(info))
+            box.button(QMessageBox.Yes).setText("Replace")
+            if box.exec() != QMessageBox.Yes:
+                return
+        changed_open, written, failed = 0, 0, []
+        for path, edits in plan.items():
+            editor = self._open_editor_for(path)
+            if editor is not None:
+                editor.apply_text_edits(edits)
+                changed_open += 1
+                continue
+            try:
+                text, encoding, newline = self._read_source(path)
+                text = lsp.apply_edits(text, edits)
+                path.write_bytes(text.replace("\n", newline).encode(encoding, errors="replace"))
+            except OSError as exc:
+                failed.append(f"{path}: {exc}")
+                continue
+            self.lsp_client.file_changed_on_disk(path)
+            written += 1
+        if failed:
+            QMessageBox.warning(self, "Replace in Files", "Some files could not be changed:\n\n"
+                                + "\n".join(failed))
+        self.search_panel.refresh_files(plan.keys())
+        parts = []
+        if written:
+            parts.append(f"{written} file{'s' * (written != 1)} saved")
+        if changed_open:
+            parts.append(f"{changed_open} open file{'s' * (changed_open != 1)} changed (not saved yet)")
+        self.statusBar().showMessage(f"Replaced {places:,} match{'es' * (places != 1)}"
+                                     + (f": {', '.join(parts)}" if parts else ""), 10000)
+
     def _location(self) -> tuple[str, int, int] | None:
         editor = self.current_editor()
         if editor is None:
@@ -1708,6 +1804,7 @@ class MainWindow(QMainWindow):
             editor.navigate_requested.connect(self.navigate_to)
             editor.references_found.connect(self._show_references)
             editor.rename_ready.connect(self._preview_rename)
+            editor.editor.textChanged.connect(lambda e=editor: self.search_panel.file_changed(e.path))
             editor.attach_lsp(self.lsp_client)
             self.tabs.addTab(editor, file.name)
             self._add_close_button(editor)
@@ -1958,6 +2055,16 @@ class MainWindow(QMainWindow):
                                               lambda e: e.find_bar.find_next())
         self.find_previous_action = editor_action("Find Previous", QKeySequence.FindPrevious,
                                                   lambda e: e.find_bar.find_previous())
+        self.find_files_action = menu.addAction("Find in Files…")
+        self.find_files_action.setShortcut(QKeySequence("Ctrl+Shift+F"))
+        self.find_files_action.setStatusTip("Search all the files of the project and its dependencies "
+                                            "(Search tab)")
+        self.find_files_action.triggered.connect(lambda: self.find_in_files())
+        self.replace_files_action = menu.addAction("Replace in Files…")
+        self.replace_files_action.setShortcut(QKeySequence("Ctrl+Shift+H"))
+        self.replace_files_action.setStatusTip("Search and replace across the project and its "
+                                               "dependencies (Search tab)")
+        self.replace_files_action.triggered.connect(lambda: self.find_in_files(replace=True))
         menu.addSeparator()
         self.goto_action = editor_action("Go to Line…", "Ctrl+L", lambda e: e.go_to_line_dialog())
         menu.addSeparator()

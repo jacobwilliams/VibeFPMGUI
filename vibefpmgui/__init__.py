@@ -79,6 +79,7 @@ menu item says "not found" and the feature is off; without fprettify the
 | `vibefpmgui.hover_card` | The HTML of the hover card |
 | `vibefpmgui.symbol_search` | *Go to Symbol in Project* |
 | `vibefpmgui.references_panel` | The *References* tab |
+| `vibefpmgui.project_search` | *Find in Files*: search and replace across the project and its dependencies (*Search* tab) |
 | `vibefpmgui.rename_dialog` | The *Rename Symbol* preview |
 | `vibefpmgui.lint` | Linting with fortitude |
 | `vibefpmgui.formatter` | Formatting with fprettify |

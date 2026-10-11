@@ -64,6 +64,19 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   program), like the Tests tab. Toolbar Run builds first (shown in the Build
   tab), then runs every program — or those matching *Target* — through the
   same marker wrapper as Test; run times are remembered for estimates.
+* Find in Files (⌘/Ctrl+Shift+F, or *Edit → Replace in Files…*,
+  ⌘/Ctrl+Shift+H): searches every file of the project and of its
+  dependencies, in the *Search* tab, with options for match case, whole
+  words and regular expressions, files to include or exclude (`*.f90`,
+  `src/`), dependencies, and files ignored by git (left out by default, with
+  fpm's `build` folder and compiled files). Files open in the editor are
+  searched as they are, unsaved changes included, and the results follow
+  your edits. Results are grouped by file; click one to open the file with
+  the match selected. *Replace All* (or *Replace* on one match or file, from
+  its right-click menu) previews each change in the list, asks first, then
+  changes open files in the editor (not saved; Undo reverts) and saves the
+  others. With a regular expression, `\1` or `\g<name>` in the replacement
+  is a group of the match.
 * Built-in editor: double-clicking a file (a row in the Build tab, or a
   package in the graph for its `fpm.toml`) opens it in a tab with syntax
   highlighting chosen by file extension, line numbers, find/replace, go to
