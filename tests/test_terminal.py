@@ -250,8 +250,11 @@ def test_shell_has_exactly_the_app_environment(tmp_path, monkeypatch, shell_name
     monkeypatch.setenv("SHELL", shell)
     monkeypatch.setenv("FROM_ACTIVATION", "a value with spaces")  # (as an activate.d script sets)
     launch = terminal.shell_launch()
+    # (In a session of its own: run from a terminal, an interactive shell would
+    # otherwise try to take that terminal over, and be stopped.)
     result = subprocess.run(launch.argv, input="env -0\nexit\n", env=launch.env, cwd=tmp_path,
-                            capture_output=True, text=True, timeout=30, check=False)
+                            capture_output=True, text=True, timeout=30, check=False,
+                            start_new_session=True)
     shell_env = dict(item.split("=", 1) for item in result.stdout.split("\0") if "=" in item)
     expected = {k: v for k, v in os.environ.items() if k not in SHELL_OWNED}
     got = {k: v for k, v in shell_env.items() if k not in SHELL_OWNED}
