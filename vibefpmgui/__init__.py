@@ -67,7 +67,7 @@ menu item says "not found" and the feature is off; without fprettify the
 | `vibefpmgui.run_monitor` | The *Run* tab (the Tests tab with different wording) |
 | `vibefpmgui.test_runner` | The small wrapper given to `fpm test --runner` to mark where each test starts and ends |
 | `vibefpmgui.ansi` | Terminal color codes in program output, shown as colors |
-| `vibefpmgui.terminal` | The *Terminal* tab: your shell in the project's folder and the app's environment (pyte, drawn by our own widget) |
+| `vibefpmgui.terminal` | The *Terminal* tab: your shell in the project's folder, with exactly the app's environment (pyte, drawn by our own widget) |
 
 **Editor**
 

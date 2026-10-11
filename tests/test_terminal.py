@@ -229,52 +229,35 @@ def test_draws_without_errors(view):
 
 
 # ------------------------------------------- the app's environment in the shell
-def shell_output(launch, commands: str, cwd) -> str:
-    """Run commands in the shell as the Terminal tab starts it (without a terminal)."""
-    import subprocess
-
-    result = subprocess.run(launch.argv, input=commands + "\nexit\n", env=launch.env, cwd=cwd,
-                            capture_output=True, text=True, timeout=30, check=False)
-    return result.stdout + result.stderr
+SHELL_OWNED = {"PWD", "OLDPWD", "SHLVL", "_", "TERM"}  # (set by the shell itself / the terminal)
 
 
 @pytest.mark.parametrize("shell_name", ["zsh", "bash"])
-def test_shell_starts_in_the_app_environment(tmp_path, monkeypatch, shell_name):
+def test_shell_has_exactly_the_app_environment(tmp_path, monkeypatch, shell_name):
     import shutil
+    import subprocess
 
     shell = shutil.which(shell_name)
     if shell is None:
         pytest.skip(f"{shell_name} not installed")
-    home, env_bin = tmp_path / "home", tmp_path / "env" / "bin"
+    # Startup files that would change the environment (as conda's "base" or Homebrew do): not read.
+    home = tmp_path / "home"
     home.mkdir()
-    env_bin.mkdir(parents=True)
-    # Startup files that put something else first (as conda's "base" or Homebrew do).
-    startup = 'export PATH="/opt/other/bin:$PATH"\nexport FROM_STARTUP=yes\n'
-    (home / ".zshrc").write_text(startup)
-    (home / ".bashrc").write_text(startup)
+    for name in (".zshenv", ".zprofile", ".zshrc", ".bashrc", ".bash_profile"):
+        (home / name).write_text('export PATH="/opt/other/bin:$PATH"\nexport FROM_STARTUP=yes\n')
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.delenv("ZDOTDIR", raising=False)
     monkeypatch.setenv("SHELL", shell)
-    launch = terminal.shell_launch(terminal.AppEnvironment("testenv", [str(env_bin)]))
-    try:
-        out = shell_output(launch, 'echo "first=${PATH%%:*} startup=$FROM_STARTUP conda=$CONDA_AUTO_ACTIVATE"'
-                                   ' "zdotdir=[${ZDOTDIR-unset}]"', tmp_path)
-    finally:
-        shutil.rmtree(launch.temp_dir, ignore_errors=True)
-    assert f"first={env_bin} startup=yes conda=false" in out
-    if shell_name == "zsh":
-        assert "zdotdir=[unset]" in out  # (as it was)
-
-
-def test_app_environment_of_this_python():
-    environment = terminal.app_environment()
-    if environment is None:
-        pytest.skip("not running in an environment")
-    assert environment.path and environment.name
-    import sys
-    from pathlib import Path
-
-    assert Path(sys.executable).parent.resolve() in [Path(p).resolve() for p in environment.path]
+    monkeypatch.setenv("FROM_ACTIVATION", "a value with spaces")  # (as an activate.d script sets)
+    launch = terminal.shell_launch()
+    result = subprocess.run(launch.argv, input="env -0\nexit\n", env=launch.env, cwd=tmp_path,
+                            capture_output=True, text=True, timeout=30, check=False)
+    shell_env = dict(item.split("=", 1) for item in result.stdout.split("\0") if "=" in item)
+    expected = {k: v for k, v in os.environ.items() if k not in SHELL_OWNED}
+    got = {k: v for k, v in shell_env.items() if k not in SHELL_OWNED}
+    assert "FROM_STARTUP" not in got
+    assert got.get("PATH") == os.environ["PATH"]
+    assert got == expected
+    assert shell_env.get("TERM") == "xterm-256color"
 
 
 def test_odd_sequences_do_not_stop_the_terminal(view):

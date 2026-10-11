@@ -1,12 +1,15 @@
-"""The *Terminal* tab: your shell, in the project's folder and the app's
-environment.
+"""The *Terminal* tab: your shell, in the project's folder, with exactly the
+environment VibeFPMGUI was started with.
 
-The shell's own startup files run as usual (zsh as a login shell, like
-Terminal.app; bash with your .bashrc), then small wrapper startup files put
-the environment the app runs in (pixi, conda or a venv) first on the PATH
-again and name it in the prompt, as ``pixi shell`` does; conda's automatic
-"base" activation is turned off there. So ``fpm`` and the compilers are the
-environment's, as for the app's own commands.
+The shell gets the app's environment variables as they are (only ``TERM``
+is set, for the terminal) and is started without its startup files
+(``zsh -f``, ``bash --noprofile --norc``, ``fish --no-config``), which
+would change them: conda's "base" activation, Homebrew's or your own PATH
+changes. Started from an activated pixi or conda environment, the terminal
+is in that environment, with everything its activation set (PATH,
+CONDA_PREFIX, the compilers' variables...): ``fpm`` and the compilers are
+the ones the app uses. (So your prompt, aliases and other shell settings
+don't load.)
 
 On macOS and Linux the shell runs in a pseudo-terminal read with a
 `QSocketNotifier`, so everything happens in the GUI thread; on Windows it
@@ -68,130 +71,37 @@ def user_shell() -> str:
     return os.environ.get("SHELL") or shutil.which("zsh") or shutil.which("bash") or "/bin/sh"
 
 
-class AppEnvironment(NamedTuple):
-    """The environment the app runs in (pixi, conda or a venv)."""
-    name: str
-    path: list[str]   # its folders on the PATH (put first again in the shell)
-
-
-def app_environment() -> AppEnvironment | None:
-    prefix = Path(sys.prefix).resolve()
-    if not ((prefix / "conda-meta").is_dir() or sys.prefix != sys.base_prefix):
-        return None  # (a system Python: nothing to keep)
-    folders = []
-    for entry in os.environ.get("PATH", "").split(os.pathsep):
-        try:
-            inside = entry and (Path(entry).resolve() == prefix or prefix in Path(entry).resolve().parents)
-        except OSError:
-            inside = False
-        if inside and entry not in folders:
-            folders.append(entry)
-    if not folders:
-        folders = [str(prefix / ("Scripts" if WINDOWS else "bin"))]
-    name = os.environ.get("PIXI_PROJECT_NAME") or os.environ.get("CONDA_DEFAULT_ENV") or prefix.name
-    return AppEnvironment(name, folders)
-
-
 class Launch(NamedTuple):
     argv: list[str]
     env: dict[str, str]
-    temp_dir: Path | None  # wrapper startup files, removed when the shell ends
 
 
-# Your shell's startup files run as usual, then the app's environment is put
-# first on the PATH again (e.g. conda's "base", or Homebrew, would otherwise
-# come first) and named in the prompt, as "pixi shell" does. zsh: ZDOTDIR
-# points to these files, which run yours from your own ZDOTDIR.
-_ZSH_ENV_FUNCTION = """\
-__vibefpmgui_env() {
-  if [[ -n $VIBEFPMGUI_ENV_PATH ]]; then
-    export PATH="$VIBEFPMGUI_ENV_PATH:$PATH"
-    typeset -U path
-    [[ -n $VIBEFPMGUI_ENV_NAME && $PS1 != *"($VIBEFPMGUI_ENV_NAME)"* ]] && PS1="($VIBEFPMGUI_ENV_NAME) $PS1"
-  fi
+# Options that keep each shell from reading its startup files (they would
+# change the environment: conda's "base", Homebrew, PATH edits...).
+NO_STARTUP_FILES = {
+    "zsh": ["-f"],                         # no .zshenv, .zprofile, .zshrc, .zlogin
+    "bash": ["--noprofile", "--norc"],
+    "fish": ["--no-config"],
+    "sh": [], "dash": [],                  # (read startup files only with $ENV / as login shells)
 }
-"""
-ZSH_WRAPPERS = {
-    ".zshenv": """\
-# VibeFPMGUI's Terminal tab: run your own .zshenv.
-ZDOTDIR=$VIBEFPMGUI_USER_ZDOTDIR
-[[ -f $ZDOTDIR/.zshenv ]] && source $ZDOTDIR/.zshenv
-VIBEFPMGUI_USER_ZDOTDIR=$ZDOTDIR
-ZDOTDIR=$VIBEFPMGUI_WRAPPER_ZDOTDIR
-""",
-    ".zprofile": """\
-ZDOTDIR=$VIBEFPMGUI_USER_ZDOTDIR
-[[ -f $ZDOTDIR/.zprofile ]] && source $ZDOTDIR/.zprofile
-ZDOTDIR=$VIBEFPMGUI_WRAPPER_ZDOTDIR
-""",
-    ".zshrc": """\
-# (macOS's /etc/zshrc put the history file in ZDOTDIR, which was this folder)
-[[ $HISTFILE == $VIBEFPMGUI_WRAPPER_ZDOTDIR/* ]] && HISTFILE=$VIBEFPMGUI_USER_ZDOTDIR/.zsh_history
-ZDOTDIR=$VIBEFPMGUI_USER_ZDOTDIR
-[[ -f $ZDOTDIR/.zshrc ]] && source $ZDOTDIR/.zshrc
-""" + _ZSH_ENV_FUNCTION + """\
-__vibefpmgui_env
-if [[ -o login ]]; then
-  ZDOTDIR=$VIBEFPMGUI_WRAPPER_ZDOTDIR   # (.zlogin comes next)
-else
-  [[ -n $VIBEFPMGUI_UNSET_ZDOTDIR ]] && unset ZDOTDIR
-  unset VIBEFPMGUI_WRAPPER_ZDOTDIR VIBEFPMGUI_USER_ZDOTDIR VIBEFPMGUI_UNSET_ZDOTDIR
-fi
-""",
-    ".zlogin": """\
-ZDOTDIR=$VIBEFPMGUI_USER_ZDOTDIR
-[[ -f $ZDOTDIR/.zlogin ]] && source $ZDOTDIR/.zlogin
-__vibefpmgui_env
-[[ -n $VIBEFPMGUI_UNSET_ZDOTDIR ]] && unset ZDOTDIR   # (as it was)
-unset VIBEFPMGUI_WRAPPER_ZDOTDIR VIBEFPMGUI_USER_ZDOTDIR VIBEFPMGUI_UNSET_ZDOTDIR
-""",
-}
-BASH_WRAPPER = """\
-# VibeFPMGUI's Terminal tab: your .bashrc, then the app's environment first.
-[ -f ~/.bashrc ] && . ~/.bashrc
-if [ -n "$VIBEFPMGUI_ENV_PATH" ]; then
-  export PATH="$VIBEFPMGUI_ENV_PATH:$PATH"
-  case "$PS1" in *"($VIBEFPMGUI_ENV_NAME)"*) ;; *) PS1="($VIBEFPMGUI_ENV_NAME) $PS1" ;; esac
-fi
-"""
 
 
-def shell_launch(environment: AppEnvironment | None = None) -> Launch:
-    """How to start the user's shell so it's in the app's environment
-    (``environment``: by default, the one the app runs in)."""
-    import tempfile
-
+def shell_launch() -> Launch:
+    """How to start the user's shell with exactly the app's environment:
+    the same variables (only TERM is set, for the terminal), and no startup
+    files to change them."""
     shell = user_shell()
     env = dict(os.environ)
     env["TERM"] = "xterm-256color"
-    env.setdefault("LANG", "en_US.UTF-8")
-    env["TERM_PROGRAM"] = "VibeFPMGUI"
-    environment = environment if environment is not None else app_environment()
-    if WINDOWS or environment is None:
-        return Launch([shell] if WINDOWS else [shell, "-i"], env, None)
-    env["VIBEFPMGUI_ENV_PATH"] = os.pathsep.join(environment.path)
-    env["VIBEFPMGUI_ENV_NAME"] = environment.name
-    # conda's shell setup would activate its "base" environment on top.
-    env["CONDA_AUTO_ACTIVATE"] = env["CONDA_AUTO_ACTIVATE_BASE"] = "false"
-    env.pop("CONDA_PROMPT_MODIFIER", None)
+    if WINDOWS:
+        return Launch([shell], env)
     name = Path(shell).name
-    if name == "zsh":
-        folder = Path(tempfile.mkdtemp(prefix="vibefpmgui-zsh-"))
-        for file, text in ZSH_WRAPPERS.items():
-            (folder / file).write_text(text)
-        env["VIBEFPMGUI_USER_ZDOTDIR"] = os.environ.get("ZDOTDIR") or str(Path.home())
-        if "ZDOTDIR" not in os.environ:
-            env["VIBEFPMGUI_UNSET_ZDOTDIR"] = "1"
-        env["VIBEFPMGUI_WRAPPER_ZDOTDIR"] = env["ZDOTDIR"] = str(folder)
-        return Launch([shell, "-l", "-i"], env, folder)  # (a login shell, as Terminal.app starts)
-    if name == "bash":
-        folder = Path(tempfile.mkdtemp(prefix="vibefpmgui-bash-"))
-        (folder / "bashrc").write_text(BASH_WRAPPER)
-        return Launch([shell, "--rcfile", str(folder / "bashrc"), "-i"], env, folder)
-    if name == "fish":
-        return Launch([shell, "-l", "-i", "--init-command",
-                       "set -gx PATH (string split : -- $VIBEFPMGUI_ENV_PATH) $PATH"], env, None)
-    return Launch([shell, "-i"], env, None)
+    return Launch([shell, *NO_STARTUP_FILES.get(name, []), "-i"], env)
+
+
+def environment_name() -> str:
+    """The activated environment the app (and the terminal) runs in, if any."""
+    return os.environ.get("PIXI_PROJECT_NAME") or os.environ.get("CONDA_DEFAULT_ENV") or ""
 
 
 # ------------------------------------------------------------ the shell
@@ -949,7 +859,6 @@ class TerminalPanel(QWidget):
         super().__init__(parent)
         self.directory: Path = Path.home()
         self.shell: PtyShell | WinptyShell | None = None
-        self._temp_dirs: list[Path | None] = []  # wrapper startup files of the shells started
         self.title = QLabel()
         self.title.setContentsMargins(6, 2, 6, 2)
         self.restart_button = QToolButton()
@@ -986,12 +895,11 @@ class TerminalPanel(QWidget):
     def _update_title(self, note: str = ""):
         shell = Path(user_shell()).name
         folder = str(self.directory).replace(str(Path.home()), "~", 1)
-        environment = app_environment()
-        env = f" · environment <b>{environment.name}</b>" if environment and not WINDOWS else ""
+        name = environment_name()
+        env = f" · environment <b>{name}</b>" if name else ""
         self.title.setText(f"<b>{shell}</b> — {folder}{env}" + (f"  <i>({note})</i>" if note else ""))
-        if environment and not WINDOWS:
-            self.title.setToolTip("The shell starts with this environment's folders first on the PATH "
-                                  "(after your shell's own startup files):\n" + "\n".join(environment.path))
+        self.title.setToolTip("The shell has exactly the environment VibeFPMGUI was started with "
+                              "(your shell's startup files aren't read, so nothing changes it).")
 
     def start(self):
         """Start the shell (if it isn't running)."""
@@ -1000,7 +908,6 @@ class TerminalPanel(QWidget):
         view = self.view
         kind = WinptyShell if WINDOWS else PtyShell
         launch = shell_launch()
-        self._temp_dirs.append(launch.temp_dir)
         self.shell = kind(launch, self.directory, view.screen.lines, view.screen.columns, self)
         self.shell.output.connect(view.feed)
         self.shell.exited.connect(self._exited)
@@ -1046,7 +953,3 @@ class TerminalPanel(QWidget):
             self.shell.exited.disconnect()
             self.shell.stop()
             self.shell = None
-        for folder in self._temp_dirs:
-            if folder is not None:
-                shutil.rmtree(folder, ignore_errors=True)
-        self._temp_dirs.clear()
