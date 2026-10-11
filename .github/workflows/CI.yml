@@ -1,0 +1,43 @@
+name: CI
+on: [push]
+jobs:
+
+  Build:
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7.0.1
+      with:
+        submodules: recursive
+
+    # installs pixi and creates the environment from pixi.toml/pixi.lock
+    # (gfortran, fpm, lcov, ford, graphviz, ...), the same one used locally
+    - name: Setup pixi environment
+      uses: prefix-dev/setup-pixi@v0.10.2
+      with:
+        pixi-version: v0.80.0
+        locked: true   # fail if pixi.lock is out of date with pixi.toml
+        cache: true
+        cache-write: ${{ github.ref == 'refs/heads/master' }}
+
+    # add some tests
+    # - name: Run tests
+    #   run: pixi run test
+
+    # - name: Build documentation
+    #   run: pixi run documentation
+
+    - name: Deploy Documentation
+      if: github.ref == 'refs/heads/master'
+      uses: JamesIves/github-pages-deploy-action@v4.9.0
+      with:
+        branch: gh-pages # The branch the action should deploy to.
+        folder: web  # The folder the action should deploy.
+        single-commit: true
