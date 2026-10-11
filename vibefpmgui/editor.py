@@ -11,7 +11,6 @@ line endings) and of noticing when it changes on disk.
 
 from __future__ import annotations
 
-import html
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -63,7 +62,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from . import lint
+from . import hover_card, lint
 from . import lsp as lsp_mod
 from .completion import CompletionPopup, SignaturePopup, global_rect
 from .highlighter import (
@@ -105,15 +104,22 @@ class HoverPopup(QFrame):
         super().__init__(editor, Qt.ToolTip | Qt.FramelessWindowHint)
         self.editor = editor
         self.anchor = None  # what the popup is about (see CodeEditor.hover_key)
-        self.setFrameShape(QFrame.Box)
+        # A rounded card: the window is transparent, the card inside is drawn.
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.card = QFrame()
+        self.card.setObjectName("HoverCard")
         self.browser = QTextBrowser()
         self.browser.setFrameShape(QFrame.NoFrame)
         self.browser.setOpenLinks(False)
         self.browser.setFont(QToolTip.font())
-        self.browser.document().setDocumentMargin(6)
+        self.browser.document().setDocumentMargin(9)
+        self.browser.viewport().setAutoFillBackground(False)
+        inner = QVBoxLayout(self.card)
+        inner.setContentsMargins(1, 3, 1, 3)
+        inner.addWidget(self.browser)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(1, 1, 1, 1)
-        layout.addWidget(self.browser)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.card)
         self._hide_timer = QTimer(self)
         self._hide_timer.setSingleShot(True)
         self._hide_timer.setInterval(300)  # time to move the mouse into the popup
@@ -126,9 +132,10 @@ class HoverPopup(QFrame):
         pal = self.editor.palette()
         base, text = pal.color(QPalette.Base), pal.color(QPalette.Text)
         bg = base.lighter(115) if base.lightness() < 128 else base.darker(103)
-        border = QColor(text.red(), text.green(), text.blue(), 90).name(QColor.HexArgb)
-        self.setStyleSheet(f"HoverPopup {{ background: {bg.name()}; border: 1px solid {border}; }}"
-                           f"QTextBrowser {{ background: {bg.name()}; color: {text.name()}; }}")
+        border = QColor(text.red(), text.green(), text.blue(), 70).name(QColor.HexArgb)
+        self.setStyleSheet(f"#HoverCard {{ background: {bg.name()}; border: 1px solid {border}; "
+                           f"border-radius: 9px; }} QTextBrowser {{ background: transparent; "
+                           f"color: {text.name()}; }}")
         self.browser.setHtml(text_html)
         screen = (QApplication.screenAt(global_pos) or QApplication.primaryScreen()).availableGeometry()
         max_w = min(self.MAX_WIDTH, int(screen.width() * 0.6))
@@ -138,11 +145,11 @@ class HoverPopup(QFrame):
         bar = self.browser.verticalScrollBar().sizeHint().width()
         width = min(int(doc.idealWidth()) + 4, max_w)
         doc.setTextWidth(width)
-        height = int(doc.size().height()) + 4
+        height = int(doc.size().height()) + 10
         if height > max_h:  # it will scroll: leave room for the scroll bar
             width = min(width + bar, max_w)
             height = max_h
-        self.resize(width + 2, height + 2)
+        self.resize(width + 4, height + 8)  # (the card's border and margins)
         # Below the mouse; above it if there's no room; always on screen.
         x = min(max(global_pos.x(), screen.left()), screen.right() - self.width())
         y = global_pos.y() + 18
@@ -366,9 +373,10 @@ class CodeEditor(QPlainTextEdit):
             if self.hover_popup.isVisible() and self.hover_popup.anchor == self.hover_key(event.pos()):
                 return True  # already showing (and maybe scrolled): leave it
             pos = self.cursorForPosition(event.pos()).position()
-            notes = [i.describe() for i in self.lint_issues
+            notes = [i for i in self.lint_issues
                      if (span := self._lint_span(i)) and span[0] <= pos <= span[1]]
-            lint_html = "".join(f"<p style='margin:0'>{html.escape(n)}</p>" for n in notes)
+            hover_card.set_text_color(self.palette().color(QPalette.Text))
+            lint_html = hover_card.lint_notes_html(notes)
             word = self.word_at(event.pos()) if self.hover_provider is not None else None
             self._hover_word = word[:2] if word else None
             key = self.hover_key(event.pos())
@@ -962,11 +970,14 @@ class EditorTab(QWidget):
             return
         self._flush_lsp()
 
+        text = self.editor.document().findBlockByNumber(line - 1).text()
+        name = re.match(r"\w*", text[column:]).group(0)
+
         def answered(result):
-            text = lsp_mod.hover_html(result.get("contents")) if isinstance(result, dict) else ""
-            if text:
-                sep = "<hr>" if lint_html else ""
-                self.editor.show_hover(line, column, global_pos, lint_html + sep + text)
+            hover_card.set_text_color(self.editor.palette().color(QPalette.Text))
+            info = lsp_mod.hover_info(result.get("contents")) if isinstance(result, dict) else None
+            if info is not None:
+                self.editor.show_hover(line, column, global_pos, hover_card.card_html(info, name, lint_html))
 
         self.lsp.hover(self.path, line, column, answered)
 

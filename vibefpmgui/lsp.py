@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from qtpy.QtCore import QObject, QProcess, QUrl, Signal
-from qtpy.QtGui import QTextDocument
+from qtpy.QtGui import QPalette, QTextDocument
 
 from . import manifest as m
 from .project_tree import fpm_folders
@@ -105,41 +105,139 @@ def intrinsic_name(text: str) -> str | None:
     return match.group(1) if match else None
 
 
-def markdown_html(text: str) -> str:
-    """Markdown as HTML for a rich-text label (rendered by Qt)."""
-    doc = QTextDocument()
-    doc.setMarkdown(text, QTextDocument.MarkdownDialectGitHub)
-    body = re.search(r"<body[^>]*>(.*)</body>", doc.toHtml(), re.DOTALL)
-    out = body.group(1).strip() if body else ""
-    # Qt makes headings large ("font-size:xx-large" etc.); keep them modest.
-    return re.sub(r"font-size:\s*(xx-large|x-large|large)", "font-size:medium", out)
+def hover_text(contents) -> str:
+    """The markdown text of a hover answer (MarkupContent, string or list)."""
+    if isinstance(contents, dict):
+        return contents.get("value", "")
+    if isinstance(contents, list):
+        return "\n\n".join(c.get("value", "") if isinstance(c, dict) else str(c) for c in contents)
+    return str(contents or "")
+
+
+def _accent(dark: bool) -> str:
+    """The highlight colour, made lighter on a dark background so it reads."""
+    from qtpy.QtWidgets import QApplication
+    color = QApplication.palette().color(QPalette.Active, QPalette.Highlight)
+    if dark:
+        color = color.lighter(170)
+    elif color.lightness() > 150:
+        color = color.darker(140)
+    return color.name()
+
+
+def code_html(code: str, language: str = "fortran", style: str | None = None) -> str:
+    """A block of code, syntax-highlighted with the editor's Pygments style,
+    on a panel in that style's background colour."""
+    from pygments import highlight
+    from pygments.formatters import HtmlFormatter
+    from pygments.lexers import FortranLexer, TextLexer
+    from pygments.styles import get_style_by_name
+
+
+    style = style or _current_style()
+    lexer = FortranLexer() if language.lower().startswith("fortran") or not language else TextLexer()
+    spans = highlight(code.rstrip("\n"), lexer, HtmlFormatter(nowrap=True, noclasses=True, style=style))
+    # Synopses aren't always valid Fortran ("[,dim] | [mask]"): no error boxes.
+    spans = re.sub(r"(background-color|border):\s*[^;\"]+;?\s*", "", spans)
+    background = get_style_by_name(style).background_color
+    return (f"<table width='100%' cellspacing='0' cellpadding='6' style='margin:3px 0; "
+            f"background-color:{background}'><tr><td><pre style='margin:0'>{spans.rstrip()}</pre>"
+            "</td></tr></table>")
+
+
+def _current_style() -> str:
+    from qtpy.QtWidgets import QApplication
+
+    from . import highlighter as hl
+    return hl.style_name(QApplication.palette())
+
+
+def markdown_html(text: str, style: str | None = None) -> str:
+    """Markdown as HTML for a rich-text label (rendered by Qt): code blocks
+    syntax-highlighted, headings as small coloured labels."""
+    out = []
+    for i, part in enumerate(re.split(r"```([\w+-]*)[ \t]*\n(.*?)```", text, flags=re.DOTALL)):
+        kind = i % 3
+        if kind == 1:
+            language = part
+        elif kind == 2:
+            out.append(code_html(part, language, style))
+        elif part.strip():
+            doc = QTextDocument()
+            doc.setMarkdown(part, QTextDocument.MarkdownDialectGitHub)
+            body = re.search(r"<body[^>]*>(.*)</body>", doc.toHtml(), re.DOTALL)
+            out.append(body.group(1).strip() if body else "")
+    result = "".join(out)
+    from . import highlighter as hl
+    accent = _accent(hl.style_is_dark(style or _current_style()))
+
+    def heading(match):
+        title = html.unescape(re.sub(r"<[^>]+>", "", match.group(2))).strip()
+        return (f"<p style='margin:9px 0 2px 0'><span style='color:{accent}; font-weight:600; "
+                f"font-size:small'>{html.escape(title.upper())}</span></p>")
+
+    return re.sub(r"<h(\d)[^>]*>(.*?)</h\1>", heading, result, flags=re.DOTALL)
+
+
+class HoverInfo(NamedTuple):
+    kind: str        # "intrinsic", "function", "subroutine", "variable", "parameter", … or ""
+    category: str    # an intrinsic's group, e.g. "ARRAY · REDUCTION"
+    summary: str     # an intrinsic's one-line description
+    body_html: str   # the rest, rendered
+
+
+def _clean(text: str) -> str:
+    # "-----" between the declaration and a doc comment: just a gap (the code
+    # panel already sets them apart; markdown would make the line above a heading).
+    text = re.sub(r"^[ \t]*-{3,}[ \t]*$", "\n", text, flags=re.MULTILINE)
+    # Qt shows _word_ underlined (like a link); the manual pages mean italics.
+    parts = re.split(r"(```.*?```|`[^`]*`)", text, flags=re.DOTALL)
+    return "".join(part if i % 2 else re.sub(r"(?<![\w\\*])_([^_\n]+?)_(?!\w)", r"*\1*", part)
+                   for i, part in enumerate(parts))
+
+
+DECL_KINDS = [("subroutine", r"\bSUBROUTINE\b"), ("function", r"\bFUNCTION\b"),
+              ("program", r"^\s*PROGRAM\b"), ("submodule", r"^\s*SUBMODULE\b"),
+              ("module", r"^\s*MODULE\b(?!\s+PROCEDURE)"), ("interface", r"\bINTERFACE\b"),
+              ("type", r"^\s*TYPE\b(?!\s*\()")]
+
+
+def hover_info(contents, style: str | None = None) -> HoverInfo | None:
+    """fortls's hover answer, taken apart for the hover card (None if empty)."""
+    text = hover_text(contents)
+    if not text.strip():
+        return None
+    match = INTRINSIC_RE.match(text)
+    if match:
+        rest = text[match.end():]
+        category = summary = ""
+        line = re.match(r"\s*\*\*\w+\*\*\s*-\s*(?:\\?\[([^\]\\]*)\\?\])?\s*(.*)\n", rest)
+        if line:
+            category = " · ".join(p.strip() for p in (line.group(1) or "").split(":") if p.strip())
+            summary = line.group(2).strip()
+            rest = rest[line.end():]
+        return HoverInfo("intrinsic", category, summary, markdown_html(_clean(rest), style))
+    kind = ""
+    code = re.match(r"\s*```[\w+-]*[ \t]*\n(.*?)```", text, re.DOTALL)
+    if code:
+        first = code.group(1).strip().splitlines()[0] if code.group(1).strip() else ""
+        if "::" in first and not re.match(r"^\s*TYPE\b\s*(,|::)", first, re.IGNORECASE):
+            kind = "parameter" if re.search(r"\bPARAMETER\b", first, re.IGNORECASE) else "variable"
+        else:
+            kind = next((k for k, pattern in DECL_KINDS if re.search(pattern, first, re.IGNORECASE)), "")
+            if not kind and re.match(r"^\s*TYPE\b", first, re.IGNORECASE):
+                kind = "type"
+    return HoverInfo(kind, "", "", markdown_html(_clean(text), style))
 
 
 def hover_html(contents) -> str:
-    """fortls's hover answer (markdown) as tooltip HTML; "" if there is
-    nothing. An intrinsic's manual page gets a title saying what it is."""
-    if isinstance(contents, dict):
-        text = contents.get("value", "")
-    elif isinstance(contents, list):
-        text = "\n\n".join(c.get("value", "") if isinstance(c, dict) else str(c) for c in contents)
-    else:
-        text = str(contents or "")
-    if not text.strip():
+    """fortls's hover text (markdown) as HTML, e.g. for an argument's
+    documentation in the argument hints; "" if there is nothing."""
+    info = hover_info(contents)
+    if info is None:
         return ""
-    title = ""
-    name = intrinsic_name(text)
-    if name:
-        text = text[INTRINSIC_RE.match(text).end():]
-        title = (f"<p style='margin:0 0 4px 0'><b>{html.escape(name)}</b> &nbsp;—&nbsp; "
-                 "<span style='color:gray'>Fortran intrinsic</span></p>")
-    # "-----" between the declaration and a doc comment: a rule, not a heading
-    # underline (markdown would turn the line above it into a heading).
-    text = re.sub(r"^[ \t]*-{3,}[ \t]*$", "\n***\n", text, flags=re.MULTILINE)
-    # Qt shows _word_ underlined (like a link); the manual pages mean italics.
-    parts = re.split(r"(```.*?```|`[^`]*`)", text, flags=re.DOTALL)
-    text = "".join(part if i % 2 else re.sub(r"(?<![\w\\*])_([^_\n]+?)_(?!\w)", r"*\1*", part)
-                   for i, part in enumerate(parts))
-    return title + markdown_html(text)
+    lead = f"<p style='margin:0 0 4px 0'>{html.escape(info.summary)}</p>" if info.summary else ""
+    return lead + info.body_html
 
 
 def first_location(result) -> tuple[Path, int, int] | None:
@@ -220,7 +318,10 @@ class LspClient(QObject):
             return  # one we stopped
         self.process = None
         self._reset()
-        process.deleteLater()
+        try:
+            process.deleteLater()
+        except RuntimeError:
+            return  # the app is shutting down (Qt has already deleted it)
         self.stopped.emit("fortls could not be started" if process.error() == QProcess.FailedToStart
                           else f"fortls stopped (exit code {process.exitCode()})")
 
