@@ -180,6 +180,12 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
 * The graph refreshes automatically after commands that may download
   dependencies.
 
+## Website
+
+[web/index.html](web/index.html) is a one-page website about the app, with
+screenshots in `web/img` (taken from the real app by
+[web/screenshots.py](web/screenshots.py)).
+
 ## Running
 
 ```sh
