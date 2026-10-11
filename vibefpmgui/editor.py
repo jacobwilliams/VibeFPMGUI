@@ -76,6 +76,7 @@ from .highlighter import (
     lexer_for_path,
 )
 from .icons import SYMBOL_INDENT, symbol_icon
+from .minimap import Minimap
 
 INDENT = "    "
 MAX_FIND_HIGHLIGHTS = 2000
@@ -335,6 +336,7 @@ class CodeEditor(QPlainTextEdit):
         self.markers: dict[int, list[tuple[str, str]]] = {}  # line -> [(severity, message)]
         self.change_marks: dict[int, str] = {}                  # line -> "unsaved" / "saved"
         self.deletions: dict[int, tuple[str, int]] = {}          # line -> (kind, lines deleted above it)
+        self.minimap = None  # the vibefpmgui.minimap.Minimap beside it, if any
         self.find_selections: list[QTextEdit.ExtraSelection] = []
         self.lint_issues: list[lint.LintIssue] = []  # underlined, with a tooltip
         self.gutter = LineNumberArea(self)
@@ -425,6 +427,7 @@ class CodeEditor(QPlainTextEdit):
         if marks != self.change_marks or deletions != self.deletions:
             self.change_marks, self.deletions = marks, deletions
             self.gutter.update()
+            self._update_minimap()
 
     def line_at_y(self, y: int) -> int:
         block = self.firstVisibleBlock()
@@ -441,6 +444,11 @@ class CodeEditor(QPlainTextEdit):
         self.markers = markers
         self._update_extra_selections()
         self.gutter.update()
+        self._update_minimap()
+
+    def _update_minimap(self):
+        if self.minimap is not None:
+            self.minimap.update()
 
     def set_lint(self, issues: list[lint.LintIssue]):
         self.lint_issues = issues
@@ -692,6 +700,7 @@ class CodeEditor(QPlainTextEdit):
     def set_find_selections(self, selections):
         self.find_selections = selections
         self._update_extra_selections()
+        self._update_minimap()
 
     # ------------------------------------------------------------ editing
     def keyPressEvent(self, event):
@@ -1010,6 +1019,7 @@ class EditorTab(QWidget):
     """One open file: editor + find bar + status line."""
 
     lint_enabled = True  # lint Fortran files with fortitude (View menu)
+    minimap_enabled = True  # View → Show Minimap
 
     dirty_changed = Signal(bool)
     saved = Signal(str)
@@ -1056,7 +1066,17 @@ class EditorTab(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self.outline_bar)
-        layout.addWidget(self.editor, 1)
+        # The text, with the minimap at its right.
+        self.minimap = Minimap(self.editor)
+        self.editor.minimap = self.minimap
+        self.minimap.setVisible(self.minimap_enabled)
+        self.highlighter.relexed.connect(self.minimap.invalidate)
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+        body.addWidget(self.editor, 1)
+        body.addWidget(self.minimap)
+        layout.addLayout(body, 1)
         layout.addWidget(self.find_bar)
         layout.addWidget(self.status)
 
@@ -1644,6 +1664,8 @@ class EditorTab(QWidget):
         apply_style(self.editor, self.highlighter)
         self.editor._update_extra_selections()
         self.editor.gutter.update()
+        if getattr(self, "minimap", None) is not None:
+            self.minimap.invalidate()
 
     def _update_status(self, note: str = ""):
         cursor = self.editor.textCursor()

@@ -72,7 +72,11 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   message) and open at the first one. A bar at the gutter's edge marks
   changed lines: amber for changes not saved yet, green for lines changed
   since the file was opened but saved; a small triangle marks where lines
-  were deleted (hover them for details). Saving the project's `fpm.toml`
+  were deleted (hover them for details). A minimap at the right shows the
+  whole file in miniature, in its syntax colors, with the change bars,
+  warnings, errors, lint and AI-review markers and find matches; click it
+  to jump, or drag the box (the part in view) to scroll. *View → Show
+  Minimap* turns it off. Saving the project's `fpm.toml`
   reloads the project. *View → Open Files in Built-in Editor* switches back
   to your default application. *View → Syntax Colors* picks any installed
   Pygments style (listed as light or dark) for the editor and `fpm.toml`;

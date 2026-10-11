@@ -23,7 +23,7 @@ from pygments.lexers import (
 from pygments.styles import get_all_styles, get_style_by_name
 from pygments.token import Name, Text, Token
 from pygments.util import ClassNotFound
-from qtpy.QtCore import QTimer
+from qtpy.QtCore import QTimer, Signal
 from qtpy.QtGui import QColor, QFont, QPalette, QSyntaxHighlighter, QTextCharFormat
 from qtpy.QtWidgets import QApplication
 
@@ -118,6 +118,8 @@ def is_dark(palette: QPalette) -> bool:
 
 
 class PygmentsHighlighter(QSyntaxHighlighter):
+    relexed = Signal()  # the whole document has new colors (e.g. for the minimap)
+
     def __init__(self, document, lexer=None, style: str | None = None):
         super().__init__(document)
         self.lexer = lexer or TOMLLexer()
@@ -189,6 +191,7 @@ class PygmentsHighlighter(QSyntaxHighlighter):
             self.rehighlight()
         finally:
             self._busy = False
+        self.relexed.emit()
 
     def _lex_and_highlight(self):
         text = self.document().toPlainText()

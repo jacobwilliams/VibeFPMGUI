@@ -277,6 +277,12 @@ class MainWindow(QMainWindow):
         self.lint_action.setStatusTip("Check free-form Fortran files in the editor with fortitude "
                                       "as you type; findings are underlined and marked in the gutter")
         view_menu.addAction(self.lint_action)
+        self.minimap_action = QAction("Show Minimap", self, checkable=True)
+        EditorTab.minimap_enabled = self.settings.value("minimap", True, type=bool)
+        self.minimap_action.setChecked(EditorTab.minimap_enabled)
+        self.minimap_action.setStatusTip("A zoomed-out view of the whole file at the right of the editor")
+        self.minimap_action.toggled.connect(self.set_minimap_enabled)
+        view_menu.addAction(self.minimap_action)
         self.fortls_action = QAction("Fortran Language Server (fortls)", self, checkable=True)
         self.fortls_action.setChecked(self.settings.value("fortls", True, type=bool))
         self.fortls_action.toggled.connect(self.set_fortls_enabled)
@@ -1660,6 +1666,12 @@ class MainWindow(QMainWindow):
                 self.navigate_to(path, line, column, record=False)
                 return
         self._update_editor_actions()
+
+    def set_minimap_enabled(self, on: bool):
+        EditorTab.minimap_enabled = on
+        self.settings.setValue("minimap", on)
+        for editor in self.editors():
+            editor.minimap.setVisible(on)
 
     def set_lint_enabled(self, on: bool):
         EditorTab.lint_enabled = on
