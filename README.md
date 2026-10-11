@@ -64,6 +64,15 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   program), like the Tests tab. Toolbar Run builds first (shown in the Build
   tab), then runs every program — or those matching *Target* — through the
   same marker wrapper as Test; run times are remembered for estimates.
+* Terminal (*View → Terminal*, ⌃\` as in VS Code): your shell in a tab
+  of the bottom panel, started in the project's folder and in the app's
+  environment: your shell's startup files run as usual, then the
+  environment (e.g. pixi's) is put first on the PATH again and shown in the
+  prompt, so `fpm` and the compilers are the ones the app uses (conda's
+  automatic "base" activation is turned off there). Colors,
+  full-screen programs, Ctrl+C and Tab completion work; ⌘C/⌘V (macOS) or
+  Ctrl+Shift+C/V copy and paste. *Restart* starts a new shell. The terminal emulation is
+  [pyte](https://github.com/selectel/pyte)'s.
 * Find in Files (⌘/Ctrl+Shift+F, or *Edit → Replace in Files…*,
   ⌘/Ctrl+Shift+H): searches every file of the project and of its
   dependencies, in the *Search* tab, with options for match case, whole

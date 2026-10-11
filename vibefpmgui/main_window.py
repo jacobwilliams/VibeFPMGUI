@@ -97,6 +97,7 @@ from .rename_dialog import RenamePreviewDialog
 from .review_monitor import ReviewMonitor
 from .run_monitor import RunMonitor
 from .symbol_search import SymbolSearchDialog
+from .terminal import TerminalPanel
 from .test_monitor import MARKER_RE, TestMonitor, parse_test_list
 
 # A command's output beyond this many characters isn't added to the Output
@@ -292,6 +293,13 @@ class MainWindow(QMainWindow):
                                            "instead of scrolling sideways")
         self.word_wrap_action.toggled.connect(self.set_word_wrap)
         view_menu.addAction(self.word_wrap_action)
+        view_menu.addSeparator()
+        self.terminal_action = QAction("Terminal", self)
+        # ⌃` as in VS Code (the Control key on macOS too: ⌘` switches windows).
+        self.terminal_action.setShortcut(QKeySequence("Meta+`" if sys.platform == "darwin" else "Ctrl+`"))
+        self.terminal_action.setStatusTip("Your shell, in the project's folder (Terminal tab)")
+        self.terminal_action.triggered.connect(self.show_terminal)
+        view_menu.addAction(self.terminal_action)
         self.fortls_action = QAction("Fortran Language Server (fortls)", self, checkable=True)
         self.fortls_action.setChecked(self.settings.value("fortls", True, type=bool))
         self.fortls_action.toggled.connect(self.set_fortls_enabled)
@@ -546,6 +554,9 @@ class MainWindow(QMainWindow):
         self.search_panel.open_requested.connect(self._open_search_match)
         self.search_panel.replace_requested.connect(self._replace_in_files)
         self.monitor_tabs.addTab(self.search_panel, "Search")
+        self.terminal_panel = TerminalPanel()
+        self.terminal_panel.set_font(self._mono_font(editor=True))
+        self.monitor_tabs.addTab(self.terminal_panel, "Terminal")
         # The two lists of places in files (vibefpmgui.result_tree), drawn alike.
         self.result_trees = [self.references_panel.tree, self.search_panel.tree]
         for tree in self.result_trees:
@@ -620,6 +631,7 @@ class MainWindow(QMainWindow):
             self.test_monitor.refresh_palette()
             self.run_monitor.refresh_palette()
             self.review_monitor.refresh_palette()
+            self.terminal_panel.refresh_colors()
             for editor in self.editors():
                 editor.refresh_style()
             self.project_tree._apply_marks()
@@ -734,6 +746,8 @@ class MainWindow(QMainWindow):
         self.manifest_view.setFont(code)
         for editor in self.editors():
             editor.set_font(code)
+        if hasattr(self, "terminal_panel"):
+            self.terminal_panel.set_font(code)
         self.command_toolbar.setIconSize(QSize(round(22 * factor), round(22 * factor)))
         self.build_monitor.refresh_fonts()
         self.test_monitor.refresh_fonts()
@@ -866,6 +880,7 @@ class MainWindow(QMainWindow):
             editor.close_down()
         self.lsp_client.stop()
         self.search_panel.shutdown()
+        self.terminal_panel.shutdown()
         if self.process is not None:
             answer = QMessageBox.question(self, "fpm is running",
                                           "An fpm command is still running. Stop it and quit?")
@@ -1319,6 +1334,7 @@ class MainWindow(QMainWindow):
         self._update_legend()  # (it mentions version conflicts when there are any)
         self.show_package(self.graph.root)
         self.project_tree.set_project(self.graph, self.manifest_path.parent)
+        self.terminal_panel.set_directory(self.manifest_path.parent)
         self._update_language_server()
         self.refresh_build_outputs()
         self._set_project_enabled(True)
@@ -1653,6 +1669,18 @@ class MainWindow(QMainWindow):
                                      + (f": {', '.join(parts)}" if parts else ""), 10000)
         self.project_tree.refresh()
 
+    def show_terminal(self):
+        """Show the Terminal tab (starting the shell) and type there."""
+        self._show_bottom_panel()
+        self.monitor_tabs.setCurrentWidget(self.terminal_panel)
+        self.terminal_panel.start()
+        self.terminal_panel.focus()
+
+    def _show_bottom_panel(self):
+        sizes = self.right_split.sizes()
+        if len(sizes) == 2 and sizes[1] < 120:  # (the bottom panel is closed)
+            self.right_split.setSizes([max(200, sum(sizes) - 300), 300])
+
     # ---------------------------------------------------- find in files
     def find_in_files(self, replace: bool = False):
         """Show the Search tab, with the editor's selection to search for."""
@@ -1662,9 +1690,7 @@ class MainWindow(QMainWindow):
             selected = editor.editor.textCursor().selectedText()
             if selected and "\u2029" not in selected:  # (one line only)
                 text = selected
-        sizes = self.right_split.sizes()
-        if len(sizes) == 2 and sizes[1] < 120:  # (the bottom panel is closed)
-            self.right_split.setSizes([max(200, sum(sizes) - 300), 300])
+        self._show_bottom_panel()
         self.monitor_tabs.setCurrentWidget(self.search_panel)
         self.search_panel.open_find(text, replace)
 
