@@ -44,6 +44,7 @@ from qtpy.QtWidgets import (
     QComboBox,
     QDialog,
     QFileDialog,
+    QFontDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -70,6 +71,7 @@ from qtpy.QtWidgets import (
 from . import __version__, ansi, dep_updates, formatter, lint, lsp
 from . import ai_review as ai
 from . import build_outputs as bo
+from . import editor as editor_mod
 from . import highlighter as hl
 from . import manifest as m
 from .about import FPM_DOCS_URL, AboutDialog
@@ -137,7 +139,7 @@ class MainWindow(QMainWindow):
         self._refresh_after = False
         self._monitoring = False
         self._partial = ""  # output text after the last newline
-        self._esc_tail = ""  # colour code cut off at the end of the last output chunk
+        self._esc_tail = ""  # color code cut off at the end of the last output chunk
         self._full_output_path = Path(tempfile.gettempdir()) / f"vibefpmgui-output-{os.getpid()}.log"
         self._full_output = None  # the file the running command's whole output is saved to
         self._shown_chars = 0     # how much of it the Output panel shows (see OUTPUT_SHOW_LIMIT)
@@ -215,6 +217,16 @@ class MainWindow(QMainWindow):
         self.reset_font_action = QAction("Actual Size", self)  # (Ctrl+0 is Graph → Fit to window)
         self.reset_font_action.triggered.connect(lambda: self.set_font_delta(0))
         view_menu.addActions([self.bigger_action, self.smaller_action, self.reset_font_action])
+        editor_mod.editor_font_family = self.settings.value("editor_font_family", "") or ""
+        editor_mod.editor_font_size = self.settings.value("editor_font_size", 0.0, type=float) or 0.0
+        self.editor_font_action = view_menu.addAction("Editor Font…")
+        self.editor_font_action.setStatusTip("Choose the font for the editor and the fpm.toml tab")
+        self.editor_font_action.triggered.connect(self.choose_editor_font)
+        self.reset_editor_font_action = view_menu.addAction("Reset Editor Font")
+        self.reset_editor_font_action.setStatusTip("Use the system's fixed-width font in the editor again")
+        self.reset_editor_font_action.triggered.connect(lambda: self.set_editor_font("", 0.0))
+        self.reset_editor_font_action.setEnabled(bool(editor_mod.editor_font_family
+                                                      or editor_mod.editor_font_size))
         view_menu.addSeparator()
         self.use_editor_action = QAction("Open Files in Built-in Editor", self, checkable=True)
         self.use_editor_action.setChecked(self.settings.value("use_editor", True, type=bool))
@@ -243,8 +255,8 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self.fortls_action)
         view_menu.addSeparator()
         hl.chosen_style = self.settings.value("syntax_style", hl.AUTO) or hl.AUTO
-        self.style_menu = view_menu.addMenu("Syntax Colours")
-        self.style_menu.setStatusTip("The Pygments colour style for the editor and fpm.toml")
+        self.style_menu = view_menu.addMenu("Syntax Colors")
+        self.style_menu.setStatusTip("The Pygments color style for the editor and fpm.toml")
         self.style_menu.aboutToShow.connect(self._fill_style_menu)
 
         # --- left: build options + commands
@@ -395,7 +407,7 @@ class MainWindow(QMainWindow):
         self.test_output = QPlainTextEdit()
         self.test_output.setReadOnly(True)
         self.test_output.setFont(mono)
-        # Compiler messages may be coloured (lfortran always colours them).
+        # Compiler messages may be colored (lfortran always colors them).
         self.console_writer = ansi.AnsiWriter(self.console)
         self.single_writer = ansi.AnsiWriter(self.test_output)
         self.output_stack = QStackedWidget()
@@ -489,7 +501,7 @@ class MainWindow(QMainWindow):
         hl.apply_style(self.manifest_view, self.toml_highlighter)
 
     def _fill_style_menu(self):
-        """View → Syntax Colours: Automatic, then every installed Pygments style."""
+        """View → Syntax Colors: Automatic, then every installed Pygments style."""
         menu = self.style_menu
         menu.clear()
         group = QActionGroup(menu)
@@ -630,12 +642,13 @@ class MainWindow(QMainWindow):
         font.setPointSizeF(size)
         QApplication.setFont(font)
         # Widgets with their own fonts don't follow the application font.
-        mono = QFontDatabase.systemFont(QFontDatabase.FixedFont)
-        mono.setPointSizeF(mono.pointSizeF() * factor)
-        for view in (self.manifest_view, self.console, self.test_output):
+        mono = self._mono_font()
+        for view in (self.console, self.test_output):
             view.setFont(mono)
+        code = self._mono_font(editor=True)  # View → Editor Font
+        self.manifest_view.setFont(code)
         for editor in self.editors():
-            editor.set_font(mono)
+            editor.set_font(code)
         self.command_toolbar.setIconSize(QSize(round(22 * factor), round(22 * factor)))
         self.build_monitor.refresh_fonts()
         self.test_monitor.refresh_fonts()
@@ -710,7 +723,7 @@ class MainWindow(QMainWindow):
         self._update_command_icons()
 
     def _update_command_icons(self):
-        """(Re)draw the toolbar icons in the current text colour."""
+        """(Re)draw the toolbar icons in the current text color."""
         text = QApplication.palette().color(QPalette.WindowText)
         for action, name in self.command_icons.items():
             action.setIcon(make_icon(name, STOP_COLOR if name == "stop" else text))
@@ -1141,7 +1154,7 @@ class MainWindow(QMainWindow):
             self.project_tree.reveal(str(editor.path))
 
     def _update_tree_marks(self):
-        """Colour files in the tree that had errors/warnings in the last build."""
+        """Color files in the tree that had errors/warnings in the last build."""
         marks = {}
         for t in self.build_monitor.targets:
             if t.path is not None and t.status in ("Failed", "Warnings"):
@@ -1443,7 +1456,7 @@ class MainWindow(QMainWindow):
             except OSError as exc:
                 QMessageBox.warning(self, "Can't open file", f"{file}:\n{exc}")
                 return
-            editor.set_font(self._mono_font())
+            editor.set_font(self._mono_font(editor=True))
             editor.dirty_changed.connect(lambda _dirty, e=editor: self._update_editor_title(e))
             editor.path_changed.connect(lambda _p, e=editor: self._update_editor_title(e))
             editor.path_changed.connect(self._update_editor_actions)
@@ -1462,9 +1475,33 @@ class MainWindow(QMainWindow):
         else:
             editor.editor.setFocus()
 
-    def _mono_font(self) -> QFont:
+    def _mono_font(self, editor: bool = False) -> QFont:
         base = self._base_font.pointSizeF()
-        return monospace_font((base + self.font_delta) / base)
+        return monospace_font((base + self.font_delta) / base, editor=editor)
+
+    def choose_editor_font(self):
+        """View → Editor Font…: pick a fixed-width family and size (at 100%
+        text size; Bigger/Smaller Text still scale it)."""
+        current = monospace_font(1.0, editor=True)
+        # Qt's own dialog: the macOS font panel ignores the fixed-width filter.
+        result = QFontDialog.getFont(current, self, "Editor Font",
+                                     QFontDialog.MonospacedFonts | QFontDialog.DontUseNativeDialog)
+        # PySide returns (ok, font), PyQt (font, ok).
+        ok, font = result if isinstance(result[0], bool) else (result[1], result[0])
+        if ok:
+            self.set_editor_font(font.family(), font.pointSizeF())
+
+    def set_editor_font(self, family: str, size: float):
+        system = QFontDatabase.systemFont(QFontDatabase.FixedFont)
+        if family == system.family() and abs(size - system.pointSizeF()) < 0.01:
+            family, size = "", 0.0  # the same as the default
+        editor_mod.editor_font_family, editor_mod.editor_font_size = family, size
+        self.settings.setValue("editor_font_family", family)
+        self.settings.setValue("editor_font_size", size)
+        self.reset_editor_font_action.setEnabled(bool(family or size))
+        self.set_font_delta(self.font_delta, announce=False)  # re-applies the fonts
+        shown = f"{family or system.family()} {round(size or system.pointSizeF(), 1):g} pt"
+        self.statusBar().showMessage(f"Editor font: {shown}", 4000)
 
     def _update_editor_title(self, editor: EditorTab):
         index = self.tabs.indexOf(editor)
@@ -1842,7 +1879,7 @@ class MainWindow(QMainWindow):
 
     def _append(self, text: str, bold: bool = False, colored: bool = False):
         """Add text to the Output panel; ``colored``: program output, whose
-        terminal colour codes are shown as colours (and which is limited to
+        terminal color codes are shown as colors (and which is limited to
         OUTPUT_SHOW_LIMIT characters per command)."""
         if not colored:
             self.console_writer.write(text, bold, ansi=False)
@@ -1916,7 +1953,7 @@ class MainWindow(QMainWindow):
             self._append("".join(self._test_line(line) for line in lines), colored=True)
             return
         self._append(data, colored=True)
-        plain = ansi.strip(data)  # colour codes would get in the way of parsing
+        plain = ansi.strip(data)  # color codes would get in the way of parsing
         if self._phase == "list":
             self._captured.append(plain)
         if self._monitoring:
@@ -1928,7 +1965,7 @@ class MainWindow(QMainWindow):
 
     def _test_line(self, raw: str) -> str:
         """Pass a line of test output through the test monitor; returns the
-        text to show (with its colour codes). The runner prints a blank line
+        text to show (with its color codes). The runner prints a blank line
         before each marker, which is dropped along with the marker."""
         line = ansi.strip(raw)
         if self._test_building:
@@ -2408,6 +2445,7 @@ class MainWindow(QMainWindow):
         if "not found" in message.lower():
             hint = f" (is '{self.ai_model}' downloaded? See AI → Model)"
         self.review_monitor.finish(False, message + hint)
+        self.statusBar().showMessage(f"AI review: {message}{hint}", 6000)
 
     def stop_review(self):
         if self._ai_worker is not None:

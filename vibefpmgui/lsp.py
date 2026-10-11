@@ -115,7 +115,7 @@ def hover_text(contents) -> str:
 
 
 def _accent(dark: bool) -> str:
-    """The highlight colour, made lighter on a dark background so it reads."""
+    """The highlight color, made lighter on a dark background so it reads."""
     from qtpy.QtWidgets import QApplication
     color = QApplication.palette().color(QPalette.Active, QPalette.Highlight)
     if dark:
@@ -127,7 +127,7 @@ def _accent(dark: bool) -> str:
 
 def code_html(code: str, language: str = "fortran", style: str | None = None) -> str:
     """A block of code, syntax-highlighted with the editor's Pygments style,
-    on a panel in that style's background colour."""
+    on a panel in that style's background color."""
     from pygments import highlight
     from pygments.formatters import HtmlFormatter
     from pygments.lexers import FortranLexer, TextLexer
@@ -154,7 +154,7 @@ def _current_style() -> str:
 
 def markdown_html(text: str, style: str | None = None) -> str:
     """Markdown as HTML for a rich-text label (rendered by Qt): code blocks
-    syntax-highlighted, headings as small coloured labels."""
+    syntax-highlighted, headings as small colored labels."""
     out = []
     for i, part in enumerate(re.split(r"```([\w+-]*)[ \t]*\n(.*?)```", text, flags=re.DOTALL)):
         kind = i % 3

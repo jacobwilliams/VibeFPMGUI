@@ -93,7 +93,7 @@ PALETTES = {
                  "status": {COMPILING: "#fcc419", DONE: "#51cf66", WARNING: "#ff922b",
                          FAILED: "#ff6b6b", ABORTED: "#868e96"}},
 }
-# Package-tag dot colours; the main window replaces these with the graph theme's.
+# Package-tag dot colors; the main window replaces these with the graph theme's.
 DEFAULT_PACKAGE_COLORS = {m.ROOT: "#f6c85f", m.GIT: "#74c0fc", m.PATH: "#8ce99a",
                           m.REGISTRY: "#d7b8f3", m.META: "#f3c6a5", m.MISSING: "#ced4da",
                           LIBRARY: "#ced4da"}
@@ -112,7 +112,7 @@ def set_ui_scale(factor: float):
 def scaled(pixels: float) -> int:
     """A pixel size adjusted for the current text size."""
     return round(pixels * _ui_scale)
-FLASH_SECONDS = 0.6  # a row briefly glows in its status colour when it finishes
+FLASH_SECONDS = 0.6  # a row briefly glows in its status color when it finishes
 
 
 class Diagnostic(NamedTuple):
@@ -390,7 +390,7 @@ class RowDelegate(QStyledItemDelegate):
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(pal["track"]))
         p.drawRoundedRect(track, 3, 3)
-        # Live bars use the status colour; finished ones are grey.
+        # Live bars use the status color; finished ones are grey.
         bar_color = color if target.status == COMPILING else QColor(pal["muted"])
         fraction = elapsed / slowest if slowest > 0 else 0
         p.setBrush(bar_color)
@@ -715,7 +715,7 @@ class BuildMonitor(SortableTable, QWidget):
         self.progress.update()
 
     def set_package_colors(self, colors: dict[str, str]):
-        """Use the dependency graph's colours for the package tags."""
+        """Use the dependency graph's colors for the package tags."""
         self.package_colors = {**DEFAULT_PACKAGE_COLORS, **colors}
         self.table.viewport().update()
 
@@ -861,7 +861,7 @@ class BuildMonitor(SortableTable, QWidget):
             text = read_log_text(log)
         except OSError:
             return
-        target.log_text = text  # shown with its colours
+        target.log_text = text  # shown with its colors
         parser = DiagnosticParser()
         for line in strip_ansi(text).splitlines():
             found = parser.feed(line.rstrip())

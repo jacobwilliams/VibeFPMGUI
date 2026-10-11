@@ -27,7 +27,7 @@ from qtpy.QtWidgets import QApplication
 LIGHT_STYLE = "default"
 DARK_STYLE = "monokai"
 AUTO = "auto"  # LIGHT_STYLE or DARK_STYLE, following the system's light/dark mode
-chosen_style = AUTO  # View → Syntax Colours (set by the main window)
+chosen_style = AUTO  # View → Syntax Colors (set by the main window)
 
 
 def style_is_dark(name: str) -> bool:
@@ -57,7 +57,7 @@ def style_name(palette: QPalette) -> str:
 
 
 def style_text_color(style) -> QColor:
-    """The colour a style uses for plain text (styles that don't say get
+    """The color a style uses for plain text (styles that don't say get
     near-white on a dark background, near-black on a light one)."""
     for token in (Text, Token):
         color = style.style_for_token(token).get("color")
@@ -69,7 +69,7 @@ def style_text_color(style) -> QColor:
 
 def apply_style(widget, highlighter):
     """Highlight with the current style and give the text widget its
-    background and text colours."""
+    background and text colors."""
     highlighter.set_style(style_name(QApplication.palette()))
     palette = widget.palette()
     palette.setColor(QPalette.Base, highlighter.background())
@@ -144,7 +144,7 @@ class PygmentsHighlighter(QSyntaxHighlighter):
             spec = self.style.style_for_token(styled)
             if ttype is Name and not spec["color"]:
                 # The TOML lexer marks keys as plain Name, which most styles
-                # leave uncoloured; borrow the attribute-name colour instead.
+                # leave uncolored; borrow the attribute-name color instead.
                 spec = self.style.style_for_token(Name.Attribute)
             fmt = QTextCharFormat()
             if spec["color"]:

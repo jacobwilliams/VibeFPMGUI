@@ -108,7 +108,7 @@ def save(pix: QPixmap, name: str):
 
 
 def opaque(widget: QWidget) -> QPixmap:
-    """The widget's image over its window colour (macOS draws parts of the
+    """The widget's image over its window color (macOS draws parts of the
     window translucent, which grab() would leave black)."""
     from qtpy.QtGui import QPalette
     scrub(widget.window())

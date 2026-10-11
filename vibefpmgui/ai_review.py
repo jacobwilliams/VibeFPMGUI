@@ -20,6 +20,7 @@ The work happens in a :class:`ReviewWorker` on a background thread; the
 
 from __future__ import annotations
 
+import contextlib
 import re
 import shutil
 import threading
@@ -260,25 +261,41 @@ class ReviewWorker(QObject):
         super().__init__()
         self.host, self.model, self.prompt, self.pull_only = host, model, prompt, pull_only
         self._cancel = threading.Event()
+        self._client = None
 
     def cancel(self):
+        """Stop (from the GUI thread). Closing the connection also stops a
+        request that is still waiting for its first answer: the model can
+        take a long time to load and read the prompt, and only then would
+        the stopped flag be looked at. Ollama stops generating when the
+        connection goes away."""
         self._cancel.set()
+        client = self._client
+        if client is not None:
+            with contextlib.suppress(Exception):  # (already closed: fine)
+                client._client.close()  # the client's httpx connection
+
+    def _stopped_message(self) -> str:
+        return "Download cancelled" if self.pull_only else "Review stopped"
 
     @Slot()
     def run(self):
         try:
-            client = make_client(self.host)
+            self._client = make_client(self.host)
             if self.pull_only:
-                self._pull(client)
+                self._pull(self._client)
             else:
-                self._review(client)
+                self._review(self._client)
         except Exception as exc:  # noqa: BLE001 - shown to the user
-            self.failed.emit(str(exc) or type(exc).__name__)
+            if self._cancel.is_set():  # the connection was closed to stop it
+                self.failed.emit(self._stopped_message())
+            else:
+                self.failed.emit(str(exc) or type(exc).__name__)
 
     def _pull(self, client):
         for part in client.pull(self.model, stream=True):
             if self._cancel.is_set():
-                self.failed.emit("Download cancelled")
+                self.failed.emit(self._stopped_message())
                 return
             status = getattr(part, "status", "") or ""
             total = getattr(part, "total", None) or 0
@@ -307,7 +324,7 @@ class ReviewWorker(QObject):
         try:
             for part in stream:
                 if self._cancel.is_set():
-                    self.failed.emit("Review stopped")
+                    self.failed.emit(self._stopped_message())
                     return
                 message = getattr(part, "message", None)
                 text = getattr(message, "content", "") if message is not None else ""
@@ -326,7 +343,8 @@ class ReviewWorker(QObject):
         finally:
             close = getattr(stream, "close", None)
             if close is not None:
-                close()
+                with contextlib.suppress(Exception):  # the connection may be gone (stopped)
+                    close()
         rest = guard.flush()
         if rest:
             parts.append(rest)

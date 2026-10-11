@@ -1,5 +1,5 @@
 """Small vector icons for the command toolbar, drawn with QPainter so they
-match the current text colour (light or dark mode) at any screen scale."""
+match the current text color (light or dark mode) at any screen scale."""
 
 from __future__ import annotations
 
@@ -192,7 +192,7 @@ DRAWERS = {
 
 
 def make_icon(name: str, color: QColor | str) -> QIcon:
-    """An icon by name (see ``DRAWERS``) in the given colour; Qt derives the
+    """An icon by name (see ``DRAWERS``) in the given color; Qt derives the
     greyed-out disabled look from it."""
     color = QColor(color)
     icon = QIcon()
@@ -246,7 +246,7 @@ BADGES = {
     "include": _badge_hash,
     "manifest": _badge_cube,
 }
-# Badge background colours by fpm folder role.
+# Badge background colors by fpm folder role.
 BADGE_COLORS = {
     "code": "#1c7ed6", "run": "#2f9e44", "test": "#7048e8", "example": "#e8590c",
     "include": "#868e96", "manifest": "#e8590c",
@@ -254,7 +254,7 @@ BADGE_COLORS = {
 
 
 def badged_icon(base: QIcon, badge: str, sizes=(16, 20, 32)) -> QIcon:
-    """``base`` (e.g. the system folder icon) with a small coloured badge in
+    """``base`` (e.g. the system folder icon) with a small colored badge in
     its lower-right corner showing ``badge`` (see ``BADGES``)."""
     color = QColor(BADGE_COLORS.get(badge, "#868e96"))
     icon = QIcon()
@@ -335,7 +335,7 @@ def app_icon() -> QIcon:
 
 
 # ------------------------------------------------------------ symbol kinds
-# Outline icons: a coloured badge with a letter for each kind of Fortran
+# Outline icons: a colored badge with a letter for each kind of Fortran
 # symbol (like the symbol icons of other editors).
 SYMBOL_BADGES = {
     "module": ("M", "#8e44ad"),

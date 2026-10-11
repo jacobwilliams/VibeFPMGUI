@@ -77,7 +77,7 @@ MAX_FIND_HIGHLIGHTS = 2000
 MARKER_COLORS = {"error": "#e03131", "fatal error": "#e03131", "warning": "#f08c00",
                  "review": "#7048e8", "remark": "#1c7ed6",
                  "lint error": "#e03131", "lint": "#0ca678"}
-# Which marker colour wins when a line has several kinds of note.
+# Which marker color wins when a line has several kinds of note.
 MARKER_PRIORITY = ["fatal error", "error", "lint error", "warning", "review", "lint", "remark"]
 LINT_DELAY_MS = 600  # lint once typing pauses this long
 LSP_SYNC_MS = 300    # send edits to the language server once typing pauses this long
@@ -130,7 +130,7 @@ class HoverPopup(QFrame):
     def show_at(self, global_pos: QPoint, text_html: str, anchor):
         self.anchor = anchor
         self._hide_timer.stop()
-        # The editor's colours (Qt's tooltip colours don't follow dark mode on macOS).
+        # The editor's colors (Qt's tooltip colors don't follow dark mode on macOS).
         pal = self.editor.palette()
         base, text = pal.color(QPalette.Base), pal.color(QPalette.Text)
         bg = base.lighter(115) if base.lightness() < 128 else base.darker(103)
@@ -1442,7 +1442,7 @@ class EditorTab(QWidget):
         self.editor._update_gutter_width()
 
     def refresh_style(self):
-        """Apply the syntax colours (View → Syntax Colours, or automatic)."""
+        """Apply the syntax colors (View → Syntax Colors, or automatic)."""
         apply_style(self.editor, self.highlighter)
         self.editor._update_extra_selections()
         self.editor.gutter.update()
@@ -1519,8 +1519,21 @@ class EditorTab(QWidget):
             self.editor.go_to_line(line)
 
 
-def monospace_font(size_factor: float = 1.0) -> QFont:
+# View → Editor Font (set by the main window): a family and a size in points
+# at 100% text size; empty / 0 use the system's fixed-width font.
+editor_font_family = ""
+editor_font_size = 0.0
+
+
+def monospace_font(size_factor: float = 1.0, editor: bool = False) -> QFont:
+    """The fixed-width font, scaled by ``size_factor`` (View → text size);
+    with ``editor``, the one chosen in View → Editor Font."""
     font = QFontDatabase.systemFont(QFontDatabase.FixedFont)
+    if editor and editor_font_family:
+        font.setFamily(editor_font_family)
+        font.setStyleHint(QFont.Monospace)
+    if editor and editor_font_size > 0:
+        font.setPointSizeF(editor_font_size)
     font.setPointSizeF(font.pointSizeF() * size_factor)
     return font
 

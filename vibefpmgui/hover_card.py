@@ -1,6 +1,6 @@
 """The HTML of the editor's hover card.
 
-A header line (the kind as a coloured badge, like the outline's, then the
+A header line (the kind as a colored badge, like the outline's, then the
 name and what it is), fortitude's messages for that spot, the language
 server's description (declaration or manual page, see
 :func:`.lsp.hover_info`), and a footer with the related shortcuts.
@@ -22,11 +22,11 @@ EXTRA_BADGES = {"variable": ("V", "#495057"), "parameter": ("K", "#5c940d"),
 LINT_COLORS = {"lint error": "#e03131", "lint": "#0ca678"}
 
 
-_text_color = None  # the card's text colour (set by the editor, see set_text_color)
+_text_color = None  # the card's text color (set by the editor, see set_text_color)
 
 
 def set_text_color(color: QColor):
-    """The colour the card's text is drawn in (the editor's, which follows
+    """The color the card's text is drawn in (the editor's, which follows
     the syntax style rather than the system's light/dark mode)."""
     global _text_color
     _text_color = QColor(color)
@@ -45,7 +45,7 @@ def badge(kind: str) -> str:
 
 
 def lint_notes_html(issues) -> str:
-    """fortitude's messages: a coloured rule code, the message, and the fix."""
+    """fortitude's messages: a colored rule code, the message, and the fix."""
     rows = []
     for issue in issues:
         color = LINT_COLORS.get(issue.severity, "#0ca678")

@@ -59,7 +59,7 @@ NO_TESTS_RE = re.compile(r"No tests to run")
 QUEUED, RUNNING, PASSED, FAILED_T, NOT_RUN = "Queued", "Running", "Passed", "Failed", "Not run"
 STATUSES = (RUNNING, PASSED, FAILED_T, NOT_RUN, QUEUED)
 ICONS = {QUEUED: "·", RUNNING: "⟳", PASSED: "✓", FAILED_T: "✕", NOT_RUN: "–"}
-# Test statuses borrow the build palette's colours.
+# Test statuses borrow the build palette's colors.
 COLOR_KEY = {RUNNING: COMPILING, PASSED: DONE, FAILED_T: FAILED, NOT_RUN: ABORTED, QUEUED: ABORTED}
 FLASH_SECONDS = 0.6
 

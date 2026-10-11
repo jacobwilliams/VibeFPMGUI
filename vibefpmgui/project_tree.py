@@ -526,7 +526,7 @@ class ProjectTree(QWidget):
 
     # -------------------------------------------------- build results marks
     def set_marks(self, marks: dict[str, str]):
-        """Colour files by the last build: {path: "error" | "warning"}."""
+        """Color files by the last build: {path: "error" | "warning"}."""
         self._marks = {str(Path(p).resolve()): v for p, v in marks.items()}
         self._apply_marks()
 
@@ -546,7 +546,7 @@ class ProjectTree(QWidget):
         elif ignored:
             item.setForeground(self._ignored_grey())
         else:
-            item.setData(None, Qt.ForegroundRole)  # the normal text colour
+            item.setData(None, Qt.ForegroundRole)  # the normal text color
         tip = (f"Ignored by git: {ignored}\n" if ignored else "") + path + {
             "error": "\n(errors in the last build)",
             "warning": "\n(warnings in the last build)"}.get(mark, "")

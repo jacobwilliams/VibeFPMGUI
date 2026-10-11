@@ -38,7 +38,7 @@ from . import manifest as m
 PRERELEASE_RE = re.compile(r"(alpha|beta|rc|dev|pre|preview|snapshot|nightly)", re.IGNORECASE)
 LS_REMOTE_TIMEOUT = 30  # seconds per repository
 
-# Status kinds (also used for colours)
+# Status kinds (also used for colors)
 UP_TO_DATE, UPDATE, NEW_COMMITS, INFO, ERROR = "up to date", "update", "new commits", "info", "error"
 TAG_AVAILABLE = "tag available"  # pinned to a commit; a tag could be used instead
 STATUS_COLORS = {UP_TO_DATE: "#2f9e44", UPDATE: "#e8590c", NEW_COMMITS: "#1c7ed6",

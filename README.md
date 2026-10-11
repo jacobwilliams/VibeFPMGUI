@@ -28,8 +28,8 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   overall progress bar. Warnings are read from fpm's per-object `.o.log`
   files, since fpm only prints compiler output when a compile fails
   (gfortran, gcc/clang, Intel and lfortran message formats are understood;
-  colour codes in compiler output, which lfortran always writes, are shown as
-  colours in the Output panel). Hover a
+  color codes in compiler output, which lfortran always writes, are shown as
+  colors in the Output panel). Hover a
   status for the compiler messages; double-click a row to open the source.
 * The Build, Tests and Review tables sort by clicking a column header
   (again to reverse, a third time for the original order); the order is
@@ -68,10 +68,12 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   build's warnings and errors as markers in the gutter (hover for the
   message) and open at the first one. Saving the project's `fpm.toml`
   reloads the project. *View → Open Files in Built-in Editor* switches back
-  to your default application. *View → Syntax Colours* picks any installed
+  to your default application. *View → Syntax Colors* picks any installed
   Pygments style (listed as light or dark) for the editor and `fpm.toml`;
   *Automatic*, the default, uses `default` in light mode and `monokai` in
-  dark mode.
+  dark mode. *View → Editor Font…* picks the fixed-width font and size for
+  the editor and `fpm.toml` (*Bigger/Smaller Text* still scale it; *Reset
+  Editor Font* goes back to the system's).
 * Linting: free-form Fortran files (`.f90`, `.F90`, …) open in the editor
   are checked with [fortitude](https://fortitude.readthedocs.io) when opened
   and as you type (unsaved text included). Findings are underlined and get a
@@ -98,7 +100,7 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
     / *Go Forward* (⌘[ / ⌘]; Alt+←/→ elsewhere) return.
   * An outline drop-down above the editor lists the file's modules, types
     and procedures, follows the cursor, and jumps to the one you pick. A
-    coloured badge shows each one's kind (M module, P program, S subroutine,
+    colored badge shows each one's kind (M module, P program, S subroutine,
     F function, T type, I interface), indented to show what is inside what.
   * *Edit → Go to Symbol in Project…* (⌘T) finds a module, type or
     procedure by name in the project and its dependencies.

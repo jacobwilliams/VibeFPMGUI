@@ -27,7 +27,7 @@ ITEM_ROLE = Qt.UserRole + 1
 
 
 def popup_colors(editor) -> tuple[QColor, QColor, QColor]:
-    """(background, text, border) matching the editor's colours."""
+    """(background, text, border) matching the editor's colors."""
     pal = editor.palette()
     base, text = pal.color(QPalette.Base), pal.color(QPalette.Text)
     bg = base.lighter(115) if base.lightness() < 128 else base.darker(103)
@@ -100,7 +100,7 @@ class CompletionPopup(QFrame):
         self.items, self.start = items, start
         bg, text, border = popup_colors(self.editor)
         # The popup is never the active window, so give the selection the
-        # active colours explicitly (the inactive ones are hard to see).
+        # active colors explicitly (the inactive ones are hard to see).
         pal = QApplication.palette()
         sel, sel_text = pal.color(QPalette.Active, QPalette.Highlight), pal.color(QPalette.Active,
                                                                                  QPalette.HighlightedText)

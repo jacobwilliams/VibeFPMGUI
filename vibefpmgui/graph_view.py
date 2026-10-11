@@ -5,7 +5,7 @@ auto-fit, image/SVG export).  Edges are ``PlotCurveItem`` curves with
 ``ArrowItem`` heads; packages are custom ``GraphicsObject`` boxes that can be
 dragged around.
 
-Several layouts (``LAYOUTS``), colour themes (``THEMES``) and edge styles
+Several layouts (``LAYOUTS``), color themes (``THEMES``) and edge styles
 (``EDGE_STYLES``) are available.  Clicking a package highlights everything it
 depends on and everything that depends on it.
 """
@@ -206,7 +206,7 @@ class NodeItem(pg.GraphicsObject):
         painter.setBrush(QBrush(gradient))
         painter.drawRoundedRect(self.rect, radius, radius)
 
-        # Kind accent stripe for themes that use one fill colour for all kinds.
+        # Kind accent stripe for themes that use one fill color for all kinds.
         if theme["border"]:
             body = QPainterPath()
             body.addRoundedRect(self.rect.adjusted(3, 3, -3, -3), radius - 2, radius - 2)
@@ -619,7 +619,7 @@ class DependencyGraphView(QWidget):
             f"background:{self.theme['background']}; color:{self.theme['subtext']};")
 
     def package_colors(self) -> dict[str, str]:
-        """The colour that identifies each package kind in the current theme."""
+        """The color that identifies each package kind in the current theme."""
         return {k: (node_border(self.theme, k).name() if self.theme["border"] else self.theme["fill"][k])
                 for k in KIND_ORDER}
 

@@ -1,4 +1,4 @@
-/* VibeFPMGUI website. Colours are tokens, redefined for the light theme. */
+/* VibeFPMGUI website. Colors are tokens, redefined for the light theme. */
 :root,
 :root[data-theme="dark"] {
   --bg: #0b0c10;
