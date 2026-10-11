@@ -27,6 +27,7 @@ LEFT = 6           # text starts after the change bars
 TAB = 4            # columns a tab counts as
 WORD_RE = re.compile(r"\S+")
 ERROR_SEVERITIES = {"error", "fatal error", "lint error"}  # drawn as a band across the minimap
+CODE_OPACITY = 0.45  # the code's blocks; markers, bars and bands are drawn at full strength
 
 
 class Minimap(QWidget):
@@ -135,7 +136,7 @@ class Minimap(QWidget):
         # The text.
         block = doc.findBlockByNumber(first)
         number = first
-        painter.setOpacity(0.75)
+        painter.setOpacity(CODE_OPACITY)  # (soft, so the markers on top stand out)
         while block.isValid() and number <= last:
             rows = self._rows.get(number)
             if rows is None:
