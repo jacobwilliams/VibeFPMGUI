@@ -7,8 +7,8 @@ are in the editor, unsaved changes included. Like the *Project files* tree it
 leaves out fpm's ``build`` folder, ``.git`` and compiled files; files ignored
 by git and hidden files only with *Ignored files* checked.
 
-Results are grouped by file in the *Search* tab; click one to open the file
-there. Replacing changes open files in the editor (not saved: Undo reverts
+Results are grouped by file in the *Search* tab, each line in the colors
+the editor would give it; click one to open the file there. Replacing changes open files in the editor (not saved: Undo reverts
 it) and saves the others, like *Rename Symbol*.
 """
 
@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple
 
+from pygments import lex
+from pygments.styles import get_style_by_name
 from qtpy.QtCore import QRect, QSize, Qt, QThread, QTimer, Signal
 from qtpy.QtGui import QColor, QFont, QFontMetrics, QPalette
 from qtpy.QtWidgets import (
@@ -43,6 +45,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from . import highlighter as hl
 from . import manifest as m
 from .lsp import TextEdit
 from .project_tree import SKIP_DIRS, SKIP_SUFFIXES, GitIgnore
@@ -51,6 +54,7 @@ MAX_RESULTS = 10_000          # matches shown (the search stops there)
 MAX_FILE_SIZE = 8 * 1024 * 1024
 PREVIEW_BEFORE = 50           # characters of the line shown before a match
 PREVIEW_AFTER = 200
+CONTEXT_LINES = 40            # lexed before a result's line, for its syntax colors
 
 
 # ------------------------------------------------------------------ search
@@ -82,6 +86,7 @@ class Match(NamedTuple):
     before: str      # the line's text around the match, for the results list
     text: str        # (the matched part of the first line)
     after: str
+    start: int = 0   # the column ``before`` starts at (after any "…")
 
 
 @dataclass
@@ -243,12 +248,14 @@ def find_matches(text: str, pattern: re.Pattern, limit: int = MAX_RESULTS) -> li
         line_end = len(text) if line_end < 0 else line_end
         end_line = line + text.count("\n", start, end)
         end_column = end - (text.rfind("\n", 0, end) + 1)
+        column = start - line_start
         before = text[line_start:start].lstrip()
+        first = column - len(before)
         if len(before) > PREVIEW_BEFORE:
-            before = "…" + before[-PREVIEW_BEFORE:]
-        out.append(Match(line + 1, start - line_start, end_line + 1, end_column, before,
+            before, first = "…" + before[-PREVIEW_BEFORE:], column - PREVIEW_BEFORE
+        out.append(Match(line + 1, column, end_line + 1, end_column, before,
                          text[start:min(end, line_end)][:PREVIEW_AFTER],
-                         text[min(end, line_end):line_end][:PREVIEW_AFTER]))
+                         text[min(end, line_end):line_end][:PREVIEW_AFTER], first))
         if len(out) >= limit:
             break
     return out
@@ -394,20 +401,40 @@ class _ResultDelegate(QStyledItemDelegate):
         painter.save()
         painter.setClipRect(rect)
 
-        def draw(text, font, pen, background=None, strike=False):
+        def draw(text, font, pen, background=None, strike=False, formats=None, column=0):
+            """Draw text from x on; ``formats``: the syntax colors of the
+            line's columns (``text`` starts at ``column``)."""
             nonlocal x
             if not text:
                 return
-            font = QFont(font)
-            font.setStrikeOut(strike)
-            width = QFontMetrics(font).horizontalAdvance(text)
-            box = QRect(x, rect.top(), width, rect.height())
+            runs = [(text, None)]
+            if formats:  # split where the syntax color changes
+                runs, start = [], 0
+                fmt_at = [formats[column + i] if column + i < len(formats) else None
+                          for i in range(len(text))]
+                for i in range(1, len(text) + 1):
+                    if i == len(text) or fmt_at[i] is not fmt_at[start]:
+                        runs.append((text[start:i], fmt_at[start]))
+                        start = i
+            pieces = []
+            for piece, fmt in runs:
+                f = QFont(font)
+                f.setStrikeOut(strike)
+                if fmt is not None:
+                    f.setBold(fmt.fontWeight() >= QFont.Bold)
+                    f.setItalic(fmt.fontItalic())
+                pieces.append((piece, f, fmt, QFontMetrics(f).horizontalAdvance(piece)))
             if background is not None:
-                painter.fillRect(box.adjusted(0, 2, 0, -2), background)
-            painter.setFont(font)
-            painter.setPen(pen)
-            painter.drawText(box, Qt.AlignVCenter | Qt.AlignLeft, text)
-            x += width
+                width = sum(p[3] for p in pieces)
+                painter.fillRect(QRect(x, rect.top() + 2, width, rect.height() - 4), background)
+            for piece, f, fmt, width in pieces:
+                painter.setFont(f)
+                brush = fmt.foreground() if fmt is not None else None
+                painter.setPen(brush.color() if brush is not None and brush.style() != Qt.NoBrush
+                               else pen)
+                painter.drawText(QRect(x, rect.top(), width, rect.height()), Qt.AlignVCenter | Qt.AlignLeft,
+                                 piece)
+                x += width
 
         if parts[0] == "file":
             _kind, name, folder, package, count = parts
@@ -430,16 +457,23 @@ class _ResultDelegate(QStyledItemDelegate):
             painter.setFont(opt.font)
             painter.drawText(pill, Qt.AlignCenter, text)
         else:
-            _kind, line, before, text, after = parts
+            _kind, path, found = parts
             mono = self.panel.mono
-            draw(f"{line:>5}  ", mono, dim)
-            draw(before, mono, color)
+            # Syntax colors (none on a selected row: its text color reads best there).
+            formats = None if selected else self.panel.line_formats(path, found.line)
+            draw(f"{found.line:>5}  ", mono, dim)
+            before = found.before
+            if before.startswith("…") and found.column - found.start < len(before):
+                draw("…", mono, dim)
+                before = before[1:]
+            draw(before, mono, color, formats=formats, column=found.start)
             if self.panel.replacing():
-                draw(text, mono, color, REMOVED_COLOR, strike=True)
-                draw(self.panel.preview(text), mono, color, ADDED_COLOR)
+                draw(found.text, mono, color, REMOVED_COLOR, strike=True, formats=formats,
+                     column=found.column)
+                draw(self.panel.preview(found.text), mono, color, ADDED_COLOR)
             else:
-                draw(text, mono, color, MATCH_COLOR)
-            draw(after, mono, color)
+                draw(found.text, mono, color, MATCH_COLOR, formats=formats, column=found.column)
+            draw(found.after, mono, color, formats=formats, column=found.column + len(found.text))
         painter.restore()
 
 
@@ -476,6 +510,10 @@ class SearchPanel(QWidget):
         self._worker: SearchWorker | None = None
         self._old_workers: set[SearchWorker] = set()
         self._changed: set[Path] = set()
+        self._style = get_style_by_name(hl.LIGHT_STYLE)  # (see refresh_style)
+        self._formats: dict = {}                        # token type -> format
+        self._file_lines: dict[Path, list[str]] = {}    # for syntax colors
+        self._line_formats: dict[tuple[Path, int], list | None] = {}
 
         self.replace_toggle = QToolButton()
         self.replace_toggle.setCheckable(True)
@@ -658,6 +696,66 @@ class SearchPanel(QWidget):
             return self.replace_edit.text()
         return preview_replacement(match_text, self._pattern, self._query, self.replace_edit.text())
 
+    # --------------------------------------------------- syntax colors
+    def refresh_style(self):
+        """Use the editor's syntax colors (View → Syntax Colors), on its
+        background."""
+        self._style = get_style_by_name(hl.style_name(QApplication.palette()))
+        self._formats.clear()
+        self._line_formats.clear()
+        palette = self.tree.palette()
+        palette.setColor(QPalette.Base, QColor(self._style.background_color))
+        palette.setColor(QPalette.Text, hl.style_text_color(self._style))
+        self.tree.setPalette(palette)
+        self.tree.viewport().update()
+
+    def _forget(self, path: Path):
+        """A file changed: lex it again when its lines are drawn."""
+        self._file_lines.pop(path, None)
+        for key in [k for k in self._line_formats if k[0] == path]:
+            del self._line_formats[key]
+
+    def line_formats(self, path: Path, line: int) -> list | None:
+        """The syntax format of each column of a line (None: plain), lexed
+        with the lines before it for context (so a line inside a
+        multi-line string or comment is colored as one)."""
+        key = (path, line)
+        if key in self._line_formats:
+            return self._line_formats[key]
+        lines = self._file_lines.get(path)
+        if lines is None:
+            text = self.provider()[1].get(path) if self.provider is not None else None
+            if text is None:
+                text = read_text(path) or ""
+            lines = text.split("\n")
+            if len(self._file_lines) > 100:  # (keep the most recent files)
+                self._file_lines.pop(next(iter(self._file_lines)))
+            self._file_lines[path] = lines
+        result = None
+        if 0 < line <= len(lines):
+            limit = 4000  # (long lines: only their start is shown anyway)
+            context = [s[:limit] for s in lines[max(0, line - 1 - CONTEXT_LINES):line]]
+            chunk = "\n".join(context)
+            offset = len(chunk) - len(context[-1])
+            lexer = hl.lexer_for_path(path)
+            lexer.stripnl = False  # (keep the positions as they are)
+            result = [None] * len(context[-1])
+            pos = 0
+            try:
+                for ttype, value in lex(chunk, lexer):
+                    end = pos + len(value)
+                    if end > offset:
+                        fmt = self._formats.get(ttype)
+                        if fmt is None:
+                            fmt = self._formats[ttype] = hl.token_format(self._style, ttype)
+                        for i in range(max(pos, offset), min(end, len(chunk))):
+                            result[i - offset] = fmt
+                    pos = end
+            except Exception:  # noqa: BLE001 - never let highlighting break the list
+                result = None
+        self._line_formats[key] = result
+        return result
+
     # ----------------------------------------------------------- search
     def start_search(self):
         self._timer.stop()
@@ -754,6 +852,8 @@ class SearchPanel(QWidget):
         self._update_buttons()
 
     def _clear_results(self):
+        self._file_lines.clear()
+        self._line_formats.clear()
         self.collapse_button.setText("Collapse All")
         self.tree.clear()
         self._results.clear()
@@ -782,7 +882,7 @@ class SearchPanel(QWidget):
         for found in result.matches:
             child = QTreeWidgetItem([f"{found.line}: {found.before}{found.text}{found.after}"])
             child.setToolTip(0, f"{result.path}:{found.line}")
-            child.setData(0, PARTS_ROLE, ("match", found.line, found.before, found.text, found.after))
+            child.setData(0, PARTS_ROLE, ("match", result.path, found))
             child.setData(0, RESULT_ROLE, (str(result.path), found))
             item.addChild(child)
 
@@ -843,6 +943,7 @@ class SearchPanel(QWidget):
         roots, open_texts, _ = self.provider()
         for path in paths:
             path = Path(path).resolve()
+            self._forget(path)
             result = self._results.get(path)
             if result is None:
                 root = self._root_for(path, roots)

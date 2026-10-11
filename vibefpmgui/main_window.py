@@ -538,6 +538,7 @@ class MainWindow(QMainWindow):
         self.search_panel.mono = self._mono_font()
         self.search_panel.open_requested.connect(self._open_search_match)
         self.search_panel.replace_requested.connect(self._replace_in_files)
+        self.search_panel.refresh_style()
         self.monitor_tabs.addTab(self.search_panel, "Search")
         self.bottom_split = QSplitter(Qt.Horizontal)
         self.bottom_split.addWidget(self.monitor_tabs)
@@ -565,6 +566,8 @@ class MainWindow(QMainWindow):
     def _apply_highlight_style(self):
         """The chosen Pygments style, or one matching the system's light/dark mode."""
         hl.apply_style(self.manifest_view, self.toml_highlighter)
+        if hasattr(self, "search_panel"):
+            self.search_panel.refresh_style()
 
     def _fill_style_menu(self):
         """View → Syntax Colors: Automatic, then every installed Pygments style."""

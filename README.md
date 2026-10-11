@@ -71,7 +71,8 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   `src/`), dependencies, and files ignored by git (left out by default, with
   fpm's `build` folder and compiled files). Files open in the editor are
   searched as they are, unsaved changes included, and the results follow
-  your edits. Results are grouped by file; click one to open the file with
+  your edits. Results are grouped by file, each line in the editor's syntax
+  colors; click one to open the file with
   the match selected. *Replace All* (or *Replace* on one match or file, from
   its right-click menu) previews each change in the list, asks first, then
   changes open files in the editor (not saved; Undo reverts) and saves the

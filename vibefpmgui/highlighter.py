@@ -113,6 +113,33 @@ def lexer_for_path(path) -> object:
         return TextLexer()
 
 
+def token_format(style, ttype) -> QTextCharFormat:
+    """How a Pygments style shows a token type."""
+    # Some lexers make their own token types (e.g. YAML's
+    # Literal.Scalar.Plain) that styles don't list: use the nearest
+    # parent type the style knows, as Pygments' own formatters do.
+    styled = ttype
+    while not style.styles_token(styled) and styled.parent is not None:
+        styled = styled.parent
+    spec = style.style_for_token(styled)
+    if ttype is Name and not spec["color"]:
+        # The TOML lexer marks keys as plain Name, which most styles
+        # leave uncolored; borrow the attribute-name color instead.
+        spec = style.style_for_token(Name.Attribute)
+    fmt = QTextCharFormat()
+    if spec["color"]:
+        fmt.setForeground(QColor("#" + spec["color"]))
+    if spec["bgcolor"]:
+        fmt.setBackground(QColor("#" + spec["bgcolor"]))
+    if spec["bold"]:
+        fmt.setFontWeight(QFont.Bold)
+    if spec["italic"]:
+        fmt.setFontItalic(True)
+    if spec["underline"]:
+        fmt.setFontUnderline(True)
+    return fmt
+
+
 def is_dark(palette: QPalette) -> bool:
     return palette.color(QPalette.Base).lightness() < 128
 
@@ -154,29 +181,7 @@ class PygmentsHighlighter(QSyntaxHighlighter):
     def _format(self, ttype) -> QTextCharFormat:
         fmt = self._formats.get(ttype)
         if fmt is None:
-            # Some lexers make their own token types (e.g. YAML's
-            # Literal.Scalar.Plain) that styles don't list: use the nearest
-            # parent type the style knows, as Pygments' own formatters do.
-            styled = ttype
-            while not self.style.styles_token(styled) and styled.parent is not None:
-                styled = styled.parent
-            spec = self.style.style_for_token(styled)
-            if ttype is Name and not spec["color"]:
-                # The TOML lexer marks keys as plain Name, which most styles
-                # leave uncolored; borrow the attribute-name color instead.
-                spec = self.style.style_for_token(Name.Attribute)
-            fmt = QTextCharFormat()
-            if spec["color"]:
-                fmt.setForeground(QColor("#" + spec["color"]))
-            if spec["bgcolor"]:
-                fmt.setBackground(QColor("#" + spec["bgcolor"]))
-            if spec["bold"]:
-                fmt.setFontWeight(QFont.Bold)
-            if spec["italic"]:
-                fmt.setFontItalic(True)
-            if spec["underline"]:
-                fmt.setFontUnderline(True)
-            self._formats[ttype] = fmt
+            fmt = self._formats[ttype] = token_format(self.style, ttype)
         return fmt
 
     def _relex(self, *_):
