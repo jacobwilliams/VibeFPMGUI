@@ -67,10 +67,8 @@ from . import lint
 from . import lsp as lsp_mod
 from .completion import CompletionPopup, SignaturePopup, global_rect
 from .highlighter import (
-    DARK_STYLE,
-    LIGHT_STYLE,
     PygmentsHighlighter,
-    is_dark,
+    apply_style,
     lexer_for_path,
 )
 from .icons import SYMBOL_INDENT, symbol_icon
@@ -1426,12 +1424,8 @@ class EditorTab(QWidget):
         self.editor._update_gutter_width()
 
     def refresh_style(self):
-        dark = is_dark(QApplication.palette())
-        self.highlighter.set_style(DARK_STYLE if dark else LIGHT_STYLE)
-        palette = self.editor.palette()
-        palette.setColor(QPalette.Base, self.highlighter.background())
-        palette.setColor(QPalette.Text, QColor("#f8f8f2") if dark else QColor("#1b1b1b"))
-        self.editor.setPalette(palette)
+        """Apply the syntax colours (View → Syntax Colours, or automatic)."""
+        apply_style(self.editor, self.highlighter)
         self.editor._update_extra_selections()
         self.editor.gutter.update()
 

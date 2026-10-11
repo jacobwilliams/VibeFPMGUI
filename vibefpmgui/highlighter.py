@@ -17,14 +17,64 @@ from pygments.lexers import (
     TOMLLexer,
     get_lexer_for_filename,
 )
-from pygments.styles import get_style_by_name
-from pygments.token import Name
+from pygments.styles import get_all_styles, get_style_by_name
+from pygments.token import Name, Text, Token
 from pygments.util import ClassNotFound
 from qtpy.QtCore import QTimer
 from qtpy.QtGui import QColor, QFont, QPalette, QSyntaxHighlighter, QTextCharFormat
+from qtpy.QtWidgets import QApplication
 
 LIGHT_STYLE = "default"
 DARK_STYLE = "monokai"
+AUTO = "auto"  # LIGHT_STYLE or DARK_STYLE, following the system's light/dark mode
+chosen_style = AUTO  # View → Syntax Colours (set by the main window)
+
+
+def style_is_dark(name: str) -> bool:
+    try:
+        return QColor(get_style_by_name(name).background_color).lightness() < 128
+    except ClassNotFound:
+        return False
+
+
+def available_styles() -> tuple[list[str], list[str]]:
+    """(light styles, dark styles): every Pygments style installed, sorted."""
+    light, dark = [], []
+    for name in sorted(get_all_styles()):
+        (dark if style_is_dark(name) else light).append(name)
+    return light, dark
+
+
+def style_name(palette: QPalette) -> str:
+    """The style to use: the chosen one, or automatic by light/dark mode."""
+    if chosen_style != AUTO:
+        try:
+            get_style_by_name(chosen_style)
+            return chosen_style
+        except ClassNotFound:
+            pass  # uninstalled since: fall back to automatic
+    return DARK_STYLE if is_dark(palette) else LIGHT_STYLE
+
+
+def style_text_color(style) -> QColor:
+    """The colour a style uses for plain text (styles that don't say get
+    near-white on a dark background, near-black on a light one)."""
+    for token in (Text, Token):
+        color = style.style_for_token(token).get("color")
+        if color:
+            return QColor("#" + color)
+    dark = QColor(style.background_color).lightness() < 128
+    return QColor("#f8f8f2") if dark else QColor("#1b1b1b")
+
+
+def apply_style(widget, highlighter):
+    """Highlight with the current style and give the text widget its
+    background and text colours."""
+    highlighter.set_style(style_name(QApplication.palette()))
+    palette = widget.palette()
+    palette.setColor(QPalette.Base, highlighter.background())
+    palette.setColor(QPalette.Text, style_text_color(highlighter.style))
+    widget.setPalette(palette)
 
 
 # Fortran extensions Pygments doesn't know (or maps to another language).

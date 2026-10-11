@@ -68,7 +68,10 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   build's warnings and errors as markers in the gutter (hover for the
   message) and open at the first one. Saving the project's `fpm.toml`
   reloads the project. *View → Open Files in Built-in Editor* switches back
-  to your default application.
+  to your default application. *View → Syntax Colours* picks any installed
+  Pygments style (listed as light or dark) for the editor and `fpm.toml`;
+  *Automatic*, the default, uses `default` in light mode and `monokai` in
+  dark mode.
 * Linting: free-form Fortran files (`.f90`, `.F90`, …) open in the editor
   are checked with [fortitude](https://fortitude.readthedocs.io) when opened
   and as you type (unsaved text included). Findings are underlined and get a

@@ -31,7 +31,6 @@ from qtpy.QtCore import (
 from qtpy.QtGui import (
     QAction,
     QActionGroup,
-    QColor,
     QDesktopServices,
     QFont,
     QFontDatabase,
@@ -71,6 +70,7 @@ from qtpy.QtWidgets import (
 from . import __version__, ansi, dep_updates, formatter, lint, lsp
 from . import ai_review as ai
 from . import build_outputs as bo
+from . import highlighter as hl
 from . import manifest as m
 from .about import FPM_DOCS_URL, AboutDialog
 from .build_monitor import BuildMonitor, set_ui_scale
@@ -83,7 +83,7 @@ from .graph_view import (
     THEME_CHOICES,
     DependencyGraphView,
 )
-from .highlighter import DARK_STYLE, LIGHT_STYLE, PygmentsHighlighter, is_dark
+from .highlighter import PygmentsHighlighter
 from .icons import app_icon, make_icon
 from .project_tree import ProjectTree, reveal_in_file_manager
 from .references_panel import ReferencesPanel
@@ -241,6 +241,11 @@ class MainWindow(QMainWindow):
         self.fortls_action.setStatusTip("Hover information, Go to Definition, the outline and "
                                         "Go to Symbol for Fortran files, from fortls")
         view_menu.addAction(self.fortls_action)
+        view_menu.addSeparator()
+        hl.chosen_style = self.settings.value("syntax_style", hl.AUTO) or hl.AUTO
+        self.style_menu = view_menu.addMenu("Syntax Colours")
+        self.style_menu.setStatusTip("The Pygments colour style for the editor and fpm.toml")
+        self.style_menu.aboutToShow.connect(self._fill_style_menu)
 
         # --- left: build options + commands
         options = QGroupBox("Build options")
@@ -480,13 +485,37 @@ class MainWindow(QMainWindow):
         self._build_help_menu()
 
     def _apply_highlight_style(self):
-        """Pick a light or dark Pygments style to match the system palette."""
-        dark = is_dark(QApplication.palette())
-        self.toml_highlighter.set_style(DARK_STYLE if dark else LIGHT_STYLE)
-        palette = self.manifest_view.palette()
-        palette.setColor(QPalette.Base, self.toml_highlighter.background())
-        palette.setColor(QPalette.Text, QColor("#f8f8f2") if dark else QColor("#1b1b1b"))
-        self.manifest_view.setPalette(palette)
+        """The chosen Pygments style, or one matching the system's light/dark mode."""
+        hl.apply_style(self.manifest_view, self.toml_highlighter)
+
+    def _fill_style_menu(self):
+        """View → Syntax Colours: Automatic, then every installed Pygments style."""
+        menu = self.style_menu
+        menu.clear()
+        group = QActionGroup(menu)
+        auto = menu.addAction(f"Automatic ({hl.LIGHT_STYLE} / {hl.DARK_STYLE}, following light or dark mode)")
+        auto.setData(hl.AUTO)
+        menu.addSeparator()
+        light, dark = hl.available_styles()
+        actions = [auto]
+        for title, names in (("Light Styles", light), ("Dark Styles", dark)):
+            sub = menu.addMenu(title)
+            for name in names:
+                action = sub.addAction(name)
+                action.setData(name)
+                actions.append(action)
+        for action in actions:
+            action.setCheckable(True)
+            action.setChecked(action.data() == hl.chosen_style)
+            group.addAction(action)
+            action.triggered.connect(lambda _checked=False, a=action: self.set_syntax_style(a.data()))
+
+    def set_syntax_style(self, name: str):
+        hl.chosen_style = name
+        self.settings.setValue("syntax_style", name)
+        self._apply_highlight_style()
+        for editor in self.editors():
+            editor.refresh_style()
 
     def changeEvent(self, event):
         if event.type() == QEvent.PaletteChange and hasattr(self, "toml_highlighter"):
