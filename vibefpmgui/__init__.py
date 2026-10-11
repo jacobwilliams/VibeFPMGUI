@@ -1,4 +1,126 @@
-"""A Qt GUI for the Fortran Package Manager (fpm)."""
+"""A desktop GUI for the Fortran Package Manager (fpm).
+
+VibeFPMGUI opens an `fpm.toml` and runs fpm's commands (build, run, test,
+update, clean) with live progress, shows the project's dependencies as an
+interactive graph, and has a built-in Fortran editor with a language server,
+linting, formatting and an AI code reviewer that runs on your own computer.
+It is written in Python with Qt (PySide6, through qtpy).
+
+*VibeFPMGUI is an experimental, vibe-coded project: expect rough edges.*
+
+## Links
+
+* **Website:** <https://jacobwilliams.github.io/VibeFPMGUI/>
+* **Source code and issues:** <https://github.com/jacobwilliams/VibeFPMGUI>
+* **fpm:** <https://fpm.fortran-lang.org>
+* Tools it uses: [fortls](https://fortls.fortran-lang.org) (language server),
+  [fortitude](https://fortitude.readthedocs.io) (linter),
+  [fprettify](https://github.com/fortran-lang/fprettify) (formatter),
+  [Ollama](https://ollama.com) (local AI models),
+  [pyqtgraph](https://www.pyqtgraph.org) (graph) and
+  [Pygments](https://pygments.org) (syntax highlighting).
+
+## Running it
+
+```sh
+pixi run start                      # reopens the last project
+pixi run start path/to/fpm.toml     # or a project folder
+pixi run demo                       # the demo project in examples/demo
+```
+
+With pip (Python 3.11+): `pip install .` (add `.[fortran]` for fortls,
+fortitude and fprettify, `.[ai]` for the Ollama client), then
+`vibefpmgui [path/to/fpm.toml]`. fpm and a Fortran compiler must be on the
+`PATH`. The program starts in `vibefpmgui.main_window.main`.
+
+The editor tools are optional. Without fortls or fortitude their *View*
+menu item says "not found" and the feature is off; without fprettify the
+*Format* button is greyed out; AI review needs Ollama only when you start one.
+
+## Project structure
+
+**Main window**
+
+| Module | What it does |
+|---|---|
+| `vibefpmgui.main_window` | The window: build options, toolbar and menus, running fpm, and wiring the panels together |
+| `vibefpmgui.manifest` | Reading `fpm.toml` files and resolving the dependency tree (no Qt) |
+| `vibefpmgui.graph_view` | The interactive dependency graph (pyqtgraph) |
+| `vibefpmgui.project_tree` | The *Project files* tree, with fpm folder badges and `.gitignore` handling |
+| `vibefpmgui.build_outputs` | The *Build outputs* tab: what fpm keeps in `build/` |
+| `vibefpmgui.dep_updates` | *Check for Dependency Updates* (`git ls-remote`) |
+| `vibefpmgui.about` | The About window |
+
+**Build, test and run panels**
+
+| Module | What it does |
+|---|---|
+| `vibefpmgui.build_monitor` | The *Build* tab: a live table of the files fpm compiles, and compiler-message parsing |
+| `vibefpmgui.test_monitor` | The *Tests* tab: each test's progress, time and output |
+| `vibefpmgui.run_monitor` | The *Run* tab (the Tests tab with different wording) |
+| `vibefpmgui.test_runner` | The small wrapper given to `fpm test --runner` to mark where each test starts and ends |
+| `vibefpmgui.ansi` | Terminal color codes in program output, shown as colors |
+
+**Editor**
+
+| Module | What it does |
+|---|---|
+| `vibefpmgui.editor` | The editor tab: gutter markers, find/replace, hover popup, outline, saving |
+| `vibefpmgui.highlighter` | Pygments syntax highlighting and the *Syntax Colors* styles |
+| `vibefpmgui.lsp` | The client for the fortls language server (hover, definition, completion, references, rename) |
+| `vibefpmgui.completion` | The completion list and argument-hint popups |
+| `vibefpmgui.hover_card` | The HTML of the hover card |
+| `vibefpmgui.symbol_search` | *Go to Symbol in Project* |
+| `vibefpmgui.references_panel` | The *References* tab |
+| `vibefpmgui.rename_dialog` | The *Rename Symbol* preview |
+| `vibefpmgui.lint` | Linting with fortitude |
+| `vibefpmgui.formatter` | Formatting with fprettify |
+
+**AI review**
+
+| Module | What it does |
+|---|---|
+| `vibefpmgui.ai_review` | Prompting a local model through Ollama and parsing its findings |
+| `vibefpmgui.review_monitor` | The *Review* tab |
+
+**Shared helpers**
+
+| Module | What it does |
+|---|---|
+| `vibefpmgui.icons` | Toolbar icons, symbol badges and the app icon, drawn with QPainter |
+| `vibefpmgui.compat` | Things that differ between macOS, Linux and Windows |
+
+## How it fits together
+
+* **fpm runs as a child process** (`QProcess`). Its output goes to the
+  *Output* panel and is parsed line by line for the *Build* tab. fpm only
+  prints compiler output when a compile fails, so warnings are read from
+  its per-file `.o.log` files.
+* **Tests and programs run through `vibefpmgui.test_runner`**, which fpm
+  calls for each one (`--runner`). The markers it prints tell the *Tests*
+  and *Run* tabs where each starts and ends and how it exited.
+* **The editor's Fortran features use separate programs:** fortls (a
+  long-running language server, see `vibefpmgui.lsp.LspClient`), fortitude
+  and fprettify (run on the editor's text through stdin), and Ollama (over
+  HTTP, on a worker thread). None of them blocks the window.
+* **Settings** are stored with `QSettings`, some per project (keyed by the
+  manifest's path). Set the `VIBEFPMGUI_SETTINGS` environment variable to an
+  `.ini` path to use a separate settings file, e.g. for testing.
+
+## Development
+
+```sh
+pixi run ruff check .     # lint the code
+pixi run docs             # these API docs, into web/api
+pixi run docs-serve       # the same, live in the browser
+```
+
+Docstrings are Markdown with Google-style sections (`Args:`, `Returns:`,
+`Raises:`); a name in backticks, such as `vibefpmgui.lsp.LspClient`,
+becomes a link here.
+
+MIT License. The fpm logo is © 2020 fpm contributors (MIT License).
+"""
 
 __version__ = "0.0.3"
 __docformat__ = "google"  # docstrings: Markdown with Google-style sections (for pdoc)
