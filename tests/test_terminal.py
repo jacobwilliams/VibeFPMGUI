@@ -429,3 +429,28 @@ def test_tab_stops_follow_the_width():
     assert screen.cursor.x == 97 and screen.buffer[0][96].data == "b"
     screen.resize(3, 40)
     assert max(screen.tabstops) < 40
+
+
+def test_another_project_restarts_the_shell_there(qtbot, panel, project, tmp_path):
+    other = tmp_path / "other"
+    other.mkdir()
+    pid = panel.shell.pid
+    panel.set_directory(project)  # (the same project, reloaded: the shell stays)
+    assert panel.shell.pid == pid
+    panel.set_directory(other)
+    qtbot.waitUntil(lambda: panel.shell.is_running() and panel.shell.pid != pid, timeout=5_000)
+    run(qtbot, panel, "pwd -P", str(other.resolve()))
+    assert "other" in panel.title.text()
+
+
+def test_opening_another_project_moves_the_terminal(qtbot, window, conflict_project, monkeypatch):
+    monkeypatch.setenv("SHELL", "/bin/sh")
+    panel = window.terminal_panel
+    window.terminal_action.trigger()
+    qtbot.waitUntil(lambda: panel.shell is not None and panel.shell.is_running(), timeout=5_000)
+    pid = panel.shell.pid
+    window.reload()  # (same project: same shell)
+    assert panel.shell.pid == pid
+    window.open_manifest(conflict_project / "fpm.toml")
+    qtbot.waitUntil(lambda: panel.shell.is_running() and panel.shell.pid != pid, timeout=5_000)
+    assert panel.directory == conflict_project

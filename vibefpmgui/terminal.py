@@ -1100,9 +1100,15 @@ class TerminalPanel(QWidget):
         self.refresh_colors()
 
     def set_directory(self, directory: Path | None):
-        """Where a new shell starts (the project's folder)."""
-        self.directory = directory if directory and directory.is_dir() else Path.home()
-        if self.shell is None:
+        """The project's folder: where the shell starts. A different one (another
+        project opened) restarts a running shell there; the same one (the
+        project reloaded) leaves it alone."""
+        directory = directory if directory and directory.is_dir() else Path.home()
+        moved = directory.resolve() != self.directory.resolve()
+        self.directory = directory
+        if moved and self.shell is not None and self.shell.is_running():
+            self.restart(focus=False)
+        elif self.shell is None:
             self._update_title()
 
     def _update_title(self, note: str = ""):
@@ -1141,12 +1147,14 @@ class TerminalPanel(QWidget):
         self._update_title("exited — Restart for a new shell")
         self.view.feed(b"\r\n[The shell has exited.]\r\n")
 
-    def restart(self):
+    def restart(self, focus: bool = True):
+        """A new shell (in ``directory``), on a clean screen."""
         self.shutdown()
         self.view.feed(b"\x1bc")  # (reset: a clean screen)
         self.view.screen.history.clear()
         self.start()
-        self.focus()
+        if focus:
+            self.focus()
 
     def focus(self):
         self.view.setFocus()
