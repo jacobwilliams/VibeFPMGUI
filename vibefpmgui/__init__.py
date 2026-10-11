@@ -127,7 +127,9 @@ Docstrings are Markdown with Google-style sections (`Args:`, `Returns:`,
 `Raises:`); a name in backticks, such as `vibefpmgui.lsp.LspClient`,
 becomes a link here.
 
-MIT License. The fpm logo is © 2020 fpm contributors (MIT License).
+MIT License. The fpm logo is © 2020 fpm contributors (MIT License). The
+Fortran file icon is adapted from [vscode-icons](https://github.com/vscode-icons/vscode-icons)
+(MIT License).
 """
 
 __version__ = "0.0.3"

@@ -39,7 +39,7 @@ from qtpy.QtWidgets import (
 from . import manifest as m
 from .build_monitor import SOURCE_EXTS
 from .compat import file_manager_name, reveal_label
-from .icons import badged_icon
+from .icons import FORTRAN_SUFFIXES, badged_icon, fortran_file_icon
 
 PATH_ROLE = Qt.UserRole + 1
 KIND_ROLE = Qt.UserRole + 2    # "package", "group", "dir", "file", "placeholder"
@@ -525,7 +525,8 @@ class ProjectTree(QWidget):
         key = path.suffix.lower() or path.name
         icon = self._icon_cache.get(key)
         if icon is None:
-            icon = self._icon_cache[key] = self._icons.icon(QFileInfo(str(path)))
+            icon = self._icon_cache[key] = (fortran_file_icon() if key in FORTRAN_SUFFIXES
+                                            else self._icons.icon(QFileInfo(str(path))))
         return icon
 
     # -------------------------------------------------- build results marks
