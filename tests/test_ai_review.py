@@ -200,12 +200,15 @@ def test_review_downloads_a_missing_model(qtbot, window, project, ollama, monkey
     assert ollama.pulled == [window.ai_model] and ollama.chats
 
 
-def test_review_declined_download_does_nothing(window, project, ollama, monkeypatch):
+def test_review_declined_download_does_nothing(qtbot, window, project, ollama, monkeypatch):
     ollama.models = []
-    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.No)
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: asked.append(a[2]) or QMessageBox.No)
     open_editor(window, project / "src/foo.f90")
     window.start_review()
+    qtbot.waitUntil(lambda: bool(asked), timeout=5_000)
     assert not ollama.pulled and not ollama.chats and window._ai_thread is None
+    assert window.review_action.isEnabled()  # (ready for another try)
 
 
 def test_stop_review(qtbot, window, project, ollama):
@@ -219,7 +222,7 @@ def test_stop_review(qtbot, window, project, ollama):
     assert not window.stop_review_action.isEnabled()
 
 
-def test_review_without_ollama(window, project, monkeypatch):
+def test_review_without_ollama(qtbot, window, project, monkeypatch):
     warnings = []
     monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warnings.append(a[2]))
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: warnings.append(a[2]))
@@ -233,7 +236,8 @@ def test_review_without_ollama(window, project, monkeypatch):
     monkeypatch.setattr(ai, "server_running", lambda host=None: False)
     monkeypatch.setattr(ai, "ollama_executable", lambda: None)
     window.start_review()
-    assert "wasn't found" in warnings[-1]
+    qtbot.waitUntil(lambda: "wasn't found" in warnings[-1], timeout=5_000)
+    assert window.review_action.isEnabled()
 
 
 def test_review_failure_is_shown(qtbot, window, project, ollama):
@@ -253,17 +257,45 @@ def test_review_failure_is_shown(qtbot, window, project, ollama):
     assert "See AI → Model" in window.statusBar().currentMessage()
 
 
-def test_model_and_focus_menus(window, ollama, monkeypatch):
+def model_menu_labels(qtbot, window) -> list[str]:
+    """The Model menu once Ollama has answered (it's asked on a pool thread)."""
     window._fill_model_menu()
-    labels = [a.text() for a in window.model_menu.actions()]
+    qtbot.waitUntil(lambda: not window._asking_models, timeout=5_000)
+    window._show_model_menu()  # (the open menu is refilled by itself; this one isn't shown)
+    return [a.text() for a in window.model_menu.actions()]
+
+
+def test_model_and_focus_menus(qtbot, window, ollama, monkeypatch):
+    window._fill_model_menu()
+    assert "(Checking for installed models…)" in [a.text() for a in window.model_menu.actions()]
+    labels = model_menu_labels(qtbot, window)
     assert "qwen2.5-coder:7b" in labels and "Other Model…" in labels
     monkeypatch.setattr("vibefpmgui.main_window.QInputDialog.getText", lambda *a, **k: ("gpt-oss:20b", True))
     window._choose_other_model()
     assert window.ai_model == "gpt-oss:20b" and window.settings.value("ai_model") == "gpt-oss:20b"
-    window._fill_model_menu()
-    assert "gpt-oss:20b (not downloaded yet)" in [a.text() for a in window.model_menu.actions()]
+    assert "gpt-oss:20b (not downloaded yet)" in model_menu_labels(qtbot, window)
     window._set_ai_focus("bugs")
     assert window.settings.value("ai_focus") == "bugs"
     ollama.error = "down"
-    window._fill_model_menu()
-    assert any("isn't running" in a.text() for a in window.model_menu.actions())
+    assert any("isn't running" in label for label in model_menu_labels(qtbot, window))
+
+
+def test_the_window_never_waits_for_ollama(qtbot, window, project, ollama, monkeypatch):
+    """Asking Ollama can take seconds (a model loading): it's done on a pool
+    thread, and AI Review can't be clicked again meanwhile (a second server)."""
+    import time
+
+    real = ai.server_running
+    monkeypatch.setattr(ai, "server_running", lambda host=None: time.sleep(0.8) or real(host))
+    open_editor(window, project / "src/foo.f90")
+    started = time.monotonic()
+    window.start_review()
+    assert time.monotonic() - started < 0.3  # (didn't wait for the answer)
+    assert not window.review_action.isEnabled()  # (getting ready)
+    window.start_review()  # (clicked again: ignored)
+    wait_for_review(qtbot, window)
+    assert len(ollama.chats) == 1
+    started = time.monotonic()
+    monkeypatch.setattr(ai, "installed_models", lambda host=None: time.sleep(0.8) or ["m"])
+    window._fill_model_menu()  # (the Model menu opening)
+    assert time.monotonic() - started < 0.3

@@ -2462,7 +2462,8 @@ class MainWindow(QMainWindow):
     def _update_review_actions(self):
         """AI review needs an editor tab in front (and no review running)."""
         has_editor = self.current_editor() is not None
-        self.review_action.setEnabled(has_editor and self._ai_thread is None)
+        self.review_action.setEnabled(has_editor and self._ai_thread is None
+                                      and not getattr(self, "_ai_starting", False))
         self.clear_review_action.setEnabled(has_editor)
 
     def _build_edit_menu(self):
@@ -3127,6 +3128,10 @@ class MainWindow(QMainWindow):
         self._ai_worker = None
         self._ai_editor: EditorTab | None = None
         self._ollama_process: QProcess | None = None
+        # Ollama is asked things on a pool thread (see ai.call_in_background):
+        self._ai_starting = False  # a review is getting ready (server, model): AI Review waits
+        self._known_models: list[str] | None = None  # installed models, as last heard (None: not yet)
+        self._asking_models = False
 
         menu = self.menuBar().addMenu("&AI")
         self.review_action = menu.addAction("Review Current File")
@@ -3175,10 +3180,23 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"AI model: {name}", 4000)
 
     def _fill_model_menu(self):
-        """Installed models (if Ollama is running), plus the current choice."""
+        """Installed models (if Ollama is running), plus the current choice:
+        the list as last heard, at once, while Ollama is asked again."""
+        self._show_model_menu()
+        if ai.ollama_available() and not self._asking_models:
+            self._asking_models = True
+            ai.call_in_background(ai.installed_models, self._models_heard, self)
+
+    def _models_heard(self, models: list[str]):
+        self._asking_models = False
+        self._known_models = models
+        if self.model_menu.isVisible():
+            self._show_model_menu()
+
+    def _show_model_menu(self):
         menu = self.model_menu
         menu.clear()
-        models = ai.installed_models() if ai.ollama_available() else []
+        models = self._known_models or []
         names = sorted(set(models) | {self.ai_model})
         group = QActionGroup(menu)
         for name in names:
@@ -3188,7 +3206,10 @@ class MainWindow(QMainWindow):
             action.setChecked(name == self.ai_model)
             action.triggered.connect(lambda _=False, n=name: self._set_ai_model(n))
             group.addAction(action)
-        if not models:
+        if self._known_models is None and ai.ollama_available():
+            note = menu.addAction("(Checking for installed models…)")
+            note.setEnabled(False)
+        elif not models:
             note = menu.addAction("(Ollama isn't running — installed models appear once it is)")
             note.setEnabled(False)
         menu.addSeparator()
@@ -3208,7 +3229,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "AI review", "Open a file in the editor first "
                                     "(double-click a file, or File → Open File in Editor).")
             return
-        if self._ai_thread is not None:
+        if self._ai_thread is not None or self._ai_starting:
             return
         if not ai.ollama_available():
             QMessageBox.warning(self, "AI review", "The 'ollama' Python package isn't installed.\n"
@@ -3217,13 +3238,25 @@ class MainWindow(QMainWindow):
         self._ai_editor = editor
         self._ensure_ollama(self._check_model)
 
+    def _set_ai_starting(self, on: bool):
+        """A review is getting ready (asking Ollama, starting it): AI Review
+        waits, so a second click doesn't start a second server."""
+        self._ai_starting = on
+        self._update_review_actions()
+
     def _ensure_ollama(self, then):
-        """Start "ollama serve" if no server answers, then call ``then``."""
-        if ai.server_running():
+        """Start "ollama serve" if no server answers, then call ``then``
+        (Ollama is asked on a pool thread: the window never waits for it)."""
+        self._set_ai_starting(True)
+        ai.call_in_background(ai.server_running, lambda up: self._server_checked(up, then), self)
+
+    def _server_checked(self, up: bool, then):
+        if up:
             then()
             return
         exe = ai.ollama_executable()
         if exe is None:
+            self._set_ai_starting(False)
             QMessageBox.warning(self, "AI review", "Ollama isn't running and the 'ollama' program "
                                 "wasn't found. Run 'pixi install', or install Ollama from ollama.com.")
             return
@@ -3235,9 +3268,13 @@ class MainWindow(QMainWindow):
         deadline = time.monotonic() + 20
 
         def poll():
-            if ai.server_running():
+            ai.call_in_background(ai.server_running, polled, self)
+
+        def polled(up: bool):
+            if up:
                 then()
             elif time.monotonic() > deadline or self._ollama_process.state() == QProcess.NotRunning:
+                self._set_ai_starting(False)
                 self.review_monitor.finish(False, "Could not start the Ollama server.")
             else:
                 QTimer.singleShot(300, poll)
@@ -3245,8 +3282,13 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(300, poll)
 
     def _check_model(self):
+        """Is the model downloaded? (Asked on a pool thread.)"""
+        ai.call_in_background(ai.installed_models, self._model_checked, self)
+
+    def _model_checked(self, installed: list[str]):
+        self._known_models = installed
+        self._set_ai_starting(False)  # (from here a worker thread, or nothing, follows)
         model = self.ai_model if ":" in self.ai_model else self.ai_model + ":latest"
-        installed = ai.installed_models()
         if model in installed or self.ai_model in installed:
             self._run_review()
             return

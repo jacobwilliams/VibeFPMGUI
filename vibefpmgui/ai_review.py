@@ -27,7 +27,7 @@ import threading
 import time
 from dataclasses import dataclass
 
-from qtpy.QtCore import QObject, QThread, Signal, Slot
+from qtpy.QtCore import QObject, QRunnable, QThread, QThreadPool, Signal, Slot
 
 DEFAULT_MODEL = "qwen2.5-coder:7b"
 MAX_ANSWER_TOKENS = 1500  # plenty for a list of findings; stops runaway answers
@@ -247,6 +247,42 @@ def installed_models(host: str | None = DEFAULT_HOST) -> list[str]:
         if name:
             names.append(name)
     return sorted(names)
+
+
+# ------------------------------------------------- blocking calls, elsewhere
+class _Receiver(QObject):
+    """Brings a background call's result to the GUI thread (it lives there,
+    so its signal is delivered there) and hands it to ``then``."""
+
+    done = Signal(object)
+
+    def __init__(self, then, parent=None):
+        super().__init__(parent)
+        self._then = then
+        self.done.connect(self._deliver)
+
+    def _deliver(self, result):
+        self.deleteLater()
+        self._then(result)
+
+
+class _Call(QRunnable):
+    def __init__(self, fn, receiver: _Receiver):
+        super().__init__()
+        self.fn, self.receiver = fn, receiver
+
+    def run(self):
+        result = self.fn()
+        try:
+            self.receiver.done.emit(result)
+        except RuntimeError:
+            pass  # (the window that asked has closed)
+
+
+def call_in_background(fn, then, parent: QObject):
+    """Run ``fn()`` (e.g. `server_running`, `installed_models`: they can take
+    seconds) on a pool thread, then ``then(result)`` in the GUI thread."""
+    QThreadPool.globalInstance().start(_Call(fn, _Receiver(then, parent)))
 
 
 class ReviewWorker(QObject):
