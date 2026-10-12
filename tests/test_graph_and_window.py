@@ -189,3 +189,19 @@ def test_tab_list_and_close_all(window, project):
     assert window.current_editor().path.name == "foo.f90"
     window.close_all_editor_tabs()
     assert window.editors() == []
+
+
+def test_fixed_tabs(window, project):
+    tabs = window.tabs
+    assert [tabs.tabText(i) for i in range(tabs.count())] == ["Dependency graph", "Build outputs"]
+    from qtpy.QtWidgets import QTabBar
+
+    for index in (0, 1):  # (no close buttons)
+        assert tabs.tabBar().tabButton(index, QTabBar.RightSide) is None
+        assert tabs.tabBar().tabButton(index, QTabBar.LeftSide) is None
+    open_editor(window, project / "fpm.toml")  # (the manifest: an ordinary, closable editor tab)
+    assert tabs.tabText(2).endswith("fpm.toml")
+    menu = QMenu()
+    window._fill_tab_list(menu)
+    kinds = ["separator" if a.isSeparator() else a.text() for a in menu.actions()]
+    assert kinds[:4] == ["Dependency graph", "Build outputs", "separator", "fpm.toml"]

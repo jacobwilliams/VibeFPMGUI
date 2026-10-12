@@ -88,7 +88,6 @@ from .graph_view import (
     THEME_CHOICES,
     DependencyGraphView,
 )
-from .highlighter import PygmentsHighlighter
 from .icons import app_icon, make_icon
 from .project_search import SearchPanel, search_roots
 from .project_tree import ProjectTree, reveal_in_file_manager
@@ -438,12 +437,6 @@ class MainWindow(QMainWindow):
         gl.addWidget(self.legend)
 
         mono = QFontDatabase.systemFont(QFontDatabase.FixedFont)
-        self.manifest_view = QPlainTextEdit()
-        self.manifest_view.setReadOnly(True)
-        self.manifest_view.setFont(mono)
-        self.toml_highlighter = PygmentsHighlighter(self.manifest_view.document())
-        self._apply_highlight_style()
-
         self.tabs = QTabWidget()
         self.tabs.setTabBar(ScrollingTabBar())  # (before any tabs are added)
         self.tabs.setDocumentMode(True)
@@ -466,7 +459,6 @@ class MainWindow(QMainWindow):
         self.tab_list_button.setMenu(tab_list)
         self.tabs.setCornerWidget(self.tab_list_button, Qt.TopRightCorner)
         self.tabs.addTab(graph_tab, "Dependency graph")
-        self.tabs.addTab(self.manifest_view, "fpm.toml")
         self.outputs_view = bo.BuildOutputsView()
         self.outputs_view.run_requested.connect(self.run_program)
         self.outputs_view.reveal_requested.connect(reveal_in_file_manager)
@@ -476,7 +468,7 @@ class MainWindow(QMainWindow):
         # Files opened in the built-in editor get their own closable tabs.
         self.tabs.setTabsClosable(True)
         self.tabs.setMovable(True)
-        for index in (0, 1, 2):  # graph, fpm.toml and build outputs stay open
+        for index in (0, 1):  # the graph and the build outputs stay open
             for side in (QTabBar.LeftSide, QTabBar.RightSide):
                 self.tabs.tabBar().setTabButton(index, side, None)
         self.tabs.tabCloseRequested.connect(self.close_editor)
@@ -600,7 +592,6 @@ class MainWindow(QMainWindow):
 
     def _apply_highlight_style(self):
         """The chosen Pygments style, or one matching the system's light/dark mode."""
-        hl.apply_style(self.manifest_view, self.toml_highlighter)
         for tree in getattr(self, "result_trees", []):
             tree.refresh_style()
 
@@ -634,7 +625,7 @@ class MainWindow(QMainWindow):
             editor.refresh_style()
 
     def changeEvent(self, event):
-        if event.type() == QEvent.PaletteChange and hasattr(self, "toml_highlighter"):
+        if event.type() == QEvent.PaletteChange and hasattr(self, "terminal_panel"):  # (the window is built)
             self._apply_highlight_style()
             self.graph_view.refresh_theme()  # "Auto" theme follows the system
             self._update_legend()
@@ -754,7 +745,6 @@ class MainWindow(QMainWindow):
         for view in (self.console, self.test_output):
             view.setFont(mono)
         code = self._mono_font(editor=True)  # View → Editor Font
-        self.manifest_view.setFont(code)
         for editor in self.editors():
             editor.set_font(code)
         if hasattr(self, "terminal_panel"):
@@ -1323,10 +1313,6 @@ class MainWindow(QMainWindow):
     def reload(self):
         if not self.manifest_path:
             return
-        try:
-            self.manifest_view.setPlainText(self.manifest_path.read_text())
-        except OSError as exc:
-            self.manifest_view.setPlainText(str(exc))
         try:
             self.graph = m.resolve(self.manifest_path)
         except (OSError, tomllib.TOMLDecodeError) as exc:
@@ -1927,7 +1913,8 @@ class MainWindow(QMainWindow):
             action.setChecked(index == current)
             action.setToolTip(self.tabs.tabToolTip(index))
             action.triggered.connect(lambda _checked=False, i=index: self.tabs.setCurrentIndex(i))
-            if index == 2 and self.tabs.count() > 3:
+            following = self.tabs.widget(index + 1)
+            if not isinstance(self.tabs.widget(index), EditorTab) and isinstance(following, EditorTab):
                 menu.addSeparator()  # the fixed tabs, then the open files
         menu.addSeparator()
         close_all = menu.addAction("Close All Editor Tabs")
