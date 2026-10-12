@@ -267,11 +267,19 @@ class CheckWorker(QObject):
 
     @Slot()
     def run(self):
-        with ThreadPoolExecutor(max_workers=6) as pool:
-            futures = {pool.submit(check_dependency, c): i for i, c in enumerate(self.checks)}
-            for future in as_completed(futures):
-                self.result.emit(futures[future], future.result())
-        self.finished.emit()
+        try:
+            with ThreadPoolExecutor(max_workers=6) as pool:
+                futures = {pool.submit(check_dependency, c): i for i, c in enumerate(self.checks)}
+                for future in as_completed(futures):
+                    row = futures[future]
+                    try:
+                        check = future.result()
+                    except Exception as exc:  # noqa: BLE001 - that row's error, not the end of the check
+                        check = self.checks[row]
+                        check.status, check.message = ERROR, f"Could not be checked: {exc}"
+                    self.result.emit(row, check)
+        finally:
+            self.finished.emit()  # (always: it ends the thread)
 
 
 # ------------------------------------------------------------------ dialog

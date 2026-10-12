@@ -482,3 +482,38 @@ def test_run_in_terminal_types_the_command(qtbot, window, project, monkeypatch):
     assert window.panel_in_front(window.terminal_panel)
     qtbot.waitUntil(lambda: "hi from terminal the" in screen(window.terminal_panel).replace("\n", ""),
                     timeout=5_000)
+
+
+def test_input_the_shell_isnt_reading_doesnt_freeze_the_app(qtbot):
+    """A shell that isn't reading (a long command, a big paste): what doesn't
+    fit is sent later, when it can take more, instead of waiting for it."""
+    import time
+
+    read_end, write_end = os.pipe()
+    os.set_blocking(write_end, False)
+    shell = terminal.PtyShell(terminal.Launch(["sh"], {}), terminal.Path.home(), 24, 80)
+    shell.fd = write_end  # (a pipe nobody reads yet, like a busy shell's pty)
+    data = bytes(range(256)) * 4096  # 1 MB: more than the pipe holds
+    started = time.monotonic()
+    shell.write(data)
+    assert time.monotonic() - started < 1  # (it returned at once)
+    assert shell._pending and shell._write_notifier.isEnabled()
+    received = bytearray()
+    os.set_blocking(read_end, False)
+
+    def drain():
+        try:
+            while True:
+                chunk = os.read(read_end, 65536)
+                if not chunk:
+                    break
+                received.extend(chunk)
+        except BlockingIOError:
+            pass
+        return len(received) == len(data)
+
+    qtbot.waitUntil(drain, timeout=10_000)  # (the rest goes out as the pipe empties)
+    assert bytes(received) == data and not shell._pending
+    assert not shell._write_notifier.isEnabled()
+    shell._finish()
+    os.close(read_end)

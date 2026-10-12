@@ -881,7 +881,7 @@ class MainWindow(QMainWindow):
 
     def show_about(self):
         compiler, source = self.effective_compiler()
-        AboutDialog(self._fpm_executable(), compiler, source, self).exec()
+        run_dialog(AboutDialog(self._fpm_executable(), compiler, source, self))
 
     def _update_legend(self):
         self.legend.setText(self.graph_view.legend_html())
@@ -1425,7 +1425,7 @@ class MainWindow(QMainWindow):
         buttons.addWidget(close)
         layout.addLayout(buttons)
         dialog.resize(720, 420)
-        dialog.exec()
+        run_dialog(dialog)
 
     # --------------------------------------------------- dependency updates
     def check_dependency_updates(self, only: str | None = None):
@@ -1441,7 +1441,7 @@ class MainWindow(QMainWindow):
         dialog.update_deps_requested.connect(lambda: (dialog.accept(), self.run_fpm(["update"], False, True)))
         if checks:
             self._update_check_thread = dep_updates.start_check(checks, dialog, self)
-        dialog.exec()
+        run_dialog(dialog)  # (results still coming then go nowhere: Qt disconnects them)
 
     def _update_dependency_tag(self, check, dialog):
         """Point one dependency at its newest tag in its fpm.toml."""
@@ -1810,7 +1810,7 @@ class MainWindow(QMainWindow):
         dialog = SymbolSearchDialog(self.lsp_client, self.manifest_path.parent if self.manifest_path else None,
                                     self)
         dialog.chosen.connect(self.navigate_to)
-        dialog.exec()
+        run_dialog(dialog)
 
     def _open_editor_for(self, path: Path) -> EditorTab | None:
         path = path.resolve()
@@ -1846,10 +1846,10 @@ class MainWindow(QMainWindow):
         dialog = RenamePreviewDialog(old, new, edits, self._file_text, open_files,
                                      self.manifest_path.parent if self.manifest_path else None,
                                      self._mono_font(), self)
-        if dialog.exec() != QDialog.Accepted:
+        if run_dialog(dialog) != QDialog.Accepted:
             return
         changed_open, written, failed, places = 0, 0, [], 0
-        for path in dialog.selected():
+        for path in dialog.selected():  # (deleted later: still there now)
             file_edits = edits.get(path, [])
             editor = self._open_editor_for(path)
             if editor is not None:
@@ -1955,7 +1955,7 @@ class MainWindow(QMainWindow):
                               QMessageBox.Yes | QMessageBox.Cancel, self)
             box.setInformativeText(" ".join(info))
             box.button(QMessageBox.Yes).setText("Replace")
-            if box.exec() != QMessageBox.Yes:
+            if run_dialog(box) != QMessageBox.Yes:
                 return
         changed_open, written, failed = 0, 0, []
         for path, edits in plan.items():
@@ -3420,6 +3420,15 @@ def toml_line(name: str, spec) -> str:
         return json.dumps(str(v))  # (a TOML basic string)
 
     return f"{key(name)} = {value(spec)}"
+
+
+def run_dialog(dialog: QDialog) -> int:
+    """Show a dialog until it's closed, then let it go (a dialog that's a
+    child of the window would otherwise stay, hidden, until the app quits)."""
+    try:
+        return dialog.exec()
+    finally:
+        dialog.deleteLater()
 
 
 def make_settings() -> QSettings:

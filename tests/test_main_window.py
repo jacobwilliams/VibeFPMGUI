@@ -205,3 +205,21 @@ def test_a_character_split_between_reads_is_shown_whole(qtbot, window, tmp_path)
     qtbot.waitUntil(lambda: window.process is None, timeout=15_000)
     text = window.console.toPlainText()
     assert "temp 21°C" in text and "�" not in text
+
+
+# ------------------------------------------------- code review: step 2
+def test_dialogs_are_let_go_when_closed(qtbot, window, monkeypatch):
+    from qtpy.QtCore import QCoreApplication, QEvent
+    from qtpy.QtWidgets import QDialog
+
+    from vibefpmgui import dep_updates
+    from vibefpmgui.about import AboutDialog
+    from vibefpmgui.rename_dialog import RenamePreviewDialog
+
+    for cls in (AboutDialog, dep_updates.UpdatesDialog, RenamePreviewDialog):
+        monkeypatch.setattr(cls, "exec", lambda self: QDialog.Rejected)
+    window.show_about()
+    window.check_dependency_updates()
+    window._preview_rename("old", "new", {})
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    assert window.findChildren(QDialog) == []

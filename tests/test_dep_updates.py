@@ -162,3 +162,23 @@ def test_updates_dialog_in_the_window(qtbot, make_window, conflict_project, monk
     assert 'tag = "v0.7.0"' in text and "v0.5.0" not in text  # (the root's own declaration)
     assert "now asks for tag v0.7.0 (was v0.5.0)" in asked[0]  # (and Update deps isn't run: No)
     assert window.process is None
+
+
+def test_a_check_that_fails_badly_still_ends_the_thread(monkeypatch):
+    checks = [du.DepCheck("ok", "https://example.com/ok.git"), du.DepCheck("bad", "https://example.com/bad.git")]
+
+    def check(c):
+        if c.name == "bad":
+            raise OSError("permission denied")  # (not the RuntimeError ls_remote raises)
+        c.status = du.UPDATE
+        return c
+
+    monkeypatch.setattr(du, "check_dependency", check)
+    worker = du.CheckWorker(checks)
+    results, finished = {}, []
+    worker.result.connect(lambda row, c: results.setdefault(row, (c.status, c.message)))
+    worker.finished.connect(lambda: finished.append(True))
+    worker.run()
+    assert finished == [True]  # (so the thread quits)
+    assert results[0][0] == du.UPDATE
+    assert results[1][0] == du.ERROR and "permission denied" in results[1][1]

@@ -119,6 +119,10 @@ class PtyShell(QObject):
         self.pid = -1
         self.fd = -1
         self._notifier: QSocketNotifier | None = None
+        # Input the shell hasn't taken yet (it isn't reading: a long command,
+        # a big paste); sent when the pty can take more (see _flush).
+        self._pending = bytearray()
+        self._write_notifier: QSocketNotifier | None = None
 
     def start(self):
         import pty
@@ -156,14 +160,29 @@ class PtyShell(QObject):
             self._finish()
 
     def write(self, data: bytes):
-        while data and self.fd >= 0:
+        """Send input to the shell, now or (what doesn't fit yet) once the
+        pty can take more: never waiting for it in the GUI thread."""
+        if self.fd < 0:
+            return
+        self._pending += data
+        self._flush()
+
+    def _flush(self, *_):
+        while self._pending and self.fd >= 0:
             try:
-                written = os.write(self.fd, data)
+                written = os.write(self.fd, self._pending)
             except BlockingIOError:
-                continue
+                break  # (full: the rest when it's writable again)
             except OSError:
-                return
-            data = data[written:]
+                self._pending.clear()
+                break
+            del self._pending[:written]
+        waiting = bool(self._pending) and self.fd >= 0
+        if waiting and self._write_notifier is None:
+            self._write_notifier = QSocketNotifier(self.fd, QSocketNotifier.Write, self)
+            self._write_notifier.activated.connect(self._flush)
+        if self._write_notifier is not None:
+            self._write_notifier.setEnabled(waiting)
 
     def resize(self, rows: int, cols: int):
         self.rows, self.cols = rows, cols
@@ -181,6 +200,10 @@ class PtyShell(QObject):
         if self._notifier is not None:
             self._notifier.setEnabled(False)
             self._notifier = None
+        if self._write_notifier is not None:
+            self._write_notifier.setEnabled(False)
+            self._write_notifier = None
+        self._pending.clear()
         if self.fd >= 0:
             try:
                 os.close(self.fd)
