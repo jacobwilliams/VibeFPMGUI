@@ -112,19 +112,30 @@ class JsonWithCommentsLexer(JsonLexer):
 
 
 def lexer_for_path(path) -> object:
-    """A Pygments lexer chosen from the file name (plain text if unknown)."""
+    """A Pygments lexer chosen from the file name (plain text if unknown),
+    which keeps the text's positions (see keep_positions)."""
     name = str(path)
     suffix = ("." + name.rsplit(".", 1)[-1].lower()) if "." in name else ""
     if suffix in _FIXED_FORM:
-        return FortranFixedLexer()
+        return keep_positions(FortranFixedLexer())
     if suffix in _FREE_FORM:
-        return FortranLexer()
+        return keep_positions(FortranLexer())
     if suffix in _JSONC or (suffix == ".json" and Path(name).parent.name == ".vscode"):
-        return JsonWithCommentsLexer()
+        return keep_positions(JsonWithCommentsLexer())
     try:
-        return get_lexer_for_filename(name)
+        return keep_positions(get_lexer_for_filename(name))
     except ClassNotFound:
-        return TextLexer()
+        return keep_positions(TextLexer())
+
+
+def keep_positions(lexer):
+    """A lexer that doesn't drop the text's leading and trailing line breaks
+    (Pygments does by default): the tokens' positions are then the text's.
+    Otherwise a file starting with blank lines is colored a character off
+    for each of them."""
+    lexer.stripnl = False
+    lexer.stripall = False
+    return lexer
 
 
 # Lexers for files that are all prose (their text is spell checked, not only
@@ -234,7 +245,7 @@ class PygmentsHighlighter(QSyntaxHighlighter):
 
     def __init__(self, document, lexer=None, style: str | None = None):
         super().__init__(document)
-        self.lexer = lexer or TOMLLexer()
+        self.lexer = keep_positions(lexer or TOMLLexer())
         self._spans: list[tuple[int, int, QTextCharFormat]] = []
         self._starts: list[int] = []
         self._formats: dict = {}
@@ -262,7 +273,7 @@ class PygmentsHighlighter(QSyntaxHighlighter):
             self._timer.start()
 
     def set_lexer(self, lexer):
-        self.lexer = lexer
+        self.lexer = keep_positions(lexer)
         self._full = True
         self._generation += 1
         self._relex()

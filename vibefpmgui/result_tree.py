@@ -460,8 +460,7 @@ class ResultTree(QTreeWidget):
             context = [s[:limit] for s in lines[max(0, line - 1 - CONTEXT_LINES):line]]
             chunk = "\n".join(context)
             offset = len(chunk) - len(context[-1])
-            lexer = hl.lexer_for_path(path)
-            lexer.stripnl = False  # (keep the positions as they are)
+            lexer = hl.lexer_for_path(path)  # (it keeps the positions as they are)
             result = [None] * len(context[-1])
             pos = 0
             try:

@@ -168,3 +168,20 @@ def test_replacing_everything_colors_few_lines_on_their_own(qtbot, edit, monkeyp
     assert edit.highlighter._quick_budget == 0       # (…but only QUICK_LINES were lexed on their own)
     settle(qtbot, edit)
     assert formats(edit) == recolor_everything(qtbot, edit)
+
+
+def test_leading_blank_lines_dont_shift_the_colors(qtbot):
+    """Pygments drops a text's leading line breaks by default: every color
+    was then a character off per blank line (argv_module.f90 starts with
+    one; the last letter of each word was left uncolored)."""
+    def colored(text):
+        widget = QPlainTextEdit()
+        qtbot.addWidget(widget)
+        widget.setPlainText(text)
+        widget.highlighter = hl.PygmentsHighlighter(widget.document(), hl.lexer_for_path("argv_module.f90"))
+        qtbot.waitUntil(lambda: not widget.highlighter._full, timeout=5_000)
+        return formats(widget)
+
+    body = "    module argv_module\n    implicit none\n    end module argv_module\n"
+    assert colored("\n\n" + body)[2:] == colored(body)
+    assert not hl.lexer_for_path("x.f90").stripnl and not hl.lexer_for_path("x.toml").stripnl
