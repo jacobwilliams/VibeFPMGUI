@@ -13,6 +13,9 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   it; double-click the title to float it or dock it again. *View → Panels*
   shows or hides each one, and *Reset Layout* puts them all back. The
   layout is remembered.
+* *File → Clear Settings and Quit…* forgets everything the app has saved
+  (recent projects, open files, layout, options, View menu choices, your
+  spelling dictionary) and quits, so the next start is like the first.
 * Open any `fpm.toml` and run `fpm build`, `run`, `test`, `update` and `clean`
   from the toolbar or the *Commands* menu (Build ⌘B, Run ⌘R, Test ⌘U,
   Stop ⌘.; Ctrl on Linux/Windows), with live output and the usual options

@@ -85,3 +85,23 @@ def test_project_tree_filter(qtbot, window):
     qtbot.waitUntil(lambda: visible_files(tree) == set(), timeout=5_000)
     tree.include_ignored.setChecked(True)
     qtbot.waitUntil(lambda: visible_files(tree) == {"x.f90"}, timeout=5_000)
+
+
+def test_clear_settings_and_quit(qtbot, window, project, monkeypatch):
+    from qtpy.QtWidgets import QApplication, QMessageBox
+
+    from vibefpmgui.main_window import MainWindow
+
+    quits = []
+    monkeypatch.setattr(QApplication, "quit", lambda: quits.append(True))
+    answers = iter([QMessageBox.Cancel, QMessageBox.Yes])
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: next(answers))
+    window.settings.setValue("spelling_words", "wombat")
+    window.clear_settings_and_quit()  # (Cancel: nothing happens)
+    assert window.isVisible() and not quits and window.settings.value("spelling_words") == "wombat"
+    window.clear_settings_and_quit()
+    assert not window.isVisible() and quits == [True]
+    assert window.settings.allKeys() == []  # (not even what closing the window would save)
+    again = MainWindow(None)
+    qtbot.addWidget(again)
+    assert again.manifest_path is None  # (like the first start: no last project)

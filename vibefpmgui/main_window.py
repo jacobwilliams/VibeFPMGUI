@@ -231,6 +231,12 @@ class MainWindow(QMainWindow):
         file_menu.addActions([open_file_action, self.save_action, self.save_as_action,
                               self.close_tab_action])
         file_menu.addSeparator()
+        clear_settings_action = QAction("Clear Settings and Quit…", self)
+        clear_settings_action.setMenuRole(QAction.NoRole)  # (macOS: not moved to the app menu as Quit)
+        clear_settings_action.setStatusTip("Forget everything the app has saved (recent projects, layout, "
+                                           "options, dictionary…) and quit: it starts as if for the first time")
+        clear_settings_action.triggered.connect(self.clear_settings_and_quit)
+        file_menu.addAction(clear_settings_action)
         quit_action = QAction("Quit", self)
         quit_action.setShortcut(QKeySequence.Quit)
         quit_action.triggered.connect(self.close)
@@ -976,8 +982,32 @@ class MainWindow(QMainWindow):
         self._set_graph_theme(s.value("graph_theme", next(iter(THEME_CHOICES))))
         self._set_graph_edges(s.value("graph_edges", next(iter(EDGE_STYLES))))
 
+    def clear_settings_and_quit(self):
+        """Forget every saved setting and quit, so the next start is like the
+        first (after asking; nothing happens if a window can't close)."""
+        answer = QMessageBox.warning(
+            self, "Clear Settings and Quit",
+            "Clear all of VibeFPMGUI's saved settings and quit?\n\n"
+            "Recent projects, open files, window and panel layout, build options, View menu "
+            "choices and your spelling dictionary are all forgotten; the next start is like "
+            "the first. Your files are not touched.\n\n"
+            "Close any other VibeFPMGUI windows first: they save their settings when they close.",
+            QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel)
+        if answer != QMessageBox.Yes:
+            return
+        self._clearing_settings = True  # (closeEvent: nothing saved)
+        if not self.close():  # (unsaved files: Cancel keeps the window and the settings)
+            self._clearing_settings = False
+            return
+        self.settings.sync()  # (anything written while closing, then all of it removed)
+        self.settings.clear()
+        self.settings.sync()
+        QApplication.quit()
+
     def closeEvent(self, event):
-        self._save_session()
+        clearing = getattr(self, "_clearing_settings", False)
+        if not clearing:
+            self._save_session()
         for editor in self.editors():
             self.tabs.setCurrentWidget(editor)
             if not editor.maybe_save():
@@ -997,6 +1027,9 @@ class MainWindow(QMainWindow):
             kill_process_tree(self.process)
             self.process.waitForFinished(2000)
         self._shutdown_ai()
+        if clearing:
+            super().closeEvent(event)
+            return
         s = self.settings
         s.setValue("geometry", self.saveGeometry())
         s.setValue("panels", self.saveState(self.LAYOUT_VERSION))
