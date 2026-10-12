@@ -1,7 +1,8 @@
 """The *Problems* tab: everything flagged in the file in the editor.
 
 The last build's compiler messages, fortitude's and fortls's issues,
-misspelled words and the AI review's findings, in line order, drawn like
+misspelled words, gremlins (non-ASCII and invisible characters) and the AI
+review's findings, in line order, drawn like
 the Search tab's results (`vibefpmgui.result_tree`). A button per tool
 (with its count) shows or hides its problems. Click a problem to go there.
 """
@@ -17,7 +18,7 @@ from .result_tree import Problem, ResultTree
 
 # (source, button label), in the order the buttons are shown.
 SOURCES = [("build", "Build"), ("fortitude", "fortitude"), ("fortls", "fortls"),
-           ("spelling", "Spelling"), ("review", "AI review")]
+           ("spelling", "Spelling"), ("gremlins", "Gremlins"), ("review", "AI review")]
 HINT = "Open a file in the editor to see its problems here."
 
 

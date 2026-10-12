@@ -147,7 +147,7 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   single Undo step and nothing is saved until you save.
 * *Problems* panel: everything flagged in the file in the editor — the last
   build's compiler messages, fortitude's and fortls's issues, misspelled
-  words and AI review findings — in line order, each with its line number,
+  words, gremlins and AI review findings — in line order, each with its line number,
   a colored badge (the rule code or kind) and the message. Click one to go
   to it. The buttons at the top (with counts) show or hide each tool's
   problems. It follows the editor's current tab and updates as you type.
@@ -162,6 +162,13 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   *View → Spelling Language* picks the dictionary (English by default, or
   Spanish, French, Italian, Portuguese, German, Russian, Arabic, Latvian,
   Basque or Dutch).
+* Gremlins: characters that aren't plain printable ASCII — accented
+  letters, `°`, smart quotes, non-breaking and zero-width spaces, control
+  characters — get a little gremlin in the gutter of their line (hover it
+  for what they are) and a tint on the character itself, so even invisible
+  ones can be found; they're listed in the *Problems* panel too. Compilers
+  often reject them outside comments and strings. *View → Show Gremlins*
+  turns it off.
 * Formatting: **Format** (toolbar, or *Edit → Format with fprettify*,
   ⇧⌘I) re-indents and re-spaces the free-form Fortran file in the editor
   with [fprettify](https://github.com/fortran-lang/fprettify). Unsaved text

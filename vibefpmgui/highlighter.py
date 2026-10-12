@@ -38,6 +38,13 @@ AUTO = "auto"  # LIGHT_STYLE or DARK_STYLE, following the system's light/dark mo
 chosen_style = AUTO  # View → Syntax Colors (set by the main window)
 
 
+def document_text(document) -> str:
+    """A QTextDocument's text exactly as it is ("\\n" between lines). Qt's
+    toPlainText() turns non-breaking spaces into spaces (and U+2028 into a
+    line break): saving that would change the file."""
+    return document.toRawText().replace("\u2029", "\n")
+
+
 def style_is_dark(name: str) -> bool:
     try:
         return QColor(get_style_by_name(name).background_color).lightness() < 128
@@ -345,7 +352,7 @@ class PygmentsHighlighter(QSyntaxHighlighter):
         if self._busy:
             return
         self._timer.stop()
-        text = self.document().toPlainText()
+        text = document_text(self.document())
         if text == self._text and not self._full:
             return
         if self._lexing:  # (the thread's answer is checked against the text then)
@@ -370,7 +377,7 @@ class PygmentsHighlighter(QSyntaxHighlighter):
     def _apply(self, result):
         generation, (text, spans, starts, added, region, prose, names) = result
         self._lexing = False
-        if text != self.document().toPlainText() or generation != self._generation:
+        if text != document_text(self.document()) or generation != self._generation:
             self._relex()  # (the text, style or lexer changed while lexing: again)
             return
         self._formats.update(added)

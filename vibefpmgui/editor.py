@@ -73,12 +73,14 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from . import gremlins as gremlins_mod
 from . import hover_card, lint, spelling
 from . import lsp as lsp_mod
 from .completion import CompletionPopup, SignaturePopup, global_rect
 from .highlighter import (
     PygmentsHighlighter,
     apply_style,
+    document_text,
     lexer_for_path,
 )
 from .icons import SYMBOL_INDENT, symbol_icon
@@ -90,7 +92,8 @@ MAX_FIND_HIGHLIGHTS = 2000
 MARKER_COLORS = {"error": "#e03131", "fatal error": "#e03131", "warning": "#f08c00",
                  "review": "#7048e8", "remark": "#1c7ed6",
                  "lint error": "#e03131", "lint": "#0ca678",
-                 "fortls error": "#e03131", "fortls": "#1098ad", "spelling": "#ae3ec9"}
+                 "fortls error": "#e03131", "fortls": "#1098ad", "spelling": "#ae3ec9",
+                 "gremlin": gremlins_mod.COLOR}
 # Underline colors on a dark background, where these would be too dim to see.
 DARK_UNDERLINE_COLORS = {"spelling": "#e599f7"}
 # Which marker color wins when a line has several kinds of note.
@@ -100,6 +103,7 @@ MARKER_PRIORITY = ["fatal error", "error", "lint error", "fortls error", "warnin
 PROBLEM_SOURCES = {"lint": "fortitude", "lint error": "fortitude", "fortls": "fortls",
                    "fortls error": "fortls", "spelling": "spelling"}
 LINT_DELAY_MS = 600  # lint once typing pauses this long
+GREMLIN_WIDTH = 16  # the gutter's gremlin column (only while the file has gremlins)
 SPELLING_DELAY_MS = 250  # spell check this long after the colors are updated
 LSP_SYNC_MS = 300    # send edits to the language server once typing pauses this long
 COMPLETE_MS = 120    # ask for completions once typing pauses this long
@@ -303,8 +307,9 @@ class LineNumberArea(QWidget):
                     others = [m for severity, m in notes or [] if severity not in hover_card.LINT_COLORS]
                     popup.show_at(event.globalPos(), self.editor.lint_card_html(issues, others), ("gutter", line))
                 QToolTip.hideText()
-            elif notes:
-                QToolTip.showText(event.globalPos(), "\n".join(m for _, m in notes), self)
+            elif notes or line in self.editor.gremlins:
+                lines = [m for _, m in notes or []] + self.editor.gremlin_notes(line)
+                QToolTip.showText(event.globalPos(), "\n".join(lines), self)
             else:
                 QToolTip.hideText()
             return True
@@ -383,6 +388,7 @@ class CodeEditor(QPlainTextEdit):
         self.minimap = None  # the vibefpmgui.minimap.Minimap beside it, if any
         self.find_selections: list[QTextEdit.ExtraSelection] = []
         self.lint_issues: list[lint.LintIssue] = []  # underlined, with a tooltip
+        self.gremlins: dict[int, list[gremlins_mod.Gremlin]] = {}  # line -> its gremlins (View → Show Gremlins)
         # Multiple cursors: ⌥/Alt-click adds one, ⌘⇧/Ctrl+Shift-click a column
         # of them. Typing, deleting and moving happen at all of them; these
         # QTextCursors stay in place as the text changes.
@@ -403,10 +409,37 @@ class CodeEditor(QPlainTextEdit):
         self._update_gutter_width()
         self._update_extra_selections()
 
+    def toPlainText(self) -> str:
+        """The text exactly as it is (see highlighter.document_text): what's
+        saved, linted, searched and sent to the language server."""
+        return document_text(self.document())
+
     # ------------------------------------------------------------- gutter
     def gutter_width(self) -> int:
         digits = max(3, len(str(max(1, self.blockCount()))))
-        return 22 + self.fontMetrics().horizontalAdvance("9") * digits
+        return 22 + self.fontMetrics().horizontalAdvance("9") * digits + self._gremlin_column()
+
+    def _gremlin_column(self) -> int:
+        return GREMLIN_WIDTH if self.gremlins else 0
+
+    def set_gremlins(self, found: list[gremlins_mod.Gremlin]):
+        """The file's gremlins (non-ASCII and invisible characters): a gremlin
+        in the gutter on their lines, and the characters tinted."""
+        by_line: dict[int, list[gremlins_mod.Gremlin]] = {}
+        for g in found:
+            by_line.setdefault(g.line, []).append(g)
+        if by_line == self.gremlins:
+            return
+        self.gremlins = by_line
+        self._update_gutter_width()
+        self.gutter.setGeometry(QRect(self.contentsRect().left(), self.contentsRect().top(),
+                                      self.gutter_width(), self.contentsRect().height()))
+        self._update_extra_selections()
+        self.gutter.update()
+
+    def gremlin_notes(self, line: int) -> list[str]:
+        """The gremlins on a line, described (for the gutter's tooltip)."""
+        return [f"Gremlin at column {g.column + 1}: {g.message} ({g.code})" for g in self.gremlins.get(line, [])]
 
     def _update_gutter_width(self, *_):
         width = self.gutter_width()
@@ -448,6 +481,9 @@ class CodeEditor(QPlainTextEdit):
         while block.isValid() and top <= event.rect().bottom():
             if block.isVisible() and bottom >= event.rect().top():
                 line = number + 1
+                if line in self.gremlins:
+                    size = min(GREMLIN_WIDTH - 2, height)
+                    gremlins_mod.paint_gremlin(painter, QRectF(1, top + (height - size) / 2, size, size))
                 font = QFont(self.font())
                 font.setBold(number == current)
                 painter.setFont(font)
@@ -459,7 +495,7 @@ class CodeEditor(QPlainTextEdit):
                     painter.setPen(Qt.NoPen)
                     painter.setBrush(QColor(MARKER_COLORS.get(worst, "#868e96")))
                     d = max(6, height // 2)
-                    painter.drawEllipse(4, top + (height - d) // 2, d, d)
+                    painter.drawEllipse(4 + self._gremlin_column(), top + (height - d) // 2, d, d)
                 # Change bar (full line height) at the edge next to the text.
                 change = self.change_marks.get(line)
                 if change:
@@ -813,6 +849,19 @@ class CodeEditor(QPlainTextEdit):
             sel.cursor.setPosition(span[0])
             sel.cursor.setPosition(span[1], QTextCursor.KeepAnchor)
             selections.append(sel)
+        tint = QColor(gremlins_mod.COLOR)
+        tint.setAlpha(70)
+        for found in self.gremlins.values():  # (a tint: an invisible one would show nothing else)
+            for g in found:
+                block = self.document().findBlockByNumber(g.line - 1)
+                if not block.isValid() or g.column >= block.length() - 1:
+                    continue
+                sel = QTextEdit.ExtraSelection()
+                sel.format.setBackground(tint)
+                sel.cursor = QTextCursor(block)
+                sel.cursor.setPosition(block.position() + g.column)
+                sel.cursor.setPosition(block.position() + g.column + 1, QTextCursor.KeepAnchor)
+                selections.append(sel)
         selected = QColor(self.palette().color(QPalette.Highlight))
         for c in self.extra_cursors:
             if c.hasSelection():
@@ -1445,6 +1494,7 @@ class EditorTab(QWidget):
     lint_enabled = True  # lint Fortran files with fortitude (View menu)
     lsp_diagnostics_enabled = True  # show fortls's own checks (View menu)
     spelling_enabled = True  # spell check comments and strings (View menu)
+    gremlins_enabled = True  # View → Show Gremlins (non-ASCII and invisible characters)
     minimap_enabled = True  # View → Show Minimap
     word_wrap = False       # View → Word Wrap
 
@@ -1562,8 +1612,10 @@ class EditorTab(QWidget):
         self.refresh_style()
         self.editor.textChanged.connect(self._lint_timer.start)
         self.editor.textChanged.connect(self._changes_timer.start)
+        self._changes_timer.timeout.connect(self.check_gremlins)  # (the same typing pause)
         self.editor.textChanged.connect(lambda: self.lsp is not None and self._lsp_timer.start())
         self.editor.cursorPositionChanged.connect(self._outline_follow_cursor)
+        self.check_gremlins()
         self.lint()
 
     # ------------------------------------------------------ language server
@@ -2006,6 +2058,19 @@ class EditorTab(QWidget):
         self._lint_markers = self._markers_for(issues)
         self._show_issues()
 
+    # ---------------------------------------------------------- gremlins
+    def set_gremlins_enabled(self, on: bool):
+        self.check_gremlins()
+
+    def check_gremlins(self):
+        """Look for gremlins (non-ASCII and invisible characters) again."""
+        found = gremlins_mod.find(self.editor.toPlainText()) if self.gremlins_enabled else []
+        before = self.editor.gremlins
+        self.editor.set_gremlins(found)
+        if self.editor.gremlins != before:
+            self._update_status()
+            self.problems_changed.emit()
+
     # ---------------------------------------------------------- spelling
     def set_spelling_enabled(self, on: bool):
         self.check_spelling() if on else self._show_spelling([])
@@ -2217,6 +2282,9 @@ class EditorTab(QWidget):
         if self._spelling_issues:
             count = len(self._spelling_issues)
             parts.append(f"{count} misspelled word{'s' * (count != 1)}")
+        if self.editor.gremlins:
+            count = sum(len(g) for g in self.editor.gremlins.values())
+            parts.append(f"{count} gremlin{'s' * (count != 1)}")
         if self.editor.extra_cursors:
             parts.insert(1, f"{len(self.editor.extra_cursors) + 1} cursors (Esc: back to one)")
         if note:
@@ -2262,6 +2330,10 @@ class EditorTab(QWidget):
                 for severity, message in notes:
                     found.append(Problem(line, 0, line, 0, severity, severity, message,
                                          MARKER_COLORS.get(severity, "#868e96"), source))
+        for line_gremlins in self.editor.gremlins.values():
+            for g in line_gremlins:
+                found.append(Problem(g.line, g.column, g.line, g.column + 1, "gremlin", g.code, g.message,
+                                     gremlins_mod.COLOR, "gremlins"))
         for issue in self.editor.lint_issues:
             found.append(Problem(issue.line, max(0, issue.column - 1), issue.end_line, max(0, issue.end_column - 1),
                                  issue.severity, issue.code, issue.message, MARKER_COLORS[issue.severity],

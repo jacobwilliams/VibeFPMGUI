@@ -326,6 +326,14 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda _=False, c=code: self.set_spelling_language(c))
         self.spelling_language_menu.setEnabled(bool(codes))
         view_menu.addSeparator()
+        self.gremlins_action = QAction("Show Gremlins (Non-ASCII and Invisible Characters)", self, checkable=True)
+        EditorTab.gremlins_enabled = self.settings.value("gremlins", True, type=bool)
+        self.gremlins_action.setChecked(EditorTab.gremlins_enabled)
+        self.gremlins_action.toggled.connect(self.set_gremlins_enabled)
+        self.gremlins_action.setStatusTip(
+            "Mark lines with characters that aren't plain ASCII (accented letters, smart quotes, "
+            "non-breaking or zero-width spaces, control characters) with a gremlin in the gutter")
+        view_menu.addAction(self.gremlins_action)
         self.minimap_action = QAction("Show Minimap", self, checkable=True)
         EditorTab.minimap_enabled = self.settings.value("minimap", True, type=bool)
         self.minimap_action.setChecked(EditorTab.minimap_enabled)
@@ -2050,6 +2058,12 @@ class MainWindow(QMainWindow):
         self.settings.setValue("spelling", on)
         for editor in self.editors():
             editor.set_spelling_enabled(on)
+
+    def set_gremlins_enabled(self, on: bool):
+        EditorTab.gremlins_enabled = on
+        self.settings.setValue("gremlins", on)
+        for editor in self.editors():
+            editor.set_gremlins_enabled(on)
 
     def set_spelling_language(self, code: str):
         """View → Spelling Language: check with that language's dictionary."""
