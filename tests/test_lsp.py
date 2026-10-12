@@ -350,6 +350,22 @@ def test_diagnostic_issues():
     assert not issues[0].fixable and issues[0].describe().startswith("fortls: ")
 
 
+
+def test_gutter_card_shows_a_fortls_note_once(window, project):
+    from qtpy.QtCore import QEvent, QPoint
+    from qtpy.QtGui import QHelpEvent, QTextCursor
+
+    editor = open_editor(window, project / "src/foo.f90")
+    editor.show_lsp_diagnostics([lsp.LspIssue(2, 3, 2, 8, "Variable \"count\" masks variable in parent scope")])
+    code = editor.editor
+    y = code.cursorRect(QTextCursor(code.document().findBlockByNumber(1))).center().y()
+    point = QPoint(4, y)
+    code.gutter.event(QHelpEvent(QEvent.ToolTip, point, code.gutter.mapToGlobal(point)))
+    text = code.hover_popup.browser.toPlainText()
+    assert "FORTLS (checks the saved file)" in text
+    assert text.count("masks variable") == 1
+
+
 @pytest.fixture
 def oo_window(make_window, oo_project, settings_file):
     settings_file.write_text("[General]\nfortls=true\nlint=false\n")

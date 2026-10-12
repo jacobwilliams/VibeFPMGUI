@@ -275,7 +275,8 @@ class LineNumberArea(QWidget):
             popup = self.editor.hover_popup
             if issues:  # the same card as hovering the text (with its fix links)
                 if not (popup.isVisible() and popup.anchor == ("gutter", line)):
-                    others = [m for severity, m in notes or [] if not severity.startswith("lint")]
+                    # (fortitude's and fortls's notes are the card's issues already)
+                    others = [m for severity, m in notes or [] if severity not in hover_card.LINT_COLORS]
                     popup.show_at(event.globalPos(), self.editor.lint_card_html(issues, others), ("gutter", line))
                 QToolTip.hideText()
             elif notes:
