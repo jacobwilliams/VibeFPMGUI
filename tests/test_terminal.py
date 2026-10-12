@@ -454,3 +454,14 @@ def test_opening_another_project_moves_the_terminal(qtbot, window, conflict_proj
     window.open_manifest(conflict_project / "fpm.toml")
     qtbot.waitUntil(lambda: panel.shell.is_running() and panel.shell.pid != pid, timeout=5_000)
     assert panel.directory == conflict_project
+
+
+def test_choosing_the_tab_focuses_the_terminal(qtbot, window, monkeypatch):
+    monkeypatch.setenv("SHELL", "/bin/sh")
+    window.activateWindow()
+    tabs = window.monitor_tabs
+    tabs.setCurrentWidget(window.build_monitor)
+    QTest.mouseClick(tabs.tabBar(), Qt.LeftButton, Qt.NoModifier,
+                     tabs.tabBar().tabRect(tabs.indexOf(window.terminal_panel)).center())
+    assert tabs.currentWidget() is window.terminal_panel
+    qtbot.waitUntil(lambda: QApplication.focusWidget() is window.terminal_panel.view, timeout=2_000)

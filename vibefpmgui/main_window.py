@@ -560,6 +560,10 @@ class MainWindow(QMainWindow):
         self.terminal_panel.set_font(self._mono_font(editor=True))
         self.terminal_panel.set_word_wrap(EditorTab.word_wrap)
         self.monitor_tabs.addTab(self.terminal_panel, "Terminal")
+        # Choosing the Terminal tab: type there straight away (after the click is done).
+        self.monitor_tabs.currentChanged.connect(
+            lambda _i: self.monitor_tabs.currentWidget() is self.terminal_panel
+            and QTimer.singleShot(0, self.terminal_panel.focus))
         # The two lists of places in files (vibefpmgui.result_tree), drawn alike.
         self.result_trees = [self.references_panel.tree, self.search_panel.tree]
         for tree in self.result_trees:
