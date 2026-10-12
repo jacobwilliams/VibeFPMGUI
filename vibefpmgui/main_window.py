@@ -306,7 +306,21 @@ class MainWindow(QMainWindow):
             self.spelling_action.setText("Check Spelling (pyspellchecker not found)")
         self.spelling_action.setStatusTip(
             "Underline misspelled words in comments and strings (right-click one for suggestions)")
+        view_menu.addSeparator()  # (spelling: its two items together)
         view_menu.addAction(self.spelling_action)
+        spelling.set_language(str(self.settings.value("spelling_language", "en") or "en"))
+        self.spelling_language_menu = view_menu.addMenu("Spelling Language")  # (kept: PySide would let it go)
+        group = QActionGroup(self.spelling_language_menu)
+        codes = sorted(spelling.languages(), key=lambda c: spelling.LANGUAGE_NAMES.get(c, c))
+        for code in codes:
+            action = self.spelling_language_menu.addAction(f"{spelling.LANGUAGE_NAMES.get(code, code)} ({code})")
+            action.setCheckable(True)
+            action.setChecked(code == spelling.language)
+            action.setData(code)
+            group.addAction(action)
+            action.triggered.connect(lambda _=False, c=code: self.set_spelling_language(c))
+        self.spelling_language_menu.setEnabled(bool(codes))
+        view_menu.addSeparator()
         self.minimap_action = QAction("Show Minimap", self, checkable=True)
         EditorTab.minimap_enabled = self.settings.value("minimap", True, type=bool)
         self.minimap_action.setChecked(EditorTab.minimap_enabled)
@@ -1988,6 +2002,15 @@ class MainWindow(QMainWindow):
         self.settings.setValue("spelling", on)
         for editor in self.editors():
             editor.set_spelling_enabled(on)
+
+    def set_spelling_language(self, code: str):
+        """View → Spelling Language: check with that language's dictionary."""
+        spelling.set_language(code)
+        self.settings.setValue("spelling_language", spelling.language)
+        for action in self.spelling_language_menu.actions():
+            action.setChecked(action.data() == spelling.language)
+        for editor in self.editors():
+            editor.check_spelling()
 
     def add_spelling_word(self, word: str):
         """"Add to Dictionary": not a misspelling anymore, in any file."""

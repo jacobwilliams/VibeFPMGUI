@@ -31,6 +31,8 @@ end module solver_mod
 @pytest.fixture(autouse=True)
 def no_user_words(monkeypatch):
     monkeypatch.setattr(spelling, "user_words", set())
+    yield
+    spelling.set_language("en")  # (a test may switch: back to the default)
 
 
 def words(text: str, prose=None, names=frozenset()) -> list[str]:
@@ -164,3 +166,34 @@ def test_easy_to_see_on_a_dark_background(editor):
     code.setPalette(palette)
     assert {s[3] for s in code.squiggle_spans(code.viewport().rect())} == {DARK_UNDERLINE_COLORS["spelling"]}
     assert not code.viewport().grab().isNull()  # (painted)
+
+
+def test_another_language():
+    assert {"en", "fr", "de"} <= set(spelling.languages())
+    assert "pomme" in words("le garçon mange une pomme")  # (not an English word)
+    spelling.set_language("fr")
+    assert spelling.language == "fr"
+    assert words("le garçon mange une pomme") == []  # (accented letters are letters too)
+    assert words("le garcon") == ["garcon"] and spelling.suggestions("garcon")[0] == "garçon"
+    spelling.set_language("xx")  # (no such dictionary: unchanged)
+    assert spelling.language == "fr"
+
+
+def test_language_menu(qtbot, window, editor):
+    menu = window.spelling_language_menu
+    names = [a.text() for a in menu.actions()]
+    assert "English (en)" in names and "French (fr)" in names
+    assert next(a for a in menu.actions() if a.data() == "en").isChecked()
+    french = next(a for a in menu.actions() if a.data() == "fr")
+    french.trigger()
+    assert french.isChecked() and window.settings.value("spelling_language") == "fr"
+    assert "solver" in [i.word for i in editor._spelling_issues]  # (checked again, in French)
+
+
+def test_spelling_items_are_grouped_in_the_view_menu(window):
+    view = next(o for o in window.spelling_action.associatedObjects() if hasattr(o, "actions"))
+    actions = view.actions()
+    i = actions.index(window.spelling_action)
+    assert actions[i - 1].isSeparator()
+    assert actions[i + 1].text() == "Spelling Language"
+    assert actions[i + 2].isSeparator()

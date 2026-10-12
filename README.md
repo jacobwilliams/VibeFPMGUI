@@ -155,7 +155,10 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   names used in the file's code, compiler directives (`!$omp …`) and Fortran
   keywords (`enddo`, `namelist`, …) aren't flagged. Hover a word or right-click it for
   suggestions and *Add to Dictionary* (your words are kept in the app's
-  settings). *View → Check Spelling in Comments and Strings* turns it off.
+  settings). *View → Check Spelling in Comments and Strings* turns it off;
+  *View → Spelling Language* picks the dictionary (English by default, or
+  Spanish, French, Italian, Portuguese, German, Russian, Arabic, Latvian,
+  Basque or Dutch).
 * Formatting: **Format** (toolbar, or *Edit → Format with fprettify*,
   ⇧⌘I) re-indents and re-spaces the free-form Fortran file in the editor
   with [fprettify](https://github.com/fortran-lang/fprettify). Unsaved text

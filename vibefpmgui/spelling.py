@@ -46,14 +46,36 @@ def available() -> bool:
     return SpellChecker is not None
 
 
-@cache
-def _checker():
-    return SpellChecker()
+# pyspellchecker's dictionaries (see `languages`), by their codes.
+LANGUAGE_NAMES = {"en": "English", "es": "Spanish", "fr": "French", "it": "Italian", "pt": "Portuguese",
+                  "de": "German", "ru": "Russian", "ar": "Arabic", "lv": "Latvian", "eu": "Basque",
+                  "nl": "Dutch"}
+language = "en"  # the dictionary in use (View → Spelling Language; see set_language)
+
+
+def languages() -> list[str]:
+    """The codes of the dictionaries pyspellchecker has (none without it)."""
+    return list(SpellChecker.languages()) if available() else []
+
+
+def set_language(code: str):
+    """Check with another language's dictionary (from the next check on)."""
+    global language
+    if code == language or code not in languages():
+        return
+    language = code
+    _known.clear()
+    suggestions.cache_clear()
 
 
 @cache
-def _short_checker():
-    return SpellChecker(distance=1)
+def _checker(code: str = "en"):
+    return SpellChecker(language=code)
+
+
+@cache
+def _short_checker(code: str = "en"):
+    return SpellChecker(language=code, distance=1)
 
 
 _known: dict[str, bool] = {}  # lowercase word -> in the dictionary
@@ -65,7 +87,7 @@ def is_known(word: str) -> bool:
         return True
     known = _known.get(w)
     if known is None:
-        known = _known[w] = bool(_checker().known([w]))
+        known = _known[w] = bool(_checker(language).known([w]))
     return known
 
 
@@ -75,11 +97,11 @@ def suggestions(word: str) -> tuple[str, ...]:
     if not available():
         return ()
     w = word.lower()
-    found = _short_checker().candidates(w) or set()
+    found = _short_checker(language).candidates(w) or set()
     if not found and len(w) <= LONG_WORD:
-        found = _checker().candidates(w) or set()
+        found = _checker(language).candidates(w) or set()
     found.discard(w)
-    ranked = sorted(found, key=lambda c: (-_checker().word_usage_frequency(c), c))[:MAX_SUGGESTIONS]
+    ranked = sorted(found, key=lambda c: (-_checker(language).word_usage_frequency(c), c))[:MAX_SUGGESTIONS]
     if word[:1].isupper():
         ranked = [c[:1].upper() + c[1:] for c in ranked]
     return tuple(ranked)
@@ -122,7 +144,7 @@ class SpellingIssue(NamedTuple):
 DIRECTIVE_RE = re.compile(r"^\s*[!cC*]\s*(\$|dir\$|dec\$|gcc\$|ibm\*|acc\$|pgi\$)", re.IGNORECASE)
 CHUNK_RE = re.compile(r"\S+")
 EDGE = "\"'`‘’“”()[]{}<>,.;:!?*~#|=+&^%$@\\/"
-WORD_CHARS = re.compile(r"^[A-Za-z]+(?:['’][A-Za-z]+)*$")
+WORD_CHARS = re.compile(r"^[^\W\d_]+(?:['’][^\W\d_]+)*$")  # (letters of any language)
 
 
 def _words(segment: str):
