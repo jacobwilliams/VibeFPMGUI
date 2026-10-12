@@ -88,6 +88,7 @@ def close_window(window):
     """Close without "Save changes?" questions."""
     for editor in window.editors():
         editor.editor.document().setModified(False)
+        editor._disk_newline = editor.newline  # (converted line endings are unsaved too)
     window.close()
 
 

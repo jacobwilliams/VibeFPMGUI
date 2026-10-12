@@ -1591,6 +1591,7 @@ class EditorTab(QWidget):
         self.path = Path(path).resolve()
         self.encoding = "utf-8"
         self.newline = "\n"
+        self._disk_newline = "\n"  # the line end of the file as saved (see is_dirty)
         self._disk_text = ""
         self._compiler_markers: dict[int, list[tuple[str, str]]] = {}
         self._review_markers: dict[int, list[tuple[str, str]]] = {}
@@ -2202,19 +2203,19 @@ class EditorTab(QWidget):
         except OSError:
             return False
 
-    def _read(self) -> str:
+    def _read(self) -> tuple[str, str, str]:
+        """(text with "\\n" line ends, encoding, line end) of the file on disk."""
         raw = self.path.read_bytes()
         try:
-            text = raw.decode("utf-8")
-            self.encoding = "utf-8"
+            text, encoding = raw.decode("utf-8"), "utf-8"
         except UnicodeDecodeError:
-            text = raw.decode("latin-1")
-            self.encoding = "latin-1"
-        self.newline = "\r\n" if "\r\n" in text else "\n"
-        return text.replace("\r\n", "\n")
+            text, encoding = raw.decode("latin-1"), "latin-1"
+        newline = "\r\n" if "\r\n" in text else "\n"
+        return text.replace("\r\n", "\n"), encoding, newline
 
     def load(self):
-        text = self._read()
+        text, self.encoding, self.newline = self._read()
+        self._disk_newline = self.newline  # (a converted file is unsaved: see is_dirty)
         self._disk_text = text
         self._opened_text = text  # (the change bars compare with this and the saved text)
         self.editor.setPlainText(text)
@@ -2229,7 +2230,20 @@ class EditorTab(QWidget):
             self.watcher.addPath(str(self.path))
 
     def is_dirty(self) -> bool:
-        return self.editor.document().isModified()
+        """Unsaved changes: to the text, or to its line endings (Convert Line Endings)."""
+        return self.editor.document().isModified() or self.newline != self._disk_newline
+
+    def convert_line_endings(self, newline: str) -> bool:
+        """Edit → Convert Line Endings: the file is saved with ``newline``
+        ("\\n" Unix, "\\r\\n" Windows) at every line end (a file with mixed
+        ones, or old Mac ones, which Qt reads as line breaks, gets the same
+        everywhere). False if it already has them."""
+        if newline == self.newline:
+            return False
+        self.newline = newline
+        self.dirty_changed.emit(self.is_dirty())
+        self._update_status()
+        return True
 
     def save(self) -> bool:
         text = self.editor.toPlainText()
@@ -2244,7 +2258,9 @@ class EditorTab(QWidget):
             QMessageBox.warning(self, "Save failed", f"Could not save {self.path}:\n{exc}")
             return False
         self._disk_text = text
+        self._disk_newline = self.newline
         self.editor.document().setModified(False)
+        self.dirty_changed.emit(False)  # (also when only the line endings had changed)
         # Line numbers in the compiler/review notes may no longer be right.
         self._compiler_markers, self._review_markers = {}, {}
         self.editor.set_markers({})
@@ -2305,7 +2321,7 @@ class EditorTab(QWidget):
             self._update_status("deleted on disk")
             return
         try:
-            text = self._read()
+            text, encoding, newline = self._read()
         except OSError:
             return
         if text == self._disk_text:
@@ -2315,13 +2331,15 @@ class EditorTab(QWidget):
                 self, "File changed on disk",
                 f"{self.path.name} was changed by another program. Reload it and lose your edits?")
             if answer != QMessageBox.Yes:
-                self._disk_text = text  # don't ask again for this version
+                self._disk_text, self._disk_newline = text, newline  # don't ask again for this version
                 return
         cursor = self.editor.textCursor().position()
         scroll = self.editor.verticalScrollBar().value()
         self._disk_text = text
+        self.encoding, self.newline, self._disk_newline = encoding, newline, newline
         self.editor.setPlainText(text)
         self.editor.document().setModified(False)
+        self.dirty_changed.emit(False)
         c = self.editor.textCursor()
         c.setPosition(min(cursor, len(text)))
         self.editor.setTextCursor(c)

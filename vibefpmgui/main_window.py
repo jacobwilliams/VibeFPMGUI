@@ -2427,6 +2427,7 @@ class MainWindow(QMainWindow):
                                       and formatter.executable() is not None)
         for action in (self.fix_safe_action, self.fix_all_action):
             action.setEnabled(editor is not None and editor.can_lint())
+        self.line_endings_menu.setEnabled(editor is not None)
         for action in (self.definition_action, self.implementation_action, self.references_action,
                        self.rename_action, self.complete_action):
             action.setEnabled(editor is not None and editor.lsp is not None)
@@ -2458,6 +2459,24 @@ class MainWindow(QMainWindow):
             done(text, *result)
 
         call_in_background(lambda: rewrite(text), finished, self)
+
+    def convert_line_endings(self, newline: str):
+        """Edit → Convert Line Endings: the whole file, saved with these from now on."""
+        editor = self.current_editor()
+        if editor is None:
+            return
+        kind = "Unix (LF)" if newline == "\n" else "Windows (CRLF)"
+        if editor.convert_line_endings(newline):
+            self.statusBar().showMessage(f"{editor.path.name}: {kind} line endings (not saved yet)", 5000)
+        else:
+            self.statusBar().showMessage(f"{editor.path.name} already has {kind} line endings", 4000)
+        self._check_line_endings()
+
+    def _check_line_endings(self):
+        """Tick the current file's line ending in the menu."""
+        editor = self.current_editor()
+        for newline, action in self.line_ending_actions.items():
+            action.setChecked(editor is not None and editor.newline == newline)
 
     def fix_lint_issues(self, editor: EditorTab, unsafe: bool):
         """Edit → Fix All … Issues: fortitude --fix on the editor's text (one
@@ -2610,6 +2629,17 @@ class MainWindow(QMainWindow):
                                             lambda e: self.fix_lint_issues(e, unsafe=True))
         self.fix_all_action.setStatusTip("Also apply fortitude's unsafe fixes, which can change what the "
                                          "code does: check them before saving; Undo reverts")
+        menu.addSeparator()
+        self.line_endings_menu = menu.addMenu("Convert Line Endings")  # (kept: PySide would let it go)
+        self.line_ending_actions: dict[str, QAction] = {}
+        for newline, text, tip in (("\n", "To Unix Line Endings (LF)", "macOS and Linux"),
+                                   ("\r\n", "To Windows Line Endings (CRLF)", "Windows")):
+            action = self.line_endings_menu.addAction(text)
+            action.setCheckable(True)
+            action.setStatusTip(f"Save every line of the file in the editor with {tip}'s line ending")
+            action.triggered.connect(lambda _=False, n=newline: self.convert_line_endings(n))
+            self.line_ending_actions[newline] = action
+        self.line_endings_menu.aboutToShow.connect(self._check_line_endings)
 
     def export_graph(self):
         if not self.graph:
