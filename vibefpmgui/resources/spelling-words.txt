@@ -27,6 +27,7 @@ endtype
 endwhere
 enum
 forall
+fortran
 goto
 inout
 len
