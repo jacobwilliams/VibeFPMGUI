@@ -197,3 +197,40 @@ def test_spelling_items_are_grouped_in_the_view_menu(window):
     assert actions[i - 1].isSeparator()
     assert actions[i + 1].text() == "Spelling Language"
     assert actions[i + 2].isSeparator()
+
+
+# ------------------------------------------------- big files: per-repaint work
+def test_squiggles_only_look_at_the_words_in_view(qtbot, window, project, monkeypatch):
+    write_files(project, {"src/many.f90": "".join(f"! recieve number {i}\n" for i in range(3000))})
+    editor = open_editor(window, project / "src/many.f90")
+    qtbot.waitUntil(lambda: len(editor._spelling_issues) == spelling.MAX_ISSUES, timeout=10_000)
+    code = editor.editor
+    looked = []
+    real = code.blockBoundingGeometry
+    monkeypatch.setattr(code, "blockBoundingGeometry", lambda b: looked.append(1) or real(b))
+    spans = code.squiggle_spans(code.viewport().rect())
+    visible = code.viewport().height() // code.fontMetrics().height() + 2
+    assert 0 < len(spans) <= visible and len(looked) <= visible + 1  # (not all 2000)
+
+
+def test_moving_the_cursor_doesnt_rebuild_the_underlines(qtbot, editor, monkeypatch):
+    code = editor.editor
+    spans = []
+    real = code._lint_span
+    monkeypatch.setattr(code, "_lint_span", lambda issue: spans.append(1) or real(issue))
+    cursor = code.textCursor()
+    cursor.movePosition(QTextCursor.Down)
+    code.setTextCursor(cursor)  # (the current line's highlight moves…)
+    assert spans == []          # (…without rebuilding the issues' underlines)
+    line = cursor.block()
+    assert any(s.cursor.block() == line for s in code.extraSelections())
+
+
+def test_an_unchanged_spell_check_redoes_nothing(qtbot, editor, monkeypatch):
+    told = []
+    editor.problems_changed.connect(lambda: told.append(1))
+    copies = []
+    real = editor.editor.toPlainText
+    monkeypatch.setattr(editor.editor, "toPlainText", lambda: copies.append(1) or real())
+    editor.check_spelling()  # (the same words as before)
+    assert told == [] and copies == []  # (nothing redrawn; no copy of the text made to check)

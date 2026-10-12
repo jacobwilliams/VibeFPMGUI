@@ -140,3 +140,24 @@ def test_is_searched_matches_the_walk(project):
     assert is_searched(root, (project / "out/x.f90").resolve(), Query("x", ignored=True), others)
     assert not is_searched(root, (project / "dep_local/src/dl.f90").resolve(), Query("x"), others)
     assert not is_searched(root, (project / "src/foo.f90").resolve(), Query("x", exclude="src/"), others)
+
+
+def test_replacement_edits_quick_and_right_in_a_big_file():
+    """Each edit's line and column (counted as it goes) are the same as
+    counting from the top each time, and a big file is quick."""
+    import time
+
+    from vibefpmgui.project_search import Query, compile_query, replacement_edits
+
+    text = "".join(f"  x{i} = count + count  ! count\n" for i in range(20_000))
+    query = Query("count")
+    pattern = compile_query(query)
+    started = time.monotonic()
+    edits = replacement_edits(text, pattern, query, "total")
+    assert time.monotonic() - started < 1.0
+    assert len(edits) == 60_000
+    for e in edits[:50] + edits[-50:]:
+        offset = sum(len(line) + 1 for line in text.split("\n")[:e.line]) + e.column
+        assert text[offset:offset + 5] == "count" and e.end_column == e.column + 5
+    keep = {(edits[7].line + 1, edits[7].column)}
+    assert replacement_edits(text, pattern, query, "total", keep) == [edits[7]]

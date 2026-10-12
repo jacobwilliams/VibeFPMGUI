@@ -280,6 +280,16 @@ class PygmentsHighlighter(QSyntaxHighlighter):
     def background(self) -> QColor:
         return QColor(self.style.background_color)
 
+    @property
+    def text(self) -> str:
+        """The text the colors (and `prose`, `names`) are for."""
+        return self._text
+
+    def is_current(self) -> bool:
+        """Whether the colors are for the document as it is now: no lexing
+        waiting or running (and once that's done, `relexed` is emitted)."""
+        return not (self._timer.isActive() or self._lexing or self._full)
+
     def _format(self, ttype) -> QTextCharFormat:
         fmt = self._formats.get(ttype)
         if fmt is None:

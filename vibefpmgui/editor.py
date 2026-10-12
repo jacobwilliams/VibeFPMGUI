@@ -15,6 +15,7 @@ import difflib
 import html
 import re
 import sys
+from bisect import bisect_left
 from collections.abc import Callable
 from pathlib import Path
 
@@ -425,6 +426,11 @@ class CodeEditor(QPlainTextEdit):
         self.minimap = None  # the vibefpmgui.minimap.Minimap beside it, if any
         self.find_selections: list[QTextEdit.ExtraSelection] = []
         self.lint_issues: list[lint.LintIssue] = []  # underlined, with a tooltip
+        self._spelling: list = []        # the misspelled words among them, in line order (see set_lint)
+        self._spelling_lines: list[int] = []
+        # The highlights that only change when the markers, issues or gremlins
+        # do (rebuilt then, not on every cursor move: see _update_extra_selections).
+        self._fixed_selections: list[QTextEdit.ExtraSelection] = []
         self.gremlins: dict[int, list[gremlins_mod.Gremlin]] = {}  # line -> its gremlins (View → Show Gremlins)
         # Multiple cursors: ⌥/Alt-click adds one, ⌘⇧/Ctrl+Shift-click a column
         # of them. Typing, deleting and moving happen at all of them; these
@@ -442,7 +448,7 @@ class CodeEditor(QPlainTextEdit):
         self.setLineWrapMode(QPlainTextEdit.NoWrap)
         self.blockCountChanged.connect(self._update_gutter_width)
         self.updateRequest.connect(self._update_gutter)
-        self.cursorPositionChanged.connect(self._update_extra_selections)
+        self.cursorPositionChanged.connect(lambda: self._update_extra_selections(rebuild=False))
         self._update_gutter_width()
         self._update_extra_selections()
 
@@ -594,6 +600,9 @@ class CodeEditor(QPlainTextEdit):
 
     def set_lint(self, issues: list[lint.LintIssue]):
         self.lint_issues = issues
+        # The misspelled words in line order, for the squiggles (see squiggle_spans).
+        self._spelling = sorted((i for i in issues if i.severity == "spelling"), key=lambda i: (i.line, i.column))
+        self._spelling_lines = [i.line for i in self._spelling]
         self._update_extra_selections()
         self.viewport().update()  # (the spelling squiggles: see _paint_squiggles)
 
@@ -858,8 +867,30 @@ class CodeEditor(QPlainTextEdit):
         self.centerCursor()
 
     # -------------------------------------------------------- highlights
-    def _update_extra_selections(self):
-        """Current line, lines with errors/warnings, and find matches."""
+    def _update_extra_selections(self, rebuild: bool = True):
+        """Current line, lines with errors/warnings, underlined issues,
+        gremlins, the extra cursors' selections and find matches. The
+        markers', issues' and gremlins' are kept between calls and only built
+        again with ``rebuild`` (they changed, or the colors or line wrapping
+        did): moving the cursor only moves the current line's."""
+        if rebuild:
+            self._fixed_selections = self._marker_and_issue_selections()
+        selections = list(self._fixed_selections)
+        if not self.isReadOnly():
+            color = QColor(self.palette().color(QPalette.Highlight))
+            color.setAlpha(28)
+            selections += self._line_highlight(self.textCursor().block(), color)
+        selected = QColor(self.palette().color(QPalette.Highlight))
+        for c in self.extra_cursors:
+            if c.hasSelection():
+                sel = QTextEdit.ExtraSelection()
+                sel.format.setBackground(selected)
+                sel.format.setForeground(self.palette().color(QPalette.HighlightedText))
+                sel.cursor = QTextCursor(c)
+                selections.append(sel)
+        self.setExtraSelections(selections + self.find_selections)
+
+    def _marker_and_issue_selections(self) -> list:
         selections = []
         for line, notes in self.markers.items():
             block = self.document().findBlockByNumber(line - 1)
@@ -869,10 +900,6 @@ class CodeEditor(QPlainTextEdit):
             color = QColor(MARKER_COLORS.get(worst, "#868e96"))
             color.setAlpha(34)
             selections += self._line_highlight(block, color)
-        if not self.isReadOnly():
-            color = QColor(self.palette().color(QPalette.Highlight))
-            color.setAlpha(28)
-            selections += self._line_highlight(self.textCursor().block(), color)
         for issue in self.lint_issues:
             if issue.severity == "spelling":
                 continue  # (drawn by paintEvent: see _paint_squiggles)
@@ -899,15 +926,7 @@ class CodeEditor(QPlainTextEdit):
                 sel.cursor.setPosition(block.position() + g.column)
                 sel.cursor.setPosition(block.position() + g.column + 1, QTextCursor.KeepAnchor)
                 selections.append(sel)
-        selected = QColor(self.palette().color(QPalette.Highlight))
-        for c in self.extra_cursors:
-            if c.hasSelection():
-                sel = QTextEdit.ExtraSelection()
-                sel.format.setBackground(selected)
-                sel.format.setForeground(self.palette().color(QPalette.HighlightedText))
-                sel.cursor = QTextCursor(c)
-                selections.append(sel)
-        self.setExtraSelections(selections + self.find_selections)
+        return selections
 
     @staticmethod
     def _line_highlight(block, color: QColor) -> list:
@@ -928,7 +947,7 @@ class CodeEditor(QPlainTextEdit):
 
     def set_find_selections(self, selections):
         self.find_selections = selections
-        self._update_extra_selections()
+        self._update_extra_selections(rebuild=False)  # (kept apart: see _update_extra_selections)
         self._update_minimap()
 
     # ------------------------------------------------------------ editing
@@ -998,7 +1017,7 @@ class CodeEditor(QPlainTextEdit):
         elif not kept and not self.cursorWidth():  # one again: Qt's own
             self.setCursorWidth(self._caret_width)
         self._restart_blink()
-        self._update_extra_selections()
+        self._update_extra_selections(rebuild=False)  # (the cursors' selections are always made anew)
         self.viewport().update()
         self.cursors_changed.emit()
 
@@ -1139,7 +1158,7 @@ class CodeEditor(QPlainTextEdit):
     def squiggle_spans(self, area: QRect) -> list[tuple[float, float, float, str]]:
         """Where the misspelled words' squiggles go in ``area`` (viewport
         coordinates): (left, right, y, color) per row a word is on."""
-        issues = [i for i in self.lint_issues if i.severity == "spelling"]
+        issues = self._spelling
         if not issues:
             return []
         dark = self.palette().color(QPalette.Base).lightness() < 128
@@ -1148,13 +1167,12 @@ class CodeEditor(QPlainTextEdit):
         top_line = first.blockNumber() + 1
         offset = self.contentOffset()
         out = []
-        for issue in issues:
-            if issue.line < top_line:
-                continue
+        # (Only the words in view: from the first visible line, until one is below the area.)
+        for issue in issues[bisect_left(self._spelling_lines, top_line):]:
             block = self.document().findBlockByNumber(issue.line - 1)
             geometry = self.blockBoundingGeometry(block).translated(offset)
             if geometry.top() > area.bottom():
-                continue
+                break
             if geometry.bottom() < area.top() or not block.isVisible():
                 continue
             span = self._lint_span(issue)
@@ -2146,13 +2164,13 @@ class EditorTab(QWidget):
             self._show_spelling([])
             return
         hl = self.highlighter
-        if hl._text != self.editor.toPlainText():
+        if not hl.is_current():
             return  # (the highlighter is behind: it calls again when it's caught up)
-        self._show_spelling(spelling.check(hl._text, hl.prose, hl.names))
+        self._show_spelling(spelling.check(hl.text, hl.prose, hl.names))
 
     def _show_spelling(self, issues: list):
-        if not issues and not self._spelling_issues:
-            return
+        if issues == self._spelling_issues:
+            return  # (the same words: nothing to redraw, or to tell the Problems tab)
         self._spelling_issues = issues
         self._show_issues()
 

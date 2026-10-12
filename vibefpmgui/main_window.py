@@ -616,6 +616,12 @@ class MainWindow(QMainWindow):
         self.search_panel.replace_requested.connect(self._replace_in_files)
         self.problems_panel = ProblemsPanel(self.settings)
         self.problems_panel.open_requested.connect(self._open_search_match)
+        # (A burst of changes, e.g. spelling and fortitude answering together: one update.)
+        self._problems_timer = QTimer(self)
+        self._problems_timer.setSingleShot(True)
+        self._problems_timer.setInterval(150)
+        self._problems_timer.timeout.connect(self._update_problems)
+        self._problems_visible = False  # (in front of its stack, or on its own: see _problems_shown)
         self.terminal_panel = TerminalPanel()
         self.terminal_panel.set_font(self._mono_font(editor=True))
         self.terminal_panel.set_word_wrap(EditorTab.word_wrap)
@@ -661,6 +667,7 @@ class MainWindow(QMainWindow):
         self._docks_ready = False  # (until the window is shown: see _dock_shown)
         self.docks["outputs"].visibilityChanged.connect(lambda shown: shown and self.refresh_build_outputs())
         self.docks["terminal"].visibilityChanged.connect(self._terminal_dock_shown)
+        self.docks["problems"].visibilityChanged.connect(self._problems_shown)
         self.docks["graph"].visibilityChanged.connect(self._update_editor_actions)  # (Find: the graph's search)
         self.default_layout()
         self._update_central()
@@ -1943,10 +1950,22 @@ class MainWindow(QMainWindow):
         texts = {e.path: e.editor.toPlainText() for e in self.editors()}
         return search_roots(self.graph, project_dir), texts, project_dir
 
+    def _problems_shown(self, shown: bool):
+        """The Problems panel came to the front (or went behind another, or
+        closed). Qt says so here; isVisible() isn't reliable for a panel
+        behind another in a stack."""
+        self._problems_visible = shown
+        if shown:
+            self._update_problems()
+
     def _update_problems(self, *_):
-        """The Problems tab: the file in the editor's problems."""
+        """The Problems tab: the file in the editor's problems (only while
+        it's shown: it catches up when it is)."""
         if not hasattr(self, "problems_panel"):
             return  # (the window is still being built)
+        self._problems_timer.stop()
+        if not self._problems_visible:
+            return
         editor = self.current_editor()
         if editor is None:
             self.problems_panel.show_problems(None, [])
@@ -2164,7 +2183,7 @@ class MainWindow(QMainWindow):
             editor.references_found.connect(self._show_references)
             editor.rename_ready.connect(self._preview_rename)
             editor.editor.word_added.connect(self.add_spelling_word)
-            editor.problems_changed.connect(lambda e=editor: self._update_problems() if e is self.current_editor()
+            editor.problems_changed.connect(lambda e=editor: self._problems_timer.start() if e is self.current_editor()
                                             else None)
             editor.editor.textChanged.connect(lambda e=editor: self.search_panel.file_changed(e.path))
             editor.attach_lsp(self.lsp_client)

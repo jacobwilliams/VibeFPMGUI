@@ -33,6 +33,8 @@ def editor(qtbot, window, project):
     qtbot.waitUntil(lambda: len(editor._spelling_issues) == 2, timeout=5_000)
     editor.show_diagnostics([SimpleNamespace(line=3, severity="warning", message="Unused variable 'x'")])
     editor.show_review([SimpleNamespace(line=2, category="naming", comment="Name the module better")])
+    window.show_panel(window.problems_panel)  # (it's only kept up to date while it's shown)
+    qtbot.waitUntil(lambda: len(rows(window.problems_panel)) == 4, timeout=5_000)
     return editor
 
 
@@ -81,7 +83,7 @@ def test_follows_the_editor(qtbot, window, editor, project):
     cursor = QTextCursor(editor.editor.document())
     cursor.insertText("! one mistaek\n")  # (typing: checked again)
     qtbot.waitUntil(lambda: "mistaek" in [i.word for i in editor._spelling_issues], timeout=5_000)
-    assert rows(panel)[0] == (1, "spelling", "spelling")
+    qtbot.waitUntil(lambda: rows(panel)[0] == (1, "spelling", "spelling"), timeout=2_000)
     open_editor(window, project / "src/other.f90")  # (another tab: its problems)
     assert rows(panel) == [] or panel.tree.topLevelItem(0).childCount() == 0
     assert "No problems in <b>other.f90</b>" in panel.title.text()
@@ -100,18 +102,47 @@ def test_long_messages_wrap(qtbot, window, editor):
     editor.show_review([SimpleNamespace(line=3, category="performance", comment=long)])
     panel = window.problems_panel
     tree = panel.tree
-    panel.resize(500, 400)
-    panel.show()
-    qtbot.waitExposed(panel)
-    item = tree.topLevelItem(0)
-    rows = {item.child(i).data(0, PARTS_ROLE)[2].source: item.child(i) for i in range(item.childCount())}
-    review, short = rows["review"], rows["build"]
+    dock = window.docks["problems"]
+    dock.setFloating(True)  # (a size of its own, to try narrow and wide)
+    dock.resize(500, 400)
+    qtbot.waitUntil(lambda: panel.width() < 520, timeout=2_000)
 
-    def height(row):
-        return tree.visualItemRect(row).height()
+    def review_row():
+        item = tree.topLevelItem(0)
+        return next((item.child(i) for i in range(item.childCount())
+                     if item.child(i).data(0, PARTS_ROLE)[2].message.endswith(long[-30:])), None)
 
-    assert height(review) > 2 * height(short)  # (several lines)
-    narrow = height(review)
-    panel.resize(1000, 400)
-    qtbot.waitUntil(lambda: height(review) < narrow, timeout=2_000)  # (wrapped again, wider)
+    qtbot.waitUntil(lambda: review_row() is not None, timeout=2_000)  # (the update is batched)
+
+    def short_row():
+        item = tree.topLevelItem(0)
+        return next(item.child(i) for i in range(item.childCount())
+                    if item.child(i).data(0, PARTS_ROLE)[2].source == "build")
+
+    def height(row):  # (rows are looked up each time: an update makes new ones)
+        return tree.visualItemRect(row()).height()
+
+    assert height(review_row) > 2 * height(short_row)  # (several lines)
+    narrow = height(review_row)
+    dock.resize(1000, 400)
+    qtbot.waitUntil(lambda: height(review_row) < narrow, timeout=2_000)  # (wrapped again, wider)
     assert tree.horizontalScrollBar().maximum() == 0  # (wraps rather than scrolling sideways)
+
+
+def test_hidden_it_waits_until_shown(qtbot, window, editor):
+    """Not shown (another panel in front, or closed), it isn't rebuilt as the
+    file changes; shown again, it catches up."""
+    from types import SimpleNamespace
+
+    panel = window.problems_panel
+    window.show_panel(window.build_monitor)  # (in front of Problems)
+    qtbot.waitUntil(lambda: not window._problems_visible, timeout=2_000)
+    built = []
+    real = panel.show_problems
+    panel.show_problems = lambda *a, **k: built.append(1) or real(*a, **k)
+    editor.show_diagnostics([SimpleNamespace(line=1, severity="error", message="Something's wrong")])
+    qtbot.wait(300)  # (past the update's delay)
+    assert built == []
+    window.show_panel(panel)
+    qtbot.waitUntil(lambda: (1, "error", "build") in rows(panel), timeout=2_000)
+    assert built  # (caught up)

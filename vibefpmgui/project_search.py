@@ -190,12 +190,6 @@ def is_searched(root: Root, path: Path, query: Query, others: set[Path] = frozen
     return (not include or glob_matches(relative, include)) and not (exclude and glob_matches(relative, exclude))
 
 
-def _position(text: str, offset: int) -> tuple[int, int]:
-    """(line 0-based, column) of an offset."""
-    line = text.count("\n", 0, offset)
-    return line, offset - (text.rfind("\n", 0, offset) + 1)
-
-
 def find_matches(text: str, pattern: re.Pattern, limit: int = MAX_RESULTS) -> list[Match]:
     """Every match in a text (empty matches are skipped)."""
     out: list[Match] = []
@@ -230,14 +224,21 @@ def replacement_edits(text: str, pattern: re.Pattern, query: Query, template: st
     starting at the (1-based line, column) positions in ``keep``.
     Raises `re.error` for a bad template."""
     edits = []
+    line, line_start, last = 0, 0, 0  # (counted as it goes: recounting from the top was quadratic)
     for found in pattern.finditer(text):
         start, end = found.span()
         if start == end:
             continue
-        line, column = _position(text, start)
+        newlines = text.count("\n", last, start)
+        if newlines:
+            line += newlines
+            line_start = text.rfind("\n", 0, start) + 1
+        last = start
+        column = start - line_start
         if keep is not None and (line + 1, column) not in keep:
             continue
-        end_line, end_column = _position(text, end)
+        end_line = line + text.count("\n", start, end)
+        end_column = end - (text.rfind("\n", 0, end) + 1)
         edits.append(TextEdit(line, column, end_line, end_column, replacement(found, query, template)))
     return edits
 

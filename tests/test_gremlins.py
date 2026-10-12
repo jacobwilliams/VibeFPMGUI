@@ -55,6 +55,7 @@ def test_marked_in_the_editor(window, editor):
     assert "3 gremlins" in editor.status.text()
     problems = [p for p in editor.problems() if p.source == "gremlins"]
     assert [(p.line, p.badge) for p in problems] == [(2, "U+00B0"), (3, "U+00A0"), (4, "U+200B")]
+    window.show_panel(window.problems_panel)  # (kept up to date while shown)
     assert window.problems_panel.buttons["gremlins"].text() == "Gremlins 3"
     assert code.gremlin_notes(3) == ["Gremlin at column 10: non-breaking space, not ASCII (U+00A0)"]
 
