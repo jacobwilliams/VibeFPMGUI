@@ -115,7 +115,12 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   to jump, or drag the box (the part in view) to scroll. *View → Show
   Minimap* turns it off. *View → Word Wrap* (⌥/Alt+Z) wraps long lines at
   the window's edge instead of scrolling sideways (in the editor, the
-  Terminal and the Output panel). Multiple cursors: ⌥/Alt-click adds a
+  Terminal and the Output panel). Tab indents to the next tab stop (with
+  several lines selected, it indents them; ⇧Tab takes an indent level off,
+  spaces or a tab), and Backspace in leading spaces goes back one stop.
+  *View → Indentation* chooses spaces or tab characters and the width
+  (2, 3, 4 or 8; tabs in a file are shown that wide); the status line shows
+  the setting. Multiple cursors: ⌥/Alt-click adds a
   cursor (again to remove it); ⌘⇧/Ctrl+Shift-click adds one on every line
   from the cursor to the clicked line: in the same column, or, clicked in
   another column, with each line selected between the two columns (a box

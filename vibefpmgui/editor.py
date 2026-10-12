@@ -87,7 +87,41 @@ from .icons import SYMBOL_INDENT, symbol_icon
 from .minimap import Minimap
 from .result_tree import Problem
 
-INDENT = "    "
+INDENT_WIDTHS = (2, 3, 4, 8)  # View → Indentation
+
+
+def visual_column(text: str, width: int) -> int:
+    """How far across a line's ``text`` reaches, with tabs to the next
+    multiple of ``width``."""
+    column = 0
+    for ch in text:
+        column = (column // width + 1) * width if ch == "\t" else column + 1
+    return column
+
+
+def tab_text(before: str, width: int, use_tabs: bool) -> str:
+    """What Tab types after ``before`` (the line up to the cursor): a tab,
+    or spaces to the next tab stop."""
+    if use_tabs:
+        return "\t"
+    return " " * (width - visual_column(before, width) % width)
+
+
+def outdent_length(line: str, width: int) -> int:
+    """How many characters at the start of a line ⇧Tab removes: one tab, or
+    spaces up to one indent level (or both, up to that width)."""
+    spaces = min(len(line) - len(line.lstrip(" ")), width)
+    if spaces < width and line[spaces:spaces + 1] == "\t":
+        return spaces + 1  # (a tab, after any spaces short of a whole level)
+    return spaces
+
+
+def backspace_length(before: str, width: int) -> int:
+    """In leading spaces, Backspace removes back to the previous tab stop:
+    how many spaces (0: an ordinary Backspace)."""
+    if not before or before.strip(" "):
+        return 0  # (not just spaces before the cursor)
+    return (len(before) - 1) % width + 1
 MAX_FIND_HIGHLIGHTS = 2000
 MARKER_COLORS = {"error": "#e03131", "fatal error": "#e03131", "warning": "#f08c00",
                  "review": "#7048e8", "remark": "#1c7ed6",
@@ -369,6 +403,9 @@ class CodeEditor(QPlainTextEdit):
     typed = Signal(str)                # a key that changed the text (after it did; "\b" = Backspace)
     completion_chosen = Signal(object)  # Enter/Tab in the completion list
     cursors_changed = Signal()          # extra cursors added or removed (multiple cursors)
+
+    indent_width = 4   # View → Indentation (set by the window)
+    use_tabs = False
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1046,7 +1083,7 @@ class CodeEditor(QPlainTextEdit):
             self._at_each_cursor(newline)
             return True
         if key == Qt.Key_Tab:
-            self._at_each_cursor(lambda c: c.insertText(INDENT))
+            self._at_each_cursor(lambda c: c.insertText(self.tab_text(c)))
             return True
         text = event.text()
         if text and text.isprintable() and not mods & (Qt.ControlModifier | Qt.MetaModifier):
@@ -1200,10 +1237,14 @@ class CodeEditor(QPlainTextEdit):
         key = event.key()
         if key == Qt.Key_Tab and not event.modifiers() & (Qt.ControlModifier | Qt.AltModifier):
             cursor = self.textCursor()
-            if cursor.hasSelection() and " " in cursor.selectedText():
+            if cursor.hasSelection() and "\u2029" in cursor.selectedText():  # (several lines: indent them)
                 self._indent_selection(+1)
             else:
-                cursor.insertText(INDENT)
+                cursor.beginEditBlock()
+                cursor.removeSelectedText()
+                cursor.insertText(self.tab_text(cursor))
+                cursor.endEditBlock()
+                self.setTextCursor(cursor)
             return
         if key == Qt.Key_Backtab:
             self._indent_selection(-1)
@@ -1212,34 +1253,55 @@ class CodeEditor(QPlainTextEdit):
             # Keep the current line's indentation.
             line = self.textCursor().block().text()
             indent = line[:len(line) - len(line.lstrip())]
+            cursor = self.textCursor()
+            cursor.beginEditBlock()  # (one Undo step, the line break and its indentation)
             super().keyPressEvent(event)
             self.textCursor().insertText(indent)
+            cursor.endEditBlock()
             return
-        if key == Qt.Key_Backspace and not self.textCursor().hasSelection():
-            # Backspace in leading spaces removes a whole indent level.
+        if key == Qt.Key_Backspace and not self.textCursor().hasSelection() and not self.use_tabs:
+            # Backspace in leading spaces goes back to the previous tab stop.
             cursor = self.textCursor()
-            before = cursor.block().text()[:cursor.positionInBlock()]
-            if before and not before.strip() and len(before) % len(INDENT) == 0:
-                for _ in INDENT:
-                    cursor.deletePreviousChar()
+            count = backspace_length(cursor.block().text()[:cursor.positionInBlock()], self.indent_width)
+            if count:
+                cursor.movePosition(QTextCursor.Left, QTextCursor.KeepAnchor, count)
+                cursor.removeSelectedText()  # (one Undo step)
+                self.setTextCursor(cursor)
                 return
         super().keyPressEvent(event)
 
+    def tab_text(self, cursor: QTextCursor) -> str:
+        """What Tab types at a cursor (see `tab_text`)."""
+        return tab_text(cursor.block().text()[:cursor.positionInBlock()], self.indent_width, self.use_tabs)
+
+    def indent_unit(self) -> str:
+        """One indent level: a tab, or ``indent_width`` spaces."""
+        return "\t" if self.use_tabs else " " * self.indent_width
+
+    def set_indentation(self, width: int, use_tabs: bool):
+        """View → Indentation (tabs are shown ``width`` columns wide too)."""
+        self.indent_width, self.use_tabs = width, use_tabs
+        self.setTabStopDistance(self.fontMetrics().horizontalAdvance(" ") * width)
+
     def _indent_selection(self, direction: int):
+        """Indent (Tab) or outdent (⇧Tab) the selected lines, or the cursor's;
+        a selection ending at the start of a line leaves that line alone."""
         cursor = self.textCursor()
         start = self.document().findBlock(cursor.selectionStart())
         end = self.document().findBlock(cursor.selectionEnd())
+        if end != start and cursor.selectionEnd() == end.position():
+            end = end.previous()
         cursor.beginEditBlock()
         block = start
         while block.isValid():
             c = QTextCursor(block)
             if direction > 0:
-                c.insertText(INDENT)
+                if block.text().strip() or block == start == end:  # (blank lines stay blank)
+                    c.insertText(self.indent_unit())
             else:
-                text = block.text()
-                remove = min(len(INDENT), len(text) - len(text.lstrip(" ")))
-                for _ in range(remove):
-                    c.deleteChar()
+                c.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor,
+                               outdent_length(block.text(), self.indent_width))
+                c.removeSelectedText()
             if block == end:
                 break
             block = block.next()
@@ -2249,7 +2311,7 @@ class EditorTab(QWidget):
     # ----------------------------------------------------------- display
     def set_font(self, font: QFont):
         self.editor.setFont(font)
-        self.editor.setTabStopDistance(self.editor.fontMetrics().horizontalAdvance(" ") * len(INDENT))
+        self.editor.set_indentation(self.editor.indent_width, self.editor.use_tabs)  # (tab width in the new font)
         self.editor._update_gutter_width()
 
     def refresh_style(self):
@@ -2262,8 +2324,9 @@ class EditorTab(QWidget):
 
     def _update_status(self, note: str = ""):
         cursor = self.editor.textCursor()
+        indent = f"Tabs: {self.editor.indent_width}" if self.editor.use_tabs else f"Spaces: {self.editor.indent_width}"
         parts = [f"Ln {cursor.blockNumber() + 1}, Col {cursor.positionInBlock() + 1}",
-                 self.highlighter.lexer.name, self.encoding.upper(),
+                 indent, self.highlighter.lexer.name, self.encoding.upper(),
                  "CRLF" if self.newline == "\r\n" else "LF"]
         if self._compiler_markers:
             notes = [s for ns in self._compiler_markers.values() for s, _ in ns]

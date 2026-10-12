@@ -348,6 +348,31 @@ class MainWindow(QMainWindow):
                                            "window's edge instead of scrolling sideways")
         self.word_wrap_action.toggled.connect(self.set_word_wrap)
         view_menu.addAction(self.word_wrap_action)
+        # Indentation: what Tab types, and how wide tabs are shown.
+        width = self.settings.value("indent_width", 4, type=int)
+        editor_mod.CodeEditor.indent_width = width if width in editor_mod.INDENT_WIDTHS else 4
+        editor_mod.CodeEditor.use_tabs = self.settings.value("indent_tabs", False, type=bool)
+        self.indent_menu = view_menu.addMenu("Indentation")  # (kept: PySide would let it go)
+        self.indent_actions: dict[object, QAction] = {}
+        kinds = QActionGroup(self.indent_menu)
+        for use_tabs, text, tip in ((False, "Indent with Spaces", "Tab types spaces, to the next tab stop"),
+                                    (True, "Indent with Tabs", "Tab types a tab character")):
+            action = self.indent_menu.addAction(text)
+            action.setCheckable(True)
+            action.setStatusTip(tip)
+            action.triggered.connect(lambda _=False, t=use_tabs: self.set_indentation(use_tabs=t))
+            kinds.addAction(action)
+            self.indent_actions[use_tabs] = action
+        self.indent_menu.addSeparator()
+        widths = QActionGroup(self.indent_menu)
+        for w in editor_mod.INDENT_WIDTHS:
+            action = self.indent_menu.addAction(f"Width: {w}")
+            action.setCheckable(True)
+            action.setStatusTip(f"An indent level is {w} columns (tabs are shown {w} wide too)")
+            action.triggered.connect(lambda _=False, n=w: self.set_indentation(width=n))
+            widths.addAction(action)
+            self.indent_actions[w] = action
+        self._check_indent_actions()
         view_menu.addSeparator()
         self.terminal_action = QAction("Terminal", self)
         # ⌃` as in VS Code (the Control key on macOS too: ⌘` switches windows).
@@ -2032,6 +2057,24 @@ class MainWindow(QMainWindow):
         self.settings.setValue("minimap", on)
         for editor in self.editors():
             editor.minimap.setVisible(on)
+
+    def set_indentation(self, width: int | None = None, use_tabs: bool | None = None):
+        """View → Indentation: spaces or tabs, and the width of an indent level."""
+        cls = editor_mod.CodeEditor
+        cls.indent_width = cls.indent_width if width is None else width
+        cls.use_tabs = cls.use_tabs if use_tabs is None else use_tabs
+        self.settings.setValue("indent_width", cls.indent_width)
+        self.settings.setValue("indent_tabs", cls.use_tabs)
+        for editor in self.editors():
+            editor.editor.set_indentation(cls.indent_width, cls.use_tabs)
+            editor._update_status()
+        self._check_indent_actions()
+
+    def _check_indent_actions(self):
+        cls = editor_mod.CodeEditor
+        for key, action in self.indent_actions.items():
+            # (bool keys are spaces/tabs; ints are widths: True == 1 and False == 0 never collide with them)
+            action.setChecked(key is cls.use_tabs if isinstance(key, bool) else key == cls.indent_width)
 
     def set_word_wrap(self, on: bool):
         EditorTab.word_wrap = on

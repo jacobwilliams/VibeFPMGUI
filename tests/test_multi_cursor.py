@@ -108,7 +108,7 @@ def test_enter_and_tab(editor):
     QTest.keyClicks(write, "x")
     assert write.toPlainText() == "  a\n  x\n  b\n  x\n"  # (each new line keeps its indentation)
     QTest.keyClick(write, Qt.Key_Tab)
-    assert write.toPlainText() == "  a\n  x    \n  b\n  x    \n"  # (an indent at each cursor)
+    assert write.toPlainText() == "  a\n  x \n  b\n  x \n"  # (at each cursor: to the next tab stop)
 
 
 def test_copy_and_paste_one_line_per_cursor(editor):

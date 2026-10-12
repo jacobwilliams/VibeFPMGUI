@@ -11,7 +11,6 @@ from qtpy.QtTest import QTest
 from qtpy.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 
 from vibefpmgui import formatter, lint
-from vibefpmgui.editor import INDENT
 
 LINTED = "module m\n  integer :: x\ncontains\n  subroutine s()\n    x = 1   \n  end subroutine\nend module\n"
 
@@ -48,12 +47,12 @@ def test_tab_enter_and_backspace(window, project):
     QTest.keyClick(code, Qt.Key_Return)
     assert line_text(editor, 7) == "    "  # (keeps the indentation)
     QTest.keyClick(code, Qt.Key_Tab)
-    assert line_text(editor, 7) == "    " + INDENT
+    assert line_text(editor, 7) == "    " + "    "
     QTest.keyClick(code, Qt.Key_Backspace)
     assert line_text(editor, 7) == "    "  # (a whole indent level)
     cursor_to(editor, 2, 0, select_to=(3, 5))
     QTest.keyClick(code, Qt.Key_Tab)  # (lines selected: indent them)
-    assert line_text(editor, 2).startswith(INDENT + "  integer") and line_text(editor, 3).startswith(INDENT)
+    assert line_text(editor, 2).startswith("    " + "  integer") and line_text(editor, 3).startswith("    ")
     QTest.keyClick(code, Qt.Key_Backtab)
     assert line_text(editor, 2) == "  integer :: Count = 1"
 
@@ -238,3 +237,59 @@ def test_lint_fix_after_the_colors_change(qtbot, lint_window, project):
     issue = next(i for i in editor.editor.lint_issues if i.code == "S101")
     editor.apply_lint_fix(issue)
     assert line_text(editor, 5) == "    x = 1"
+
+
+# ---------------------------------------------------------- indentation
+def test_indentation_rules():
+    from vibefpmgui.editor import (
+        backspace_length,
+        outdent_length,
+        tab_text,
+        visual_column,
+    )
+
+    assert visual_column("ab\tc", 4) == 5 and visual_column("\t\t", 2) == 4
+    assert tab_text("", 4, False) == "    " and tab_text("ab", 4, False) == "  "  # (to the next tab stop)
+    assert tab_text("abcd", 4, False) == "    " and tab_text("a\t", 4, False) == "    "
+    assert tab_text("ab", 4, True) == "\t" and tab_text("a", 2, False) == " "
+    assert outdent_length("      x", 4) == 4 and outdent_length("  x", 4) == 2
+    assert outdent_length("\t\tx", 4) == 1 and outdent_length("  \tx", 4) == 3  # (tabs too)
+    assert outdent_length("x", 4) == 0
+    assert backspace_length("      ", 4) == 2 and backspace_length("        ", 4) == 4
+    assert backspace_length("  x ", 4) == 0 and backspace_length("", 4) == 0
+
+
+def test_indentation_menu(window, project):
+    editor = open_editor(window, project / "src/foo.f90")
+    code = editor.editor
+    assert window.indent_actions[False].isChecked() and window.indent_actions[4].isChecked()
+    assert "Spaces: 4" in editor.status.text()
+    window.indent_actions[2].trigger()  # (Width: 2)
+    original = line_text(editor, 6)
+    cursor_to(editor, 6, 0)
+    QTest.keyClick(code, Qt.Key_Tab)
+    assert line_text(editor, 6) == "  " + original  # (2 columns: the next tab stop)
+    assert code.tabStopDistance() == code.fontMetrics().horizontalAdvance(" ") * 2
+    window.indent_actions[True].trigger()  # (Indent with Tabs)
+    assert "Tabs: 2" in editor.status.text() and window.settings.value("indent_tabs") in (True, "true")
+    cursor_to(editor, 2, 0, select_to=(4, 0))  # (ends at the start of line 4: not that one)
+    QTest.keyClick(code, Qt.Key_Tab)
+    assert line_text(editor, 2).startswith("\t") and line_text(editor, 3).startswith("\t")
+    assert not line_text(editor, 4).startswith("\t")
+    QTest.keyClick(code, Qt.Key_Backtab)  # (⇧Tab takes the tabs off again)
+    assert not line_text(editor, 2).startswith("\t") and not line_text(editor, 3).startswith("\t")
+    assert window.settings.value("indent_width", type=int) == 2
+
+
+def test_return_and_backspace_are_one_undo_step_each(window, project):
+    editor = open_editor(window, project / "src/foo.f90")
+    code = editor.editor
+    before = code.toPlainText()
+    cursor_to(editor, 6, len(line_text(editor, 6)))
+    QTest.keyClick(code, Qt.Key_Return)  # (a new line, indented)
+    code.undo()
+    assert code.toPlainText() == before
+    cursor_to(editor, 6, 4)  # (in the line's leading spaces)
+    QTest.keyClick(code, Qt.Key_Backspace)
+    code.undo()
+    assert code.toPlainText() == before
