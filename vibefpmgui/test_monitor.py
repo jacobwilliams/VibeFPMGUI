@@ -37,16 +37,17 @@ from qtpy.QtWidgets import (
 
 from .build_monitor import (
     ABORTED,
+    COMPACT_ROW_HEIGHT,
     COMPILING,
     DONE,
     FAILED,
     PALETTES,
-    ROW_HEIGHT,
     ProgressLine,
     SortableTable,
     _tint,
     app_is_light,
     chip_stylesheet,
+    paint_name_and_detail,
     panel_stylesheet,
     scaled,
 )
@@ -110,7 +111,7 @@ class TestDelegate(QStyledItemDelegate):
         self.monitor = monitor
 
     def sizeHint(self, option, index):
-        return QSize(100, scaled(ROW_HEIGHT))
+        return QSize(100, scaled(COMPACT_ROW_HEIGHT))
 
     def paint(self, p: QPainter, option, index):
         mon = self.monitor
@@ -156,28 +157,18 @@ class TestDelegate(QStyledItemDelegate):
         if lines and test.status != RUNNING:
             count = f"{lines} line{'s' * (lines != 1)} of output"
             detail = f"{detail} · {count}" if detail else count
-        text_r = r.adjusted(14, 0, -6, 0)
-        p.setFont(bold)
-        p.setPen(QColor(pal["text"] if test.status != QUEUED else pal["muted"]))
-        name = QFontMetricsF(bold).elidedText(test.name, Qt.ElideMiddle, text_r.width())
-        if not detail:
-            p.drawText(text_r, Qt.AlignLeft | Qt.AlignVCenter, name)
-            return
-        half = r.height() / 2
-        p.drawText(text_r.adjusted(0, 4, 0, -half + 2), Qt.AlignLeft | Qt.AlignBottom, name)
-        p.setFont(small)
-        p.setPen(QColor(pal["muted"]))
-        p.drawText(text_r.adjusted(0, half + 1, 0, -3), Qt.AlignLeft | Qt.AlignTop, detail)
+        paint_name_and_detail(p, r.adjusted(14, 0, -6, 0), test.name, detail, bold, small,
+                              QColor(pal["text"] if test.status != QUEUED else pal["muted"]), QColor(pal["muted"]))
 
     def _paint_status(self, p, r, test, small, color):
         font = QFont(small)
         font.setWeight(QFont.DemiBold)
         text = "Stopped" if test.stopped else self.monitor.word(test.status)
-        pill = QRectF(r.left() + 8, r.center().y() - 11,
-                      QFontMetricsF(font).horizontalAdvance(text) + 36, 22)
+        pill = QRectF(r.left() + 8, r.center().y() - 10,
+                      QFontMetricsF(font).horizontalAdvance(text) + 36, 20)
         p.setPen(Qt.NoPen)
         p.setBrush(_tint(color, 40 if test.status != QUEUED else 22))
-        p.drawRoundedRect(pill, 11, 11)
+        p.drawRoundedRect(pill, 10, 10)
         icon = QRectF(pill.left() + 8, pill.center().y() - 6, 12, 12)
         if test.status == RUNNING:
             p.setPen(QPen(_tint(color, 70), 2))
@@ -304,7 +295,7 @@ class TestMonitor(SortableTable, QWidget):
         self.table.setHorizontalHeaderLabels(self.COLUMNS)
         self.table.setItemDelegate(TestDelegate(self))
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(scaled(ROW_HEIGHT))
+        self.table.verticalHeader().setDefaultSectionSize(scaled(COMPACT_ROW_HEIGHT))
         self.table.setShowGrid(False)
         self.table.setFrameShape(QTableWidget.NoFrame)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -697,6 +688,6 @@ class TestMonitor(SortableTable, QWidget):
         title_font.setPointSizeF(title_font.pointSizeF() + 2)
         title_font.setWeight(QFont.Bold)
         self.title.setFont(title_font)
-        self.table.verticalHeader().setDefaultSectionSize(scaled(ROW_HEIGHT))
+        self.table.verticalHeader().setDefaultSectionSize(scaled(COMPACT_ROW_HEIGHT))
         self.refresh_palette()
         self._fit_columns()

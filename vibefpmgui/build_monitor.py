@@ -98,7 +98,8 @@ DEFAULT_PACKAGE_COLORS = {m.ROOT: "#f6c85f", m.GIT: "#74c0fc", m.PATH: "#8ce99a"
                           m.REGISTRY: "#d7b8f3", m.META: "#f3c6a5", m.MISSING: "#ced4da",
                           LIBRARY: "#ced4da"}
 
-ROW_HEIGHT = 44  # at the normal text size; see scaled()
+ROW_HEIGHT = 44  # at the normal text size; see scaled() (the Review tab: two lines a row)
+COMPACT_ROW_HEIGHT = 30  # the Build, Tests and Run tabs: one line a row
 
 # Text-size factor set by the main window's View menu (1.0 = normal).
 _ui_scale = 1.0
@@ -278,6 +279,34 @@ def app_is_light() -> bool:
     return QApplication.palette().color(QPalette.Base).lightness() >= 128
 
 
+def paint_name_and_detail(p: QPainter, r: QRectF, name: str, detail: str, bold: QFont, small: QFont,
+                          color: QColor, muted: QColor, detail_elide=Qt.ElideRight):
+    """A row's name (bold) and, on the same line after it, its detail in
+    small grey text (a file's folder, a test's exit code), each shortened
+    to fit: the name keeps at least 60% of the room when both don't fit."""
+    gap = 8
+    name_metrics = QFontMetricsF(bold)
+    name_width = name_metrics.horizontalAdvance(name)
+    if detail:
+        detail_width = QFontMetricsF(small).horizontalAdvance(detail)
+        if name_width + gap + detail_width > r.width():
+            name_width = min(name_width, max(r.width() * 0.6, r.width() - gap - detail_width))
+    shown = name_metrics.elidedText(name, Qt.ElideMiddle, min(name_width, r.width()) + 1)
+    p.setFont(bold)
+    p.setPen(color)
+    p.drawText(r, Qt.AlignLeft | Qt.AlignVCenter, shown)
+    if not detail:
+        return
+    left = r.left() + name_metrics.horizontalAdvance(shown) + gap
+    room = r.right() - left
+    if room < 20:
+        return
+    p.setFont(small)
+    p.setPen(muted)
+    p.drawText(QRectF(left, r.top(), room, r.height()), Qt.AlignLeft | Qt.AlignVCenter,
+               QFontMetricsF(small).elidedText(detail, detail_elide, room))
+
+
 class RowDelegate(QStyledItemDelegate):
     """Paints every cell of the build table from its `Target`."""
 
@@ -286,7 +315,7 @@ class RowDelegate(QStyledItemDelegate):
         self.monitor = monitor
 
     def sizeHint(self, option, index):
-        return QSize(100, scaled(ROW_HEIGHT))
+        return QSize(100, scaled(COMPACT_ROW_HEIGHT))
 
     def paint(self, p: QPainter, option, index):
         mon = self.monitor
@@ -328,20 +357,8 @@ class RowDelegate(QStyledItemDelegate):
     def _paint_file(self, p, r, target, font, small, pal):
         bold = QFont(font)
         bold.setWeight(QFont.DemiBold)
-        folder = self.monitor.display_folder(target)
-        p.setFont(bold)
-        p.setPen(QColor(pal["text"]))
-        text_r = r.adjusted(14, 0, -6, 0)
-        name = QFontMetricsF(bold).elidedText(target.name, Qt.ElideMiddle, text_r.width())
-        if not folder:
-            p.drawText(text_r, Qt.AlignLeft | Qt.AlignVCenter, name)
-            return
-        half = r.height() / 2
-        p.drawText(text_r.adjusted(0, 4, 0, -half + 2), Qt.AlignLeft | Qt.AlignBottom, name)
-        p.setFont(small)
-        p.setPen(QColor(pal["muted"]))
-        folder = QFontMetricsF(small).elidedText(folder, Qt.ElideLeft, text_r.width())
-        p.drawText(text_r.adjusted(0, half + 1, 0, -3), Qt.AlignLeft | Qt.AlignTop, folder)
+        paint_name_and_detail(p, r.adjusted(14, 0, -6, 0), target.name, self.monitor.display_folder(target),
+                              bold, small, QColor(pal["text"]), QColor(pal["muted"]), Qt.ElideLeft)
 
     def _paint_package(self, p, r, target, small, pal):
         if not target.package:
@@ -349,10 +366,10 @@ class RowDelegate(QStyledItemDelegate):
         color = QColor(self.monitor.package_colors.get(target.package_kind, pal["muted"]))
         fm = QFontMetricsF(small)
         text = fm.elidedText(target.package, Qt.ElideRight, r.width() - 46)
-        pill = QRectF(r.left() + 8, r.center().y() - 10, fm.horizontalAdvance(text) + 28, 20)
+        pill = QRectF(r.left() + 8, r.center().y() - 9, fm.horizontalAdvance(text) + 28, 18)
         p.setPen(Qt.NoPen)
         p.setBrush(_tint(color, 50))
-        p.drawRoundedRect(pill, 10, 10)
+        p.drawRoundedRect(pill, 9, 9)
         p.setBrush(color)
         p.drawEllipse(QRectF(pill.left() + 7, pill.center().y() - 3, 6, 6))
         p.setFont(small)
@@ -364,11 +381,11 @@ class RowDelegate(QStyledItemDelegate):
             if target.status == WARNING else target.status
         font = QFont(small)
         font.setWeight(QFont.DemiBold)
-        pill = QRectF(r.left() + 8, r.center().y() - 11,
-                      QFontMetricsF(font).horizontalAdvance(text) + 36, 22)
+        pill = QRectF(r.left() + 8, r.center().y() - 10,
+                      QFontMetricsF(font).horizontalAdvance(text) + 36, 20)
         p.setPen(Qt.NoPen)
         p.setBrush(_tint(color, 40))
-        p.drawRoundedRect(pill, 11, 11)
+        p.drawRoundedRect(pill, 10, 10)
         icon = QRectF(pill.left() + 8, pill.center().y() - 6, 12, 12)
         if target.status == COMPILING:  # spinning arc
             p.setPen(QPen(_tint(color, 70), 2))
@@ -653,7 +670,7 @@ class BuildMonitor(SortableTable, QWidget):
         self.table.setHorizontalHeaderLabels(self.COLUMNS)
         self.table.setItemDelegate(RowDelegate(self))
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(scaled(ROW_HEIGHT))
+        self.table.verticalHeader().setDefaultSectionSize(scaled(COMPACT_ROW_HEIGHT))
         self.table.setShowGrid(False)
         self.table.setFrameShape(QTableWidget.NoFrame)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -1125,7 +1142,7 @@ class BuildMonitor(SortableTable, QWidget):
         title_font.setPointSizeF(title_font.pointSizeF() + 2)
         title_font.setWeight(QFont.Bold)
         self.title.setFont(title_font)
-        self.table.verticalHeader().setDefaultSectionSize(scaled(ROW_HEIGHT))
+        self.table.verticalHeader().setDefaultSectionSize(scaled(COMPACT_ROW_HEIGHT))
         self.refresh_palette()  # the stylesheet has pixel sizes
         self._fit_columns()
 

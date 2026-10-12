@@ -482,7 +482,9 @@ class MainWindow(QMainWindow):
         console_box = QWidget()
         cl = QVBoxLayout(console_box)
         cl.setContentsMargins(0, 0, 0, 0)
-        cl.setSpacing(3)  # (the default spacing left a visible gap above the buttons)
+        # (No spacing: macOS buttons already keep some room around themselves,
+        # for the focus ring, which the layout counts as part of the button.)
+        cl.setSpacing(0)
         # What's shown, when it's one item's output (a test, a file's compile,
         # an AI review); hidden for all the output ("Output" is the panel's title).
         self.output_title = QLabel()
@@ -512,10 +514,6 @@ class MainWindow(QMainWindow):
         clear.setToolTip("Clear the output")
         clear.clicked.connect(self.console.clear)
         footer.addWidget(clear)
-        for button in (self.show_all_button, clear):
-            # macOS buttons reserve extra room around themselves (for the
-            # focus ring); lay them out by their visible size instead.
-            button.setAttribute(Qt.WA_LayoutUsesWidgetRect)
         cl.addWidget(self.output_title)
         cl.addWidget(self.output_stack, 1)
         cl.addLayout(footer)
