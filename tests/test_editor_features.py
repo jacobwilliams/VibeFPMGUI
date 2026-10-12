@@ -180,11 +180,13 @@ def test_fix_all_safe_and_unsafe(qtbot, lint_window, project):
     editor = open_editor(lint_window, project / "src/lt.f90")
     qtbot.waitUntil(lambda: bool(editor.editor.lint_issues), timeout=20_000)
     lint_window.fix_safe_action.trigger()
+    qtbot.waitUntil(lambda: "end subroutine s" in editor.editor.toPlainText(), timeout=20_000)  # (in the background)
     text = editor.editor.toPlainText()
     assert "end subroutine s" in text and "end module m" in text and "x = 1   " not in text
     assert "implicit none" not in text  # (unsafe: not with the safe fixes)
+    qtbot.waitUntil(lambda: not editor.rewriting, timeout=5_000)
     lint_window.fix_all_action.trigger()
-    assert "implicit none" in editor.editor.toPlainText()
+    qtbot.waitUntil(lambda: "implicit none" in editor.editor.toPlainText(), timeout=20_000)
     editor.editor.undo()
     assert "implicit none" not in editor.editor.toPlainText()
 
@@ -293,3 +295,34 @@ def test_return_and_backspace_are_one_undo_step_each(window, project):
     QTest.keyClick(code, Qt.Key_Backspace)
     code.undo()
     assert code.toPlainText() == before
+
+
+def test_format_and_fix_dont_make_the_window_wait(qtbot, window, project, monkeypatch):
+    """fprettify / fortitude can take seconds on a big file: they run on a pool
+    thread, and their answer is used only for the text they were given."""
+    import time
+
+    editor = open_editor(window, project / "src/foo.f90")
+    code = editor.editor
+    original = code.toPlainText()
+    monkeypatch.setattr(formatter, "can_format", lambda path: True)
+
+    def slow_format(text, path):
+        time.sleep(0.5)
+        return text.upper(), ""
+
+    monkeypatch.setattr(formatter, "format_text", slow_format)
+    started = time.monotonic()
+    window.format_file(editor)
+    assert time.monotonic() - started < 0.3 and editor.rewriting  # (didn't wait)
+    window.format_file(editor)  # (again while it runs: ignored)
+    assert "still formatting" in window.statusBar().currentMessage()
+    qtbot.waitUntil(lambda: not editor.rewriting, timeout=5_000)
+    assert code.toPlainText() == original.upper()
+    code.undo()
+    # Typed into meanwhile: the answer is for the old text, so it's not used.
+    window.format_file(editor)
+    code.appendPlainText("! typed while it was formatting")
+    qtbot.waitUntil(lambda: not editor.rewriting, timeout=5_000)
+    assert code.toPlainText() == original + "\n! typed while it was formatting"
+    assert "changed while formatting" in window.statusBar().currentMessage()

@@ -80,6 +80,7 @@ from . import editor as editor_mod
 from . import highlighter as hl
 from . import manifest as m
 from .about import FPM_DOCS_URL, AboutDialog
+from .background import call_in_background
 from .build_monitor import BuildMonitor, set_ui_scale
 from .compat import join_args, quote_arg, reveal_label, set_windows_app_id, split_args
 from .editor import EditorTab, monospace_font
@@ -2415,49 +2416,69 @@ class MainWindow(QMainWindow):
         self.forward_action.setEnabled(bool(self._forward))
         self._update_review_actions()
 
+    def _rewrite_text(self, editor: EditorTab, doing: str, rewrite, done):
+        """Run ``rewrite(text) -> (new text or None, error)`` (a program: it can
+        take seconds on a big file) on a pool thread, then ``done(text, new,
+        error)`` in the GUI thread, if the file is still open and unchanged
+        (otherwise the result would undo what was typed meanwhile)."""
+        if editor.rewriting:
+            self.statusBar().showMessage(f"{editor.path.name}: still {doing}…", 3000)
+            return
+        editor.rewriting = True
+        text = editor.editor.toPlainText()
+        self.statusBar().showMessage(f"{doing.capitalize()} {editor.path.name}…")
+
+        def finished(result):
+            editor.rewriting = False
+            if editor not in self.editors():
+                return  # (closed meanwhile)
+            if editor.editor.toPlainText() != text:
+                self.statusBar().showMessage(f"{editor.path.name} changed while {doing}: nothing was changed "
+                                             "(try again)", 6000)
+                return
+            done(text, *result)
+
+        call_in_background(lambda: rewrite(text), finished, self)
+
     def fix_lint_issues(self, editor: EditorTab, unsafe: bool):
-        """Edit → Fix All … Issues: fortitude --fix on the editor's text (one Undo step)."""
+        """Edit → Fix All … Issues: fortitude --fix on the editor's text (one
+        Undo step), run in the background."""
         if not editor.can_lint():
             return
         expected = sum(1 for i in editor.editor.lint_issues if i.fixable and (unsafe or i.fix_safe))
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            text = editor.editor.toPlainText()
-            fixed, error = lint.fix_text(text, editor.path, unsafe=unsafe)
-        finally:
-            QApplication.restoreOverrideCursor()
-        if fixed is None:
-            QMessageBox.warning(self, "fortitude", f"{editor.path.name} could not be fixed:\n\n{error}")
-            return
-        if fixed == text:
-            kind = "fixable" if unsafe else "safely fixable"
-            self.statusBar().showMessage(f"{editor.path.name}: no {kind} issues", 4000)
-            return
-        editor.replace_text(fixed)
-        count = f"{expected} " if expected else ""
-        self.statusBar().showMessage(f"Applied {count}fortitude fix{'es' * (expected != 1)} to {editor.path.name} "
-                                     "(Undo to revert; not saved yet)", 6000)
+        path = editor.path
+
+        def done(text, fixed, error):
+            if fixed is None:
+                QMessageBox.warning(self, "fortitude", f"{path.name} could not be fixed:\n\n{error}")
+            elif fixed == text:
+                kind = "fixable" if unsafe else "safely fixable"
+                self.statusBar().showMessage(f"{path.name}: no {kind} issues", 4000)
+            else:
+                editor.replace_text(fixed)
+                count = f"{expected} " if expected else ""
+                self.statusBar().showMessage(f"Applied {count}fortitude fix{'es' * (expected != 1)} to {path.name} "
+                                             "(Undo to revert; not saved yet)", 6000)
+
+        self._rewrite_text(editor, "fixing", lambda text: lint.fix_text(text, path, unsafe=unsafe), done)
 
     def format_file(self, editor: EditorTab):
-        """Format the editor's (Fortran) text with fprettify."""
+        """Format the editor's (Fortran) text with fprettify, in the background."""
         if not formatter.can_format(editor.path):
             return
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            text = editor.editor.toPlainText()
-            formatted, error = formatter.format_text(text, editor.path)
-        finally:
-            QApplication.restoreOverrideCursor()
-        if formatted is None:
-            QMessageBox.warning(self, "fprettify failed",
-                                f"{editor.path.name} could not be formatted:\n\n{error}")
-            return
-        if formatted == text:
-            self.statusBar().showMessage(f"{editor.path.name} is already formatted", 4000)
-            return
-        editor.replace_text(formatted)
-        self.statusBar().showMessage(f"Formatted {editor.path.name} with fprettify "
-                                     "(Undo to revert; not saved yet)", 6000)
+        path = editor.path
+
+        def done(text, formatted, error):
+            if formatted is None:
+                QMessageBox.warning(self, "fprettify failed", f"{path.name} could not be formatted:\n\n{error}")
+            elif formatted == text:
+                self.statusBar().showMessage(f"{path.name} is already formatted", 4000)
+            else:
+                editor.replace_text(formatted)
+                self.statusBar().showMessage(f"Formatted {path.name} with fprettify "
+                                             "(Undo to revert; not saved yet)", 6000)
+
+        self._rewrite_text(editor, "formatting", lambda text: formatter.format_text(text, path), done)
 
     def _update_review_actions(self):
         """AI review needs an editor tab in front (and no review running)."""
@@ -3128,7 +3149,7 @@ class MainWindow(QMainWindow):
         self._ai_worker = None
         self._ai_editor: EditorTab | None = None
         self._ollama_process: QProcess | None = None
-        # Ollama is asked things on a pool thread (see ai.call_in_background):
+        # Ollama is asked things on a pool thread (see background.call_in_background):
         self._ai_starting = False  # a review is getting ready (server, model): AI Review waits
         self._known_models: list[str] | None = None  # installed models, as last heard (None: not yet)
         self._asking_models = False
@@ -3185,7 +3206,7 @@ class MainWindow(QMainWindow):
         self._show_model_menu()
         if ai.ollama_available() and not self._asking_models:
             self._asking_models = True
-            ai.call_in_background(ai.installed_models, self._models_heard, self)
+            call_in_background(ai.installed_models, self._models_heard, self)
 
     def _models_heard(self, models: list[str]):
         self._asking_models = False
@@ -3248,7 +3269,7 @@ class MainWindow(QMainWindow):
         """Start "ollama serve" if no server answers, then call ``then``
         (Ollama is asked on a pool thread: the window never waits for it)."""
         self._set_ai_starting(True)
-        ai.call_in_background(ai.server_running, lambda up: self._server_checked(up, then), self)
+        call_in_background(ai.server_running, lambda up: self._server_checked(up, then), self)
 
     def _server_checked(self, up: bool, then):
         if up:
@@ -3268,7 +3289,7 @@ class MainWindow(QMainWindow):
         deadline = time.monotonic() + 20
 
         def poll():
-            ai.call_in_background(ai.server_running, polled, self)
+            call_in_background(ai.server_running, polled, self)
 
         def polled(up: bool):
             if up:
@@ -3283,7 +3304,7 @@ class MainWindow(QMainWindow):
 
     def _check_model(self):
         """Is the model downloaded? (Asked on a pool thread.)"""
-        ai.call_in_background(ai.installed_models, self._model_checked, self)
+        call_in_background(ai.installed_models, self._model_checked, self)
 
     def _model_checked(self, installed: list[str]):
         self._known_models = installed

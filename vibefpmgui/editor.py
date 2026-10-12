@@ -1583,6 +1583,7 @@ class EditorTab(QWidget):
         self._spelling_issues: list = []
         self._lint_process: QProcess | None = None
         self._lint_again = False  # the text changed while fortitude was running
+        self.rewriting = False  # Format or Fix All is running on this text (see MainWindow._rewrite_text)
         self.lsp: lsp_mod.LspClient | None = None  # the language server, for Fortran files
         self._outline: list[tuple[int, str, str, int, int]] = []
         self.editor = CodeEditor()

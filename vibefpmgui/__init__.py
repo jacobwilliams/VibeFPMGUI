@@ -80,11 +80,14 @@ menu item says "not found" and the feature is off; without fprettify the
 | `vibefpmgui.hover_card` | The HTML of the hover card |
 | `vibefpmgui.symbol_search` | *Go to Symbol in Project* |
 | `vibefpmgui.references_panel` | The *References* tab |
-| `vibefpmgui.result_tree` | The list of places in files shared by the *Search* and *References* tabs (icons, syntax-colored lines) |
+| `vibefpmgui.result_tree` | The list of places in files shared by the *Search*, *References* and *Problems* tabs (icons, syntax-colored lines) |
+| `vibefpmgui.problems_panel` | The *Problems* tab: everything flagged in the file in the editor |
 | `vibefpmgui.project_search` | *Find in Files*: search and replace across the project and its dependencies (*Search* tab) |
 | `vibefpmgui.rename_dialog` | The *Rename Symbol* preview |
 | `vibefpmgui.lint` | Linting with fortitude |
 | `vibefpmgui.formatter` | Formatting with fprettify |
+| `vibefpmgui.spelling` | Spell checking comments and strings (pyspellchecker) |
+| `vibefpmgui.gremlins` | Finding non-ASCII and invisible characters, and drawing the gutter's gremlin |
 
 **AI review**
 
@@ -98,6 +101,7 @@ menu item says "not found" and the feature is off; without fprettify the
 | Module | What it does |
 |---|---|
 | `vibefpmgui.icons` | Toolbar icons, symbol badges and the app icon, drawn with QPainter |
+| `vibefpmgui.background` | Blocking calls (Format, Fix All, asking Ollama) on a pool thread, the result back in the GUI thread |
 | `vibefpmgui.compat` | Things that differ between macOS, Linux and Windows |
 
 ## How it fits together
