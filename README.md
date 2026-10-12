@@ -314,6 +314,38 @@ The demo project ([examples/demo](examples/demo)) uses features, profiles,
 git/path/metapackage/dev dependencies, warnings, parallel compiles and tests,
 so every part of the GUI can be tried; its README lists what to click.
 
+## Dependencies
+
+`pixi install` (or any `pixi run …`) installs all of these; a pip install
+gets the Python ones (`pip install ".[ai,fortran]"` for the optional ones),
+and the others come from your system or conda.
+
+| Dependency | Needed | Used for |
+|---|---|---|
+| [fpm](https://fpm.fortran-lang.org) | yes | Building, running, testing, updating and cleaning projects; reading their dependency tree |
+| [gfortran](https://gcc.gnu.org/fortran/) | yes (or another compiler) | The default Fortran compiler fpm builds with |
+| [Python](https://www.python.org) 3.11+ | yes | The app itself |
+| [PySide6](https://doc.qt.io/qtforpython-6/) | yes | The Qt windows, widgets and processes |
+| [qtpy](https://github.com/spyder-ide/qtpy) | yes | The Qt imports (one API over the Qt bindings; PySide6 is the one tested) |
+| [pyqtgraph](https://www.pyqtgraph.org) | yes | Drawing the dependency graph |
+| [NumPy](https://numpy.org) | yes | The dependency graph's force-directed layout (also needed by pyqtgraph) |
+| [Pygments](https://pygments.org) | yes | Syntax colors in the editor, Search, References and Problems lists, and the style choices in *View → Syntax Colors* |
+| [pathspec](https://github.com/cpburnz/python-pathspec) | yes | `.gitignore` matching: ignored files grayed in *Project files* and skipped by Find in Files |
+| [pyte](https://github.com/selectel/pyte) | yes | The Terminal panel's terminal emulation |
+| [pywinpty](https://github.com/andfoy/pywinpty) | Windows only | The Terminal panel's shell on Windows (a pseudo-console) |
+| [pyspellchecker](https://github.com/barrust/pyspellchecker) | yes | Spell checking comments and strings in the editor |
+| [fortls](https://fortls.fortran-lang.org) | optional | The Fortran language server: hover info, completion, go to definition/implementation, references, rename, outline, diagnostics |
+| [fortitude](https://fortitude.readthedocs.io) (`fortitude-lint`) | optional | Linting Fortran files as you type, and its automatic fixes |
+| [fprettify](https://github.com/fortran-lang/fprettify) | optional | **Format** (re-indenting Fortran files) |
+| [LFortran](https://lfortran.org) | optional | Another compiler to build with (choose it in *Build options*) |
+| [Ollama](https://ollama.com) (server and `ollama` Python client) | optional | AI code review with a local model |
+| [pytest](https://pytest.org), [pytest-qt](https://pytest-qt.readthedocs.io), [pytest-timeout](https://github.com/pytest-dev/pytest-timeout), [pytest-cov](https://pytest-cov.readthedocs.io) | development | The tests, run in Qt's offscreen platform, and the coverage report |
+| [Ruff](https://docs.astral.sh/ruff/) | development | Linting the app's Python code |
+| [pdoc](https://pdoc.dev) | development | The API documentation website |
+
+Without an optional tool the app still runs; only the features that use it
+are unavailable.
+
 ## Tests
 
 ```sh
