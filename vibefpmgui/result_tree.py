@@ -130,6 +130,14 @@ def file_labels(path: Path, root: Root | None, project_dir: Path | None) -> tupl
     return folder, package
 
 
+def _badge_font(font: QFont) -> QFont:
+    """The small bold font of a problem's badge."""
+    small = QFont(font)
+    small.setPointSizeF(max(6.0, small.pointSizeF() - 2))
+    small.setBold(True)
+    return small
+
+
 class _ResultDelegate(QStyledItemDelegate):
     """Draws a file row (icon, name, folder, package, count) or a result
     row (line number and the line, with the result highlighted, or the
@@ -141,7 +149,31 @@ class _ResultDelegate(QStyledItemDelegate):
 
     def sizeHint(self, option, index):
         size = super().sizeHint(option, index)
-        return QSize(size.width(), max(size.height(), QFontMetrics(self.tree.mono).height() + 6))
+        line_height = QFontMetrics(self.tree.mono).height() + 6
+        parts = index.data(PARTS_ROLE)
+        if parts is not None and parts[0] == "problem":  # (the message wraps: as tall as it needs)
+            # Where the row starts: indented one step per level (plus one for the root's arrows).
+            depth, parent = 0, index.parent()
+            while parent.isValid():
+                depth, parent = depth + 1, parent.parent()
+            left = self.tree.indentation() * (depth + int(self.tree.rootIsDecorated()))
+            width = max(80, self.tree.viewport().width() - left - 2)
+            _badge, message = self._problem_layout(option.font, parts[2], QRect(0, 0, width, line_height))
+            height = QFontMetrics(option.font).boundingRect(
+                message, Qt.TextWordWrap | Qt.AlignLeft, parts[2].message).height()
+            return QSize(0, max(line_height, height + 6))  # (no width of its own: it wraps to the view's)
+        return QSize(size.width(), max(size.height(), line_height))
+
+    def _problem_layout(self, font: QFont, problem, rect: QRect) -> tuple[QRect, QRect]:
+        """Where a problem row's badge goes (beside its line number, on the
+        first line) and the rectangle its message wraps in."""
+        number = QFontMetrics(self.tree.mono).horizontalAdvance(f"{problem.line:>5}  ")
+        width = QFontMetrics(_badge_font(font)).horizontalAdvance(problem.badge) + 10
+        first = QFontMetrics(self.tree.mono).height() + 6  # (the first line's height)
+        badge = QRect(rect.left() + 4 + number, rect.top() + 3, width, first - 6)
+        message = QRect(badge.right() + 9, rect.top() + 3, max(20, rect.right() - badge.right() - 13),
+                        max(first - 6, rect.height() - 6))
+        return badge, message
 
     def paint(self, painter, option, index):
         parts = index.data(PARTS_ROLE)
@@ -224,21 +256,28 @@ class _ResultDelegate(QStyledItemDelegate):
             painter.drawText(pill, Qt.AlignCenter, text)
         elif parts[0] == "problem":
             _kind, path, problem = parts
-            draw(f"{problem.line:>5}  ", self.tree.mono, dim)
-            # The badge: the rule or kind, white on its color.
-            small = QFont(opt.font)
-            small.setPointSizeF(max(6.0, small.pointSizeF() - 2))
-            small.setBold(True)
-            width = QFontMetrics(small).horizontalAdvance(problem.badge) + 10
-            badge = QRect(x, rect.top() + 3, width, rect.height() - 6)
+            badge, message = self._problem_layout(opt.font, problem, rect)
+            # The line number and badge on the first line; the message wraps beside them.
+            painter.setFont(self.tree.mono)
+            painter.setPen(dim)
+            painter.drawText(QRect(x, badge.top(), badge.left() - x, badge.height()),
+                             Qt.AlignVCenter | Qt.AlignLeft, f"{problem.line:>5}  ")
             painter.setPen(Qt.NoPen)
             painter.setBrush(QColor(problem.color))
             painter.drawRoundedRect(badge, 3, 3)
             painter.setPen(QColor("white"))
-            painter.setFont(small)
+            painter.setFont(_badge_font(opt.font))
             painter.drawText(badge, Qt.AlignCenter, problem.badge)
-            x += width + 8
-            draw(problem.message, opt.font, color)
+            painter.setPen(color)
+            painter.setFont(opt.font)
+            first = QFontMetrics(opt.font).height()
+            # (one line: centred on the badge, as before; more: from the top)
+            if QFontMetrics(opt.font).boundingRect(message, Qt.TextWordWrap, problem.message).height() <= first:
+                message.setTop(badge.top())
+                message.setHeight(badge.height())
+                painter.drawText(message, Qt.AlignVCenter | Qt.AlignLeft, problem.message)
+            else:
+                painter.drawText(message, Qt.TextWordWrap | Qt.AlignTop | Qt.AlignLeft, problem.message)
         else:
             _kind, path, found = parts
             mono = self.tree.mono
@@ -330,6 +369,17 @@ class ResultTree(QTreeWidget):
             item.addChild(child)
         item.setExpanded(True)
         self.verticalScrollBar().setValue(scroll)
+
+    def set_wrapping(self, on: bool):
+        """Rows as tall as their (wrapped) text: the Problems tab's messages
+        can be long (an AI review's). Off: one line each, quicker for long lists."""
+        self.setUniformRowHeights(not on)
+        self.setWordWrap(on)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if not self.uniformRowHeights() and event.size().width() != event.oldSize().width():
+            self.doItemsLayout()  # (wrapped rows: new heights for the new width)
 
     def remove_file(self, path: Path):
         item = self.items.pop(path, None)

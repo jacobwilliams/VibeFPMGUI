@@ -50,6 +50,7 @@ class ProblemsPanel(QWidget):
             self.buttons[source] = button
             header.addWidget(button)
         self.tree = ResultTree()
+        self.tree.set_wrapping(True)  # (long messages wrap: an AI review's can be a few sentences)
         self.tree.open_requested.connect(self.open_requested)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)

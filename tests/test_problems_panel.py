@@ -90,3 +90,28 @@ def test_follows_the_editor(qtbot, window, editor, project):
     assert editor.save()  # (closing an unsaved file would ask first)
     window.close_all_editors()
     assert panel.tree.topLevelItemCount() == 0 and "Open a file" in panel.title.text()
+
+
+def test_long_messages_wrap(qtbot, window, editor):
+    from types import SimpleNamespace
+
+    long = ("The loop recomputes the norm of the whole array on every iteration; compute it once before "
+            "the loop and reuse it, which also avoids allocating the temporary each time. ") * 2
+    editor.show_review([SimpleNamespace(line=3, category="performance", comment=long)])
+    panel = window.problems_panel
+    tree = panel.tree
+    panel.resize(500, 400)
+    panel.show()
+    qtbot.waitExposed(panel)
+    item = tree.topLevelItem(0)
+    rows = {item.child(i).data(0, PARTS_ROLE)[2].source: item.child(i) for i in range(item.childCount())}
+    review, short = rows["review"], rows["build"]
+
+    def height(row):
+        return tree.visualItemRect(row).height()
+
+    assert height(review) > 2 * height(short)  # (several lines)
+    narrow = height(review)
+    panel.resize(1000, 400)
+    qtbot.waitUntil(lambda: height(review) < narrow, timeout=2_000)  # (wrapped again, wider)
+    assert tree.horizontalScrollBar().maximum() == 0  # (wraps rather than scrolling sideways)
