@@ -598,6 +598,94 @@ class ProgressLine(QWidget):
 STATUS_SORT = {FAILED: 0, WARNING: 1, COMPILING: 2, ABORTED: 3, DONE: 4}
 
 
+class LogFinder:
+    """Finds a source file's compile log, which fpm writes as
+    ``build/<compiler>_<hash>/<package>/<source path>.o.log``: the path is
+    relative to the project, with "/" as "_" (``src_utils.f90.o.log``,
+    ``build_dependencies_fmin_src_fmin.F90.o.log``). There is a folder per
+    compiler and flag combination, and a build may create new ones.
+
+    Called for each file a build finishes, so it doesn't list folders: it
+    checks for the names the file's known paths give (one stat per folder).
+    Only when that finds nothing (the path isn't known) does it list the
+    folders, and each listing is kept until its folder changes."""
+
+    def __init__(self, project_dir: Path):
+        self.project_dir = project_dir
+        self._root = project_dir.resolve()
+        self.build = project_dir / "build"
+        self._folders: tuple[tuple, list[Path]] = ((), [])  # (what they were listed from, the folders)
+        self._listings: dict[Path, tuple[int, list[str]]] = {}  # folder -> (its mtime, its log names)
+        self.listed = 0  # folders listed (for the tests)
+
+    def folders(self) -> list[Path]:
+        """``build/*_*/*``: listed again only when a folder is added or removed."""
+        try:
+            configs = sorted(e.path for e in os.scandir(self.build) if e.is_dir() and "_" in e.name)
+            key = (self.build.stat().st_mtime_ns, *((c, os.stat(c).st_mtime_ns) for c in configs))
+        except OSError:
+            return []
+        if key != self._folders[0]:
+            folders = []
+            for config in configs:
+                try:
+                    folders += [Path(e.path) for e in os.scandir(config) if e.is_dir()]
+                except OSError:
+                    continue
+            self._folders = (key, folders)
+        return self._folders[1]
+
+    def log_names(self, name: str, paths: list[Path]) -> list[str]:
+        """The log names fpm would give a file with this name and these paths."""
+        names = [f"{name}.o.log"]
+        for path in paths:
+            try:
+                rel = os.path.relpath(Path(path).resolve(), self._root)
+            except ValueError:  # (Windows: another drive)
+                continue
+            names.append(rel.replace("\\", "_").replace("/", "_") + ".o.log")
+        return names
+
+    def find(self, name: str, paths: list[Path], since: float) -> list[tuple[float, Path]]:
+        """(modification time, log) of the logs for a source file written
+        since ``since`` (the build's start)."""
+        folders = self.folders()
+        found = []
+        for folder in folders:
+            for log_name in self.log_names(name, paths):
+                found += self._if_new(folder / log_name, since)
+        if found:
+            return found
+        for folder in folders:  # (not found by its path, or that isn't known: any log of that file name)
+            for log_name in self._listing(folder):
+                if log_name == f"{name}.o.log" or log_name.endswith(f"_{name}.o.log"):
+                    found += self._if_new(folder / log_name, since)
+        return found
+
+    @staticmethod
+    def _if_new(log: Path, since: float) -> list[tuple[float, Path]]:
+        try:
+            mtime = log.stat().st_mtime
+        except OSError:
+            return []
+        return [(mtime, log)] if mtime >= since else []
+
+    def _listing(self, folder: Path) -> list[str]:
+        try:
+            mtime = folder.stat().st_mtime_ns
+        except OSError:
+            return []
+        cached = self._listings.get(folder)
+        if cached is None or cached[0] != mtime:
+            self.listed += 1
+            try:
+                names = [e.name for e in os.scandir(folder) if e.name.endswith(".o.log")]
+            except OSError:
+                names = []
+            cached = self._listings[folder] = (mtime, names)
+        return cached[1]
+
+
 class BuildMonitor(SortableTable, QWidget):
     """Per-file compile status: header with filter chips, a slim progress bar
     and a custom-drawn table."""
@@ -618,6 +706,7 @@ class BuildMonitor(SortableTable, QWidget):
         self.package_colors = dict(DEFAULT_PACKAGE_COLORS)
         self.diagnostics = DiagnosticParser()
         self.project_dir: Path | None = None
+        self._logs: LogFinder | None = None  # (where the compile logs are: see _read_log)
         self.hover_row = -1
         self.selected_row = -1
         self.spinner_angle = 0.0
@@ -750,6 +839,7 @@ class BuildMonitor(SortableTable, QWidget):
         self.package_kinds = {n: p.kind for n, p in graph.packages.items()} if graph else {}
         self.diagnostics = DiagnosticParser()
         self.project_dir = project_dir
+        self._logs = LogFinder(project_dir)  # (fresh for each build: new folders)
         self.description = description
         self.peak_parallel = 0
         self._build_started = time.time()
@@ -858,18 +948,9 @@ class BuildMonitor(SortableTable, QWidget):
             return
         if self.project_dir is None:
             return
-        logs = []
-        # Each compiler/flag combination gets its own build/<compiler>_<hash>
-        # directory, which may only have been created by this build.
-        for d in (self.project_dir / "build").glob("*_*/*"):
-            for log in d.glob(f"*{target.name}.o.log"):
-                if log.name == f"{target.name}.o.log" or log.name.endswith(f"_{target.name}.o.log"):
-                    try:
-                        mtime = log.stat().st_mtime
-                    except OSError:
-                        continue
-                    if mtime >= self._build_started:
-                        logs.append((mtime, log))
+        if self._logs is None or self._logs.project_dir != self.project_dir:
+            self._logs = LogFinder(self.project_dir)
+        logs = self._logs.find(target.name, [path for _package, path in target.candidates], self._build_started)
         if not logs:
             return
         log = max(logs)[1]
