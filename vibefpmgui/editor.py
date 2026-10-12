@@ -361,6 +361,14 @@ class CodeEditor(QPlainTextEdit):
         # of them. Typing, deleting and moving happen at all of them; these
         # QTextCursors stay in place as the text changes.
         self.extra_cursors: list[QTextCursor] = []
+        # With several cursors they're all drawn here (Qt's own is hidden), so
+        # they look alike and blink together, at the system's rate.
+        self._caret_width = self.cursorWidth()  # Qt's (restored with one cursor)
+        self._caret_on = True
+        self._caret_timer = QTimer(self)
+        self._caret_timer.timeout.connect(self._blink)
+        self.cursorPositionChanged.connect(self._restart_blink)
+        self.textChanged.connect(self._restart_blink)
         self.gutter = LineNumberArea(self)
         self.setLineWrapMode(QPlainTextEdit.NoWrap)
         self.blockCountChanged.connect(self._update_gutter_width)
@@ -611,6 +619,9 @@ class CodeEditor(QPlainTextEdit):
             self.completion_popup.hide()  # (unless it's being double-clicked)
         self.signature_popup.hide()
         super().focusOutEvent(event)
+        if self.extra_cursors:
+            self._caret_timer.stop()
+            self.viewport().update()  # (no cursors without the focus, like Qt's)
 
     def hideEvent(self, event):
         self.hide_popups()
@@ -821,9 +832,33 @@ class CodeEditor(QPlainTextEdit):
                 seen.add(key)
                 kept.append(c)
         self.extra_cursors = kept
+        if kept and self.cursorWidth():  # several cursors: draw them all ourselves
+            self._caret_width = self.cursorWidth()
+            self.setCursorWidth(0)
+        elif not kept and not self.cursorWidth():  # one again: Qt's own
+            self.setCursorWidth(self._caret_width)
+        self._restart_blink()
         self._update_extra_selections()
         self.viewport().update()
         self.cursors_changed.emit()
+
+    def _restart_blink(self):
+        """Typing or moving shows the cursors and starts the blink again (as
+        Qt does with its own)."""
+        if not self.extra_cursors:
+            self._caret_timer.stop()
+            return
+        self._caret_on = True
+        flash = QApplication.cursorFlashTime()  # (a whole on-off cycle; 0: no blinking)
+        if flash > 0:
+            self._caret_timer.start(flash // 2)
+        else:
+            self._caret_timer.stop()
+        self.viewport().update()
+
+    def _blink(self):
+        self._caret_on = not self._caret_on
+        self.viewport().update()
 
     def _at_each_cursor(self, edit):
         """``edit(cursor)`` at every cursor, as one Undo step."""
@@ -928,13 +963,18 @@ class CodeEditor(QPlainTextEdit):
 
     def paintEvent(self, event):
         super().paintEvent(event)
-        if self.extra_cursors:  # (Qt draws only the main cursor)
+        if self.extra_cursors and self._caret_on and self.hasFocus():  # (Qt's own is hidden: see _caret_width)
             painter = QPainter(self.viewport())
             color = self.palette().color(QPalette.Text)
-            for c in self.extra_cursors:
+            for c in (self.textCursor(), *self.extra_cursors):
                 rect = self.cursorRect(c)
-                painter.fillRect(QRect(rect.left(), rect.top(), max(2, self.cursorWidth()), rect.height()), color)
+                painter.fillRect(QRect(rect.left(), rect.top(), self._caret_width, rect.height()), color)
             painter.end()
+
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        self._restart_blink()
+
 
     def keyPressEvent(self, event):
         key = event.key()

@@ -147,3 +147,21 @@ def test_escape_and_merging(editor):
 def test_extra_cursors_are_drawn(editor):
     place(editor, (1, 0), (3, 1))
     assert not editor.editor.viewport().grab().isNull()
+
+
+def test_cursors_look_alike_and_blink_together(qtbot, editor, monkeypatch):
+    code = editor.editor
+    qt_width = code.cursorWidth()
+    assert qt_width > 0
+    place(editor, (1, 0), (2, 0))
+    code.setFocus()
+    assert code.cursorWidth() == 0 and code._caret_width == qt_width  # (Qt's hidden: all drawn alike)
+    flash = QApplication.cursorFlashTime()
+    if flash > 0:
+        assert code._caret_timer.isActive() and code._caret_timer.interval() == flash // 2
+        on = code._caret_on
+        qtbot.waitUntil(lambda: code._caret_on != on, timeout=flash * 2)  # (blinks)
+    QTest.keyClicks(code, "z")
+    assert code._caret_on  # (typing shows them again)
+    QTest.keyClick(code, Qt.Key_Escape)
+    assert code.cursorWidth() == qt_width and not code._caret_timer.isActive()  # (one cursor: Qt's own)
