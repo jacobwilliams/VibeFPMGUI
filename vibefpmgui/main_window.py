@@ -598,8 +598,11 @@ class MainWindow(QMainWindow):
         self.central.addWidget(self.no_file_hint)
         self.central.addWidget(self.tabs)
         self.setCentralWidget(self.central)
+        # (Not GroupedDragging: a stack of panels dragged out together goes in a
+        # window of Qt's own, and once that's closed its panels come back stuck
+        # over the editor, outside the layout. One panel at a time is solid.)
         self.setDockOptions(QMainWindow.AnimatedDocks | QMainWindow.AllowNestedDocks
-                            | QMainWindow.AllowTabbedDocks | QMainWindow.GroupedDragging)
+                            | QMainWindow.AllowTabbedDocks)
         self.setTabPosition(Qt.AllDockWidgetAreas, QTabWidget.North)  # (stacked panels: tabs on top)
         self.setDocumentMode(True)
         self.setCorner(Qt.BottomLeftCorner, Qt.LeftDockWidgetArea)  # (the left panels: full height)
@@ -637,7 +640,7 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------- panels
     PANEL_AREAS = Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea | Qt.BottomDockWidgetArea
-    LAYOUT_VERSION = 1  # (saved layouts of another version aren't restored)
+    LAYOUT_VERSION = 2  # (saved layouts of another version aren't restored; 2: no grouped windows)
 
     def _make_dock(self, name: str, title: str, widget: QWidget) -> QDockWidget:
         dock = QDockWidget(title, self)
@@ -648,7 +651,33 @@ class MainWindow(QMainWindow):
                          | QDockWidget.DockWidgetClosable)
         self.docks[name] = dock
         self._dock_of[widget] = dock
+        dock.toggleViewAction().toggled.connect(lambda shown, d=dock: shown and self._panel_shown(d))
+        dock.topLevelChanged.connect(lambda floating, d=dock: floating or self._panel_docked(d))
         return dock
+
+    def _panel_shown(self, dock: QDockWidget):
+        """View → Panels → a panel: in front of its stack, and on a screen."""
+        self._keep_on_screen(dock)
+        QTimer.singleShot(0, dock.raise_)
+
+    def _panel_docked(self, dock: QDockWidget):
+        """A floating panel docked again (double-clicking its title): in front
+        of its stack. (Otherwise, on macOS, Qt leaves it shown but not given a
+        place, outside the window, until the next start.)"""
+        if self._docks_ready:
+            QTimer.singleShot(0, dock.raise_)
+
+    def _keep_on_screen(self, dock: QDockWidget):
+        """A floating panel shown again where no screen is (e.g. on a monitor
+        that's gone): bring it over the window."""
+        if not dock.isFloating():
+            return
+        frame = dock.frameGeometry()
+        if any(screen.availableGeometry().intersects(frame) for screen in QApplication.screens()):
+            return
+        size = dock.size().boundedTo(self.size())
+        dock.resize(size)
+        dock.move(self.geometry().center() - dock.rect().center())
 
     def default_layout(self):
         """Build options above Project files on the left; the dependency graph
@@ -694,6 +723,7 @@ class MainWindow(QMainWindow):
         dock = self._dock_of.get(widget)
         if dock is not None:
             dock.show()
+            self._keep_on_screen(dock)
             dock.raise_()
 
     def panel_in_front(self, widget: QWidget) -> bool:

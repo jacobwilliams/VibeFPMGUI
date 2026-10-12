@@ -6,7 +6,7 @@ import pytest
 from conftest import open_editor
 from qtpy.QtCore import Qt
 from qtpy.QtTest import QTest
-from qtpy.QtWidgets import QApplication, QFileDialog, QMenu
+from qtpy.QtWidgets import QApplication, QFileDialog, QMainWindow, QMenu
 
 from vibefpmgui import graph_view as gv
 from vibefpmgui import highlighter as hl
@@ -303,3 +303,46 @@ def test_output_panel_heading(window):
     assert not title.isHidden() and "check_add" in text and "Output" not in text
     window.show_all_output()
     assert title.isHidden()
+
+
+def test_panels_are_dragged_one_at_a_time(window):
+    # (Qt's windows for a stack dragged out together leave their panels stuck
+    # over the editor once closed.)
+    assert not window.dockOptions() & QMainWindow.GroupedDragging
+
+
+def test_a_floating_panel_lost_off_screen_comes_back(qtbot, window):
+    dock = window.docks["search"]
+    dock.setFloating(True)
+    dock.move(-50_000, -50_000)  # (on a monitor that's gone)
+    dock.close()
+    dock.toggleViewAction().trigger()  # (View → Panels → Search)
+    assert dock.isVisible()
+    assert any(s.availableGeometry().intersects(dock.frameGeometry()) for s in QApplication.screens())
+    dock.move(-50_000, -50_000)
+    window.show_panel(window.search_panel)
+    assert any(s.availableGeometry().intersects(dock.frameGeometry()) for s in QApplication.screens())
+
+
+def test_a_panel_docked_again_is_in_front(qtbot, window):
+    qtbot.waitUntil(lambda: window._docks_ready, timeout=2_000)
+    dock = window.docks["search"]
+    dock.setFloating(True)
+    window.show_panel(window.build_monitor)  # (another panel of its stack in front)
+    dock.setFloating(False)  # (what double-clicking its title does)
+    qtbot.waitUntil(lambda: front_tab(window, "Build") == "Search", timeout=2_000)
+    assert window.rect().contains(dock.geometry())  # (given a place in the window)
+    dock.close()
+    window.show_panel(window.build_monitor)
+    assert front_tab(window, "Build") == "Build"
+    dock.toggleViewAction().trigger()  # (View → Panels → Search: in front too)
+    qtbot.waitUntil(lambda: front_tab(window, "Build") == "Search", timeout=2_000)
+
+
+def front_tab(window, title: str) -> str:
+    """The chosen tab of the stack of panels with a tab named ``title``."""
+    from qtpy.QtWidgets import QTabBar
+
+    bar = next(b for b in window.findChildren(QTabBar)
+               if any(b.tabText(i) == title for i in range(b.count())))
+    return bar.tabText(bar.currentIndex())
