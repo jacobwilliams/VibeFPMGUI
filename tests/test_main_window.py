@@ -105,3 +105,16 @@ def test_clear_settings_and_quit(qtbot, window, project, monkeypatch):
     again = MainWindow(None)
     qtbot.addWidget(again)
     assert again.manifest_path is None  # (like the first start: no last project)
+
+
+def test_word_wrap_reaches_the_output(window, make_window, project):
+    from qtpy.QtWidgets import QPlainTextEdit
+
+    def modes(w):
+        return {w.console.lineWrapMode(), w.test_output.lineWrapMode()}
+
+    window.word_wrap_action.setChecked(False)
+    assert modes(window) == {QPlainTextEdit.NoWrap}  # (long lines scroll sideways)
+    window.word_wrap_action.setChecked(True)
+    assert modes(window) == {QPlainTextEdit.WidgetWidth}
+    assert modes(make_window(project / "fpm.toml")) == {QPlainTextEdit.WidgetWidth}  # (remembered)

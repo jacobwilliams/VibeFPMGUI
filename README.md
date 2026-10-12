@@ -114,7 +114,8 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   warnings, errors, lint and AI-review markers and find matches; click it
   to jump, or drag the box (the part in view) to scroll. *View → Show
   Minimap* turns it off. *View → Word Wrap* (⌥/Alt+Z) wraps long lines at
-  the window's edge instead of scrolling sideways. Multiple cursors: ⌥/Alt-click adds a
+  the window's edge instead of scrolling sideways (in the editor, the
+  Terminal and the Output panel). Multiple cursors: ⌥/Alt-click adds a
   cursor (again to remove it); ⌘⇧/Ctrl+Shift-click adds one on every line
   from the cursor to the clicked line: in the same column, or, clicked in
   another column, with each line selected between the two columns (a box

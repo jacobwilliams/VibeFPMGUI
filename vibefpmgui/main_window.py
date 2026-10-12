@@ -332,7 +332,7 @@ class MainWindow(QMainWindow):
         self.word_wrap_action.setShortcut(QKeySequence("Alt+Z"))
         EditorTab.word_wrap = self.settings.value("word_wrap", False, type=bool)
         self.word_wrap_action.setChecked(EditorTab.word_wrap)
-        self.word_wrap_action.setStatusTip("Wrap long lines in the editor and the terminal at the "
+        self.word_wrap_action.setStatusTip("Wrap long lines in the editor, the terminal and the output at the "
                                            "window's edge instead of scrolling sideways")
         self.word_wrap_action.toggled.connect(self.set_word_wrap)
         view_menu.addAction(self.word_wrap_action)
@@ -517,6 +517,7 @@ class MainWindow(QMainWindow):
         self.output_stack = QStackedWidget()
         self.output_stack.addWidget(self.console)
         self.output_stack.addWidget(self.test_output)
+        self._set_output_wrap(EditorTab.word_wrap)
         console_box = QWidget()
         cl = QVBoxLayout(console_box)
         cl.setContentsMargins(0, 0, 0, 0)
@@ -2023,6 +2024,13 @@ class MainWindow(QMainWindow):
         for editor in self.editors():
             editor.editor.set_word_wrap(on)
         self.terminal_panel.set_word_wrap(on)
+        self._set_output_wrap(on)
+
+    def _set_output_wrap(self, on: bool):
+        """The Output panel's text: wrapped at its edge, or scrolled sideways."""
+        mode = QPlainTextEdit.WidgetWidth if on else QPlainTextEdit.NoWrap
+        for text in (self.console, self.test_output):
+            text.setLineWrapMode(mode)
 
     def set_lsp_diagnostics_enabled(self, on: bool):
         EditorTab.lsp_diagnostics_enabled = on
