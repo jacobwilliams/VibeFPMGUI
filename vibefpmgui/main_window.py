@@ -483,7 +483,10 @@ class MainWindow(QMainWindow):
         cl = QVBoxLayout(console_box)
         cl.setContentsMargins(0, 0, 0, 0)
         cl.setSpacing(3)  # (the default spacing left a visible gap above the buttons)
-        self.output_title = QLabel("<b>Output</b>")
+        # What's shown, when it's one item's output (a test, a file's compile,
+        # an AI review); hidden for all the output ("Output" is the panel's title).
+        self.output_title = QLabel()
+        self.output_title.hide()
         # Titles like "AI review of a_very_long_file_name.f90 (model)" wrap
         # instead of forcing the panel wider.
         self.output_title.setWordWrap(True)
@@ -2809,12 +2812,13 @@ class MainWindow(QMainWindow):
         self.single_writer.reset()
         self.single_writer.write(text)
         self.test_output.moveCursor(QTextCursor.Start)
-        self.output_title.setText(f"<b>Output</b> — {_breakable(html.escape(title))}")
+        self.output_title.setText(f"<b>{_breakable(html.escape(title))}</b>")
+        self.output_title.show()
         self.output_stack.setCurrentWidget(self.test_output)
         self.show_all_button.show()
 
     def show_all_output(self):
-        self.output_title.setText("<b>Output</b>")
+        self.output_title.hide()
         self.output_stack.setCurrentWidget(self.console)
         self.show_all_button.hide()
         self.build_monitor.clear_selection()

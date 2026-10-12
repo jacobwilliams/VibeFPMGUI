@@ -292,3 +292,13 @@ def test_editor_tabs_have_the_file_icon(window, project, monkeypatch):
     menu = QMenu()
     window._fill_tab_list(menu)
     assert not next(a for a in menu.actions() if a.text() == "foo.inc").icon().isNull()
+
+
+def test_output_panel_heading(window):
+    title = window.output_title
+    assert title.isHidden()  # ("Output" is the panel's own title)
+    window._show_single_output("check_add", "add works\n")
+    text = title.text().replace("\u200b", "")  # (long names may wrap after "_")
+    assert not title.isHidden() and "check_add" in text and "Output" not in text
+    window.show_all_output()
+    assert title.isHidden()
