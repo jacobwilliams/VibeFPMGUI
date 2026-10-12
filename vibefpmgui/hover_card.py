@@ -19,9 +19,10 @@ from .icons import SYMBOL_BADGES
 # Kinds the outline has no badge for.
 EXTRA_BADGES = {"variable": ("V", "#495057"), "parameter": ("K", "#5c940d"),
                 "intrinsic": ("intrinsic", "#4263eb")}
-LINT_COLORS = {"lint error": "#e03131", "lint": "#0ca678", "fortls error": "#e03131", "fortls": "#1098ad"}
+LINT_COLORS = {"lint error": "#e03131", "lint": "#0ca678", "fortls error": "#e03131", "fortls": "#1098ad",
+               "spelling": "#ae3ec9"}
 # The heading over each tool's notes.
-SOURCE_TITLES = {"fortitude": "FORTITUDE", "fortls": "FORTLS (checks the saved file)"}
+SOURCE_TITLES = {"fortitude": "FORTITUDE", "fortls": "FORTLS (checks the saved file)", "spelling": "SPELLING"}
 
 
 _text_color = None  # the card's text color (set by the editor, see set_text_color)
@@ -50,7 +51,8 @@ def lint_notes_html(issues, fix_ids: list[int] | None = None) -> str:
     """fortitude's (and fortls's) messages: a colored rule code, the
     message, and the fix, under a heading per tool.
     With ``fix_ids`` (each issue's number in the editor), fixable issues get
-    an "Apply fix" link (``fix:N``)."""
+    an "Apply fix" link (``fix:N``), and misspelled words their suggestions
+    (``spell:N:word``) and "Add to Dictionary" (``addword:N``)."""
     groups: dict[str, list[str]] = {}
     for n, issue in enumerate(issues):
         rows = groups.setdefault(getattr(issue, "source", "fortitude"), [])
@@ -59,8 +61,13 @@ def lint_notes_html(issues, fix_ids: list[int] | None = None) -> str:
         if fix_ids is not None and getattr(issue, "fixable", False):
             note = "" if issue.fix_safe else f" <i style='color:{_muted()}'>(unsafe — check it)</i>"
             link = f" &nbsp;<span style='font-size:small'><a href='fix:{fix_ids[n]}'>Apply fix</a>{note}</span>"
+        if fix_ids is not None and hasattr(issue, "suggestions"):
+            words = [f"<a href='spell:{fix_ids[n]}:{html.escape(w)}'>{html.escape(w)}</a>"
+                     for w in issue.suggestions()]
+            link = (f"<br><span style='font-size:small'>{', '.join(words) or 'No suggestions'}"
+                    f" &nbsp;·&nbsp; <a href='addword:{fix_ids[n]}'>Add to Dictionary</a></span>")
         fix = (f"<br><span style='color:{_muted()}; font-size:small'>Fix: {html.escape(issue.fix)}</span>{link}"
-               if issue.fix else "")
+               if issue.fix else link)
         rows.append(f"<tr><td valign='top' style='padding-right:6px'><span style='background-color:{color}; "
                     f"color:white; font-weight:700; font-size:small'>&nbsp;{html.escape(issue.code)}&nbsp;"
                     f"</span></td><td>{html.escape(issue.message)}{fix}</td></tr>")

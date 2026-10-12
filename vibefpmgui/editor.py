@@ -39,7 +39,9 @@ from qtpy.QtGui import (
     QFontDatabase,
     QKeySequence,
     QPainter,
+    QPainterPath,
     QPalette,
+    QPen,
     QPolygonF,
     QTextCharFormat,
     QTextCursor,
@@ -71,7 +73,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from . import hover_card, lint
+from . import hover_card, lint, spelling
 from . import lsp as lsp_mod
 from .completion import CompletionPopup, SignaturePopup, global_rect
 from .highlighter import (
@@ -81,17 +83,24 @@ from .highlighter import (
 )
 from .icons import SYMBOL_INDENT, symbol_icon
 from .minimap import Minimap
+from .result_tree import Problem
 
 INDENT = "    "
 MAX_FIND_HIGHLIGHTS = 2000
 MARKER_COLORS = {"error": "#e03131", "fatal error": "#e03131", "warning": "#f08c00",
                  "review": "#7048e8", "remark": "#1c7ed6",
                  "lint error": "#e03131", "lint": "#0ca678",
-                 "fortls error": "#e03131", "fortls": "#1098ad"}
+                 "fortls error": "#e03131", "fortls": "#1098ad", "spelling": "#ae3ec9"}
+# Underline colors on a dark background, where these would be too dim to see.
+DARK_UNDERLINE_COLORS = {"spelling": "#e599f7"}
 # Which marker color wins when a line has several kinds of note.
 MARKER_PRIORITY = ["fatal error", "error", "lint error", "fortls error", "warning", "review", "lint",
                    "fortls", "remark"]
+# Which tool an underlined issue is from (by its severity), for the Problems tab.
+PROBLEM_SOURCES = {"lint": "fortitude", "lint error": "fortitude", "fortls": "fortls",
+                   "fortls error": "fortls", "spelling": "spelling"}
 LINT_DELAY_MS = 600  # lint once typing pauses this long
+SPELLING_DELAY_MS = 250  # spell check this long after the colors are updated
 LSP_SYNC_MS = 300    # send edits to the language server once typing pauses this long
 COMPLETE_MS = 120    # ask for completions once typing pauses this long
 AUTO_COMPLETE_MIN = 2  # characters of a name typed before completions appear by themselves
@@ -220,7 +229,21 @@ class HoverPopup(QFrame):
         self.show()
 
     def _link_clicked(self, url):
-        """The card's "Apply fix" link (fix:N = the editor's Nth lint issue)."""
+        """The card's links: "Apply fix" (fix:N = the editor's Nth lint
+        issue), a spelling suggestion (spell:N:word) or "Add to Dictionary"
+        (addword:N)."""
+        if url.scheme() in ("spell", "addword"):
+            number, _, word = url.path().partition(":")
+            try:
+                issue = self.editor.lint_issues[int(number)]
+            except (ValueError, IndexError):
+                return
+            self.hide()
+            if url.scheme() == "spell":
+                self.editor.replace_word(issue, word)
+            else:
+                self.editor.word_added.emit(issue.word)
+            return
         if url.scheme() == "fix":
             try:
                 issue = self.editor.lint_issues[int(url.path())]
@@ -271,7 +294,8 @@ class LineNumberArea(QWidget):
                 QToolTip.showText(event.globalPos(), change_tip, self)
                 return True
             notes = self.editor.markers.get(line)
-            issues = [i for i in self.editor.lint_issues if i.line == line]
+            # (Spelling has no gutter marks: its notes are on the words only.)
+            issues = [i for i in self.editor.lint_issues if i.line == line and i.severity != "spelling"]
             popup = self.editor.hover_popup
             if issues:  # the same card as hovering the text (with its fix links)
                 if not (popup.isVisible() and popup.anchor == ("gutter", line)):
@@ -336,6 +360,7 @@ class CodeEditor(QPlainTextEdit):
     references_requested = Signal()  # right-click menu → Find References
     rename_requested = Signal()      # right-click menu → Rename Symbol…
     lint_fix_requested = Signal(object)  # a lint.LintIssue whose fix to apply (hover link or menu)
+    word_added = Signal(str)  # "Add to Dictionary" (hover link or menu)
     typed = Signal(str)                # a key that changed the text (after it did; "\b" = Backspace)
     completion_chosen = Signal(object)  # Enter/Tab in the completion list
     cursors_changed = Signal()          # extra cursors added or removed (multiple cursors)
@@ -497,6 +522,21 @@ class CodeEditor(QPlainTextEdit):
     def set_lint(self, issues: list[lint.LintIssue]):
         self.lint_issues = issues
         self._update_extra_selections()
+        self.viewport().update()  # (the spelling squiggles: see _paint_squiggles)
+
+    def replace_word(self, issue, word: str):
+        """A spelling suggestion: the misspelled word becomes ``word`` (if
+        it's still there)."""
+        span = self._lint_span(issue)
+        if span is None:
+            return
+        cursor = QTextCursor(self.document())
+        cursor.setPosition(span[0])
+        cursor.setPosition(span[1], QTextCursor.KeepAnchor)
+        if cursor.selectedText() != issue.word:
+            return  # (the text changed since)
+        cursor.insertText(word)
+        self.setTextCursor(cursor)
 
     def _lint_span(self, issue: lint.LintIssue) -> tuple[int, int] | None:
         """Document positions to underline: the issue's text, only on its
@@ -664,6 +704,26 @@ class CodeEditor(QPlainTextEdit):
         spot = self.cursorForPosition(pos).position() if from_mouse else self.textCursor().position()
         fixes = [i for i in self.lint_issues if i.fixable
                  and (span := self._lint_span(i)) and span[0] <= spot <= span[1]]
+        misspelled = next((i for i in self.lint_issues if i.severity == "spelling"
+                           and (span := self._lint_span(i)) and span[0] <= spot <= span[1]), None)
+        if misspelled is not None:
+            first = menu.actions()[0] if menu.actions() else None
+            words = misspelled.suggestions()
+            for word in words:
+                action = QAction(word, menu)
+                font = action.font()
+                font.setBold(True)
+                action.setFont(font)
+                action.triggered.connect(lambda _=False, i=misspelled, w=word: self.replace_word(i, w))
+                menu.insertAction(first, action)
+            if not words:
+                none = QAction("(No Spelling Suggestions)", menu)
+                none.setEnabled(False)
+                menu.insertAction(first, none)
+            add = QAction(f"Add “{misspelled.word}” to Dictionary", menu)
+            add.triggered.connect(lambda _=False, w=misspelled.word: self.word_added.emit(w))
+            menu.insertAction(first, add)
+            menu.insertSeparator(first)
         if fixes:
             first = menu.actions()[0] if menu.actions() else None
             for issue in fixes:
@@ -741,6 +801,8 @@ class CodeEditor(QPlainTextEdit):
             color.setAlpha(28)
             selections += self._line_highlight(self.textCursor().block(), color)
         for issue in self.lint_issues:
+            if issue.severity == "spelling":
+                continue  # (drawn by paintEvent: see _paint_squiggles)
             span = self._lint_span(issue)
             if span is None:
                 continue
@@ -975,6 +1037,7 @@ class CodeEditor(QPlainTextEdit):
 
     def paintEvent(self, event):
         super().paintEvent(event)
+        self._paint_squiggles(event.rect())
         if self.extra_cursors and self._caret_on and self.hasFocus():  # (Qt's own is hidden: see _caret_width)
             painter = QPainter(self.viewport())
             color = self.palette().color(QPalette.Text)
@@ -986,6 +1049,70 @@ class CodeEditor(QPlainTextEdit):
     def focusInEvent(self, event):
         super().focusInEvent(event)
         self._restart_blink()
+
+    def squiggle_spans(self, area: QRect) -> list[tuple[float, float, float, str]]:
+        """Where the misspelled words' squiggles go in ``area`` (viewport
+        coordinates): (left, right, y, color) per row a word is on."""
+        issues = [i for i in self.lint_issues if i.severity == "spelling"]
+        if not issues:
+            return []
+        dark = self.palette().color(QPalette.Base).lightness() < 128
+        color = (DARK_UNDERLINE_COLORS if dark else MARKER_COLORS)["spelling"]
+        first = self.firstVisibleBlock()
+        top_line = first.blockNumber() + 1
+        offset = self.contentOffset()
+        out = []
+        for issue in issues:
+            if issue.line < top_line:
+                continue
+            block = self.document().findBlockByNumber(issue.line - 1)
+            geometry = self.blockBoundingGeometry(block).translated(offset)
+            if geometry.top() > area.bottom():
+                continue
+            if geometry.bottom() < area.top() or not block.isVisible():
+                continue
+            span = self._lint_span(issue)
+            layout = block.layout()
+            if span is None or layout is None:
+                continue
+            start, end = span[0] - block.position(), span[1] - block.position()
+            for n in range(layout.lineCount()):
+                row = layout.lineAt(n)
+                a, b = max(start, row.textStart()), min(end, row.textStart() + row.textLength())
+                if a >= b:
+                    continue
+                x1, x2 = row.cursorToX(a), row.cursorToX(b)
+                x1 = x1[0] if isinstance(x1, tuple) else x1  # (PySide: (x, position))
+                x2 = x2[0] if isinstance(x2, tuple) else x2
+                y = geometry.top() + row.y() + row.ascent() + max(1.5, row.descent() * 0.45)
+                out.append((geometry.left() + x1, geometry.left() + x2, y, color))
+        return out
+
+    def _paint_squiggles(self, area: QRect):
+        """Misspelled words' wavy underline, drawn here (thicker than the one
+        Qt draws for the other issues, which is easy to miss under a
+        comment's thin text, especially on a dark background)."""
+        spans = self.squiggle_spans(area)
+        if not spans:
+            return
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.Antialiasing)
+        size = self.font().pointSizeF() if self.font().pointSizeF() > 0 else 12.0
+        width = max(1.4, size / 8)    # pen width
+        height = max(1.6, size / 7)   # half the wave's height
+        step = max(2.5, size / 4.5)   # half a wave's length
+        for left, right, y, color in spans:
+            path = QPainterPath(QPointF(left, y))
+            x, up = left, True
+            while x < right:
+                nxt = min(x + step, right)
+                path.quadTo(QPointF((x + nxt) / 2, y - height if up else y + height), QPointF(nxt, y))
+                x, up = nxt, not up
+            pen = QPen(QColor(color), width)
+            pen.setCapStyle(Qt.RoundCap)
+            painter.setPen(pen)
+            painter.drawPath(path)
+        painter.end()
 
 
     def keyPressEvent(self, event):
@@ -1317,6 +1444,7 @@ class EditorTab(QWidget):
 
     lint_enabled = True  # lint Fortran files with fortitude (View menu)
     lsp_diagnostics_enabled = True  # show fortls's own checks (View menu)
+    spelling_enabled = True  # spell check comments and strings (View menu)
     minimap_enabled = True  # View → Show Minimap
     word_wrap = False       # View → Word Wrap
 
@@ -1326,6 +1454,7 @@ class EditorTab(QWidget):
     navigate_requested = Signal(str, int, int)  # go to file, line (1-based), column (0-based)
     references_found = Signal(str, object)  # name, [(file, line, start column, end column)]
     rename_ready = Signal(str, str, object)  # old name, new name, {file: [lsp.TextEdit]}
+    problems_changed = Signal()  # (see problems)
 
     def __init__(self, path: Path, parent=None):
         super().__init__(parent)
@@ -1339,6 +1468,7 @@ class EditorTab(QWidget):
         self._lsp_markers: dict[int, list[tuple[str, str]]] = {}
         self._fortitude_issues: list = []  # (the editor underlines these and fortls's together)
         self._lsp_issues: list = []
+        self._spelling_issues: list = []
         self._lint_process: QProcess | None = None
         self._lint_again = False  # the text changed while fortitude was running
         self.lsp: lsp_mod.LspClient | None = None  # the language server, for Fortran files
@@ -1374,6 +1504,11 @@ class EditorTab(QWidget):
         self.minimap.setVisible(self.minimap_enabled)
         self.editor.set_word_wrap(self.word_wrap)
         self.highlighter.relexed.connect(self.minimap.invalidate)
+        self._spelling_timer = QTimer(self)  # (once the colors, so the comments and strings, are updated)
+        self._spelling_timer.setSingleShot(True)
+        self._spelling_timer.setInterval(SPELLING_DELAY_MS)
+        self._spelling_timer.timeout.connect(self.check_spelling)
+        self.highlighter.relexed.connect(self._spelling_timer.start)
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
@@ -1871,6 +2006,28 @@ class EditorTab(QWidget):
         self._lint_markers = self._markers_for(issues)
         self._show_issues()
 
+    # ---------------------------------------------------------- spelling
+    def set_spelling_enabled(self, on: bool):
+        self.check_spelling() if on else self._show_spelling([])
+
+    def check_spelling(self):
+        """Spell check the comments and strings (as the highlighter last
+        found them: it lexes again after each edit, then this runs)."""
+        self._spelling_timer.stop()
+        if not (self.spelling_enabled and spelling.available()):
+            self._show_spelling([])
+            return
+        hl = self.highlighter
+        if hl._text != self.editor.toPlainText():
+            return  # (the highlighter is behind: it calls again when it's caught up)
+        self._show_spelling(spelling.check(hl._text, hl.prose, hl.names))
+
+    def _show_spelling(self, issues: list):
+        if not issues and not self._spelling_issues:
+            return
+        self._spelling_issues = issues
+        self._show_issues()
+
     def show_lsp_diagnostics(self, issues: list):
         """fortls's check of this file (it sends one when the file is opened
         or saved), shown like fortitude's issues (View menu: on or off)."""
@@ -1887,7 +2044,7 @@ class EditorTab(QWidget):
         return markers
 
     def _show_issues(self):
-        self.editor.set_lint(self._fortitude_issues + self._lsp_issues)
+        self.editor.set_lint(self._fortitude_issues + self._lsp_issues + self._spelling_issues)
         self._apply_markers()
 
     # ------------------------------------------------------------- files
@@ -2043,6 +2200,9 @@ class EditorTab(QWidget):
         if self._lsp_markers:
             count = sum(len(ns) for ns in self._lsp_markers.values())
             parts.append(f"{count} fortls issue{'s' * (count != 1)}")
+        if self._spelling_issues:
+            count = len(self._spelling_issues)
+            parts.append(f"{count} misspelled word{'s' * (count != 1)}")
         if self.editor.extra_cursors:
             parts.insert(1, f"{len(self.editor.extra_cursors) + 1} cursors (Esc: back to one)")
         if note:
@@ -2076,6 +2236,24 @@ class EditorTab(QWidget):
                 merged.setdefault(line, []).extend(notes)
         self.editor.set_markers(merged)
         self._update_status()
+        self.problems_changed.emit()
+
+    def problems(self) -> list[Problem]:
+        """Everything flagged in the file, in line order: the last build's
+        compiler messages, the AI review's findings, and the underlined
+        issues (fortitude, fortls, spelling)."""
+        found = []
+        for markers, source in ((self._compiler_markers, "build"), (self._review_markers, "review")):
+            for line, notes in markers.items():
+                for severity, message in notes:
+                    found.append(Problem(line, 0, line, 0, severity, severity, message,
+                                         MARKER_COLORS.get(severity, "#868e96"), source))
+        for issue in self.editor.lint_issues:
+            found.append(Problem(issue.line, max(0, issue.column - 1), issue.end_line, max(0, issue.end_column - 1),
+                                 issue.severity, issue.code, issue.message, MARKER_COLORS[issue.severity],
+                                 PROBLEM_SOURCES.get(issue.severity, "fortitude")))
+        found.sort(key=lambda p: (p.line, p.column))
+        return found
 
     def replace_text(self, text: str):
         """Replace the whole text as one undoable edit, keeping the cursor

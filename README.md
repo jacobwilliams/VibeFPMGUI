@@ -6,8 +6,8 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
 
 * A window of panels around the editor: *Build options* and *Project files*
   on the left, the *Dependency graph* and *Build outputs* on the right,
-  *Build*, *Tests*, *Run*, *Review*, *References*, *Search* and *Terminal*
-  at the bottom with *Output* beside them, the files open in the editor in
+  *Build*, *Tests*, *Run*, *Problems*, *Review*, *References*, *Search* and
+  *Terminal* at the bottom with *Output* beside them, the files open in the editor in
   the middle. Drag a panel by its title (or its tab) to the left, right or
   bottom, onto another to stack them as tabs, or out of the window to float
   it; double-click the title to float it or dock it again. *View → Panels*
@@ -139,6 +139,20 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   does; *Edit → Fix All Issues, Including Unsafe* also applies the others
   (marked "unsafe — check it"), which you should review. Either way it's a
   single Undo step and nothing is saved until you save.
+* *Problems* panel: everything flagged in the file in the editor — the last
+  build's compiler messages, fortitude's and fortls's issues, misspelled
+  words and AI review findings — in line order, each with its line number,
+  a colored badge (the rule code or kind) and the message. Click one to go
+  to it. The buttons at the top (with counts) show or hide each tool's
+  problems. It follows the editor's current tab and updates as you type.
+* Spell checking: misspelled words in comments and strings (all the text of
+  plain text and Markdown files) get a violet wavy underline, checked with
+  [pyspellchecker](https://github.com/barrust/pyspellchecker). Words that
+  look like code (with digits, underscores or dots, ALL CAPS, camelCase),
+  names used in the file's code, compiler directives (`!$omp …`) and Fortran
+  keywords (`enddo`, `namelist`, …) aren't flagged. Hover a word or right-click it for
+  suggestions and *Add to Dictionary* (your words are kept in the app's
+  settings). *View → Check Spelling in Comments and Strings* turns it off.
 * Formatting: **Format** (toolbar, or *Edit → Format with fprettify*,
   ⇧⌘I) re-indents and re-spaces the free-form Fortran file in the editor
   with [fprettify](https://github.com/fortran-lang/fprettify). Unsaved text

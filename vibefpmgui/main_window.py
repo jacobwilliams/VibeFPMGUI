@@ -71,7 +71,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from . import __version__, ansi, dep_updates, formatter, lint, lsp
+from . import __version__, ansi, dep_updates, formatter, lint, lsp, spelling
 from . import ai_review as ai
 from . import build_outputs as bo
 from . import editor as editor_mod
@@ -89,10 +89,12 @@ from .graph_view import (
     DependencyGraphView,
 )
 from .icons import app_icon, make_icon
+from .problems_panel import ProblemsPanel
 from .project_search import SearchPanel, search_roots
 from .project_tree import ProjectTree, reveal_in_file_manager
 from .references_panel import ReferencesPanel
 from .rename_dialog import RenamePreviewDialog
+from .result_tree import file_labels, root_for
 from .review_monitor import ReviewMonitor
 from .run_monitor import RunMonitor
 from .symbol_search import SymbolSearchDialog
@@ -288,6 +290,17 @@ class MainWindow(QMainWindow):
             "Show the problems fortls finds in a Fortran file when it's opened or saved (e.g. USE after "
             "IMPLICIT, misplaced CONTAINS, interface mismatches), marked like fortitude's")
         view_menu.addAction(self.lsp_diagnostics_action)
+        self.spelling_action = QAction("Check Spelling in Comments and Strings", self, checkable=True)
+        EditorTab.spelling_enabled = self.settings.value("spelling", True, type=bool)
+        spelling.user_words = {w for w in str(self.settings.value("spelling_words", "") or "").split()}
+        self.spelling_action.setChecked(EditorTab.spelling_enabled)
+        self.spelling_action.toggled.connect(self.set_spelling_enabled)
+        if not spelling.available():
+            self.spelling_action.setEnabled(False)
+            self.spelling_action.setText("Check Spelling (pyspellchecker not found)")
+        self.spelling_action.setStatusTip(
+            "Underline misspelled words in comments and strings (right-click one for suggestions)")
+        view_menu.addAction(self.spelling_action)
         self.minimap_action = QAction("Show Minimap", self, checkable=True)
         EditorTab.minimap_enabled = self.settings.value("minimap", True, type=bool)
         self.minimap_action.setChecked(EditorTab.minimap_enabled)
@@ -465,6 +478,7 @@ class MainWindow(QMainWindow):
         self.tabs.currentChanged.connect(self._update_editor_actions)
         self.tabs.currentChanged.connect(self._reveal_current_file)
         self.tabs.currentChanged.connect(self._update_central)
+        self.tabs.currentChanged.connect(self._update_problems)
 
         self.console = QPlainTextEdit()
         self.console.setReadOnly(True)
@@ -538,11 +552,13 @@ class MainWindow(QMainWindow):
         self.search_panel.provider = self._search_sources
         self.search_panel.open_requested.connect(self._open_search_match)
         self.search_panel.replace_requested.connect(self._replace_in_files)
+        self.problems_panel = ProblemsPanel(self.settings)
+        self.problems_panel.open_requested.connect(self._open_search_match)
         self.terminal_panel = TerminalPanel()
         self.terminal_panel.set_font(self._mono_font(editor=True))
         self.terminal_panel.set_word_wrap(EditorTab.word_wrap)
-        # The two lists of places in files (vibefpmgui.result_tree), drawn alike.
-        self.result_trees = [self.references_panel.tree, self.search_panel.tree]
+        # The lists of places in files (vibefpmgui.result_tree), drawn alike.
+        self.result_trees = [self.references_panel.tree, self.search_panel.tree, self.problems_panel.tree]
         for tree in self.result_trees:
             tree.icon_for = self.project_tree.icon_for
             tree.text_for = self._open_text
@@ -571,7 +587,8 @@ class MainWindow(QMainWindow):
             ("options", "Build options", options), ("files", "Project files", files_box),
             ("graph", "Dependency graph", graph_tab), ("outputs", "Build outputs", self.outputs_view),
             ("build", "Build", self.build_monitor), ("tests", "Tests", self.test_monitor),
-            ("run", "Run", self.run_monitor), ("review", "Review", self.review_monitor),
+            ("run", "Run", self.run_monitor), ("problems", "Problems", self.problems_panel),
+            ("review", "Review", self.review_monitor),
             ("references", "References", self.references_panel), ("search", "Search", self.search_panel),
             ("terminal", "Terminal", self.terminal_panel), ("output", "Output", console_box),
         ]:
@@ -612,8 +629,9 @@ class MainWindow(QMainWindow):
 
     def default_layout(self):
         """Build options above Project files on the left; the dependency graph
-        and Build outputs (stacked) on the right; Build, Tests, Run, Review,
-        References, Search and Terminal (stacked) at the bottom, Output beside them."""
+        and Build outputs (stacked) on the right; Build, Tests, Run, Problems,
+        Review, References, Search and Terminal (stacked) at the bottom, Output
+        beside them."""
         d = self.docks
         for dock in d.values():
             self.removeDockWidget(dock)
@@ -624,7 +642,7 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.BottomDockWidgetArea, d["build"])
         # (Output beside Build first: split next to a stacked panel, it would be stacked too.)
         self.splitDockWidget(d["build"], d["output"], Qt.Horizontal)
-        for name in ("tests", "run", "review", "references", "search", "terminal"):
+        for name in ("tests", "run", "problems", "review", "references", "search", "terminal"):
             self.tabifyDockWidget(d["build"], d[name])
         for dock in d.values():
             dock.setFloating(False)  # (after it's placed: a floating one stays floating otherwise)
@@ -1803,6 +1821,19 @@ class MainWindow(QMainWindow):
         texts = {e.path: e.editor.toPlainText() for e in self.editors()}
         return search_roots(self.graph, project_dir), texts, project_dir
 
+    def _update_problems(self, *_):
+        """The Problems tab: the file in the editor's problems."""
+        if not hasattr(self, "problems_panel"):
+            return  # (the window is still being built)
+        editor = self.current_editor()
+        if editor is None:
+            self.problems_panel.show_problems(None, [])
+            return
+        project_dir = self.manifest_path.parent if self.manifest_path else None
+        roots = search_roots(self.graph, project_dir) if project_dir else []
+        folder, package = file_labels(editor.path, root_for(editor.path, roots), project_dir)
+        self.problems_panel.show_problems(editor.path, editor.problems(), folder, package)
+
     def _open_search_match(self, path: str, line: int, column: int, end_line: int, end_column: int):
         """Open a search result with the match selected."""
         self.navigate_to(path, line, column)
@@ -1919,6 +1950,20 @@ class MainWindow(QMainWindow):
         for editor in self.editors():
             editor.show_lsp_diagnostics(self._lsp_diagnostics_by_file.get(editor.path, []))
 
+    def set_spelling_enabled(self, on: bool):
+        EditorTab.spelling_enabled = on
+        self.settings.setValue("spelling", on)
+        for editor in self.editors():
+            editor.set_spelling_enabled(on)
+
+    def add_spelling_word(self, word: str):
+        """"Add to Dictionary": not a misspelling anymore, in any file."""
+        spelling.user_words.add(word.lower())
+        self.settings.setValue("spelling_words", " ".join(sorted(spelling.user_words)))
+        for editor in self.editors():
+            editor.check_spelling()
+        self.statusBar().showMessage(f"Added “{word}” to the dictionary", 4000)
+
     def _lsp_diagnostics(self, path: Path, issues: list):
         """fortls checked a file (opened or saved): show it in its tab."""
         self._lsp_diagnostics_by_file[path] = issues
@@ -1956,6 +2001,9 @@ class MainWindow(QMainWindow):
             editor.navigate_requested.connect(self.navigate_to)
             editor.references_found.connect(self._show_references)
             editor.rename_ready.connect(self._preview_rename)
+            editor.editor.word_added.connect(self.add_spelling_word)
+            editor.problems_changed.connect(lambda e=editor: self._update_problems() if e is self.current_editor()
+                                            else None)
             editor.editor.textChanged.connect(lambda e=editor: self.search_panel.file_changed(e.path))
             editor.attach_lsp(self.lsp_client)
             self.tabs.addTab(editor, file.name)

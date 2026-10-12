@@ -1,0 +1,37 @@
+# Fortran keywords that aren't in pyspellchecker's dictionary, so they count
+# as spelled right in the editor's comments and strings. One per line; lines
+# starting with # are ignored.
+blockdata
+codimension
+deallocate
+doubleprecision
+elseif
+endassociate
+endblock
+endblockdata
+endcritical
+enddo
+endenum
+endfile
+endforall
+endfunction
+endif
+endinterface
+endmodule
+endprocedure
+endprogram
+endselect
+endsubmodule
+endsubroutine
+endtype
+endwhere
+enum
+forall
+goto
+inout
+len
+namelist
+nopass
+selectcase
+selecttype
+submodule

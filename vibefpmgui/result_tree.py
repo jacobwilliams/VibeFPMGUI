@@ -1,11 +1,12 @@
-"""A list of places in files, grouped by file: the *Search* and *References*
-tabs.
+"""A list of places in files, grouped by file: the *Search*, *References*
+and *Problems* tabs.
 
 Each file has a row with its icon, name, folder, package (for dependencies)
 and number of results; under it, a row per result with the line number and
 the line, in the colors the editor would give it, with the result's part
 highlighted (or, while replacing, struck through, with the replacement
-after it). Click a row to open the file there.
+after it); for a problem, its line number, a colored badge (the rule or
+kind) and the message. Click a row to open the file there.
 """
 
 from collections.abc import Callable
@@ -57,6 +58,20 @@ class Match(NamedTuple):
     text: str        # (the matched part of the first line)
     after: str
     start: int = 0   # the column ``before`` starts at (after any "…")
+
+
+class Problem(NamedTuple):
+    """An issue in a file (a compiler message, fortitude, fortls, spelling,
+    AI review), for the Problems tab."""
+    line: int        # 1-based
+    column: int      # 0-based
+    end_line: int
+    end_column: int
+    severity: str    # e.g. "error", "lint", "spelling" (see editor.MARKER_COLORS)
+    badge: str       # shown in the colored badge: the rule code or the kind
+    message: str
+    color: str       # the badge's color
+    source: str      # which tool: "build", "fortitude", "fortls", "spelling", "review"
 
 
 def make_match(line_text: str, line: int, column: int, end_line: int, end_column: int) -> Match:
@@ -207,6 +222,23 @@ class _ResultDelegate(QStyledItemDelegate):
             painter.setPen(color)
             painter.setFont(opt.font)
             painter.drawText(pill, Qt.AlignCenter, text)
+        elif parts[0] == "problem":
+            _kind, path, problem = parts
+            draw(f"{problem.line:>5}  ", self.tree.mono, dim)
+            # The badge: the rule or kind, white on its color.
+            small = QFont(opt.font)
+            small.setPointSizeF(max(6.0, small.pointSizeF() - 2))
+            small.setBold(True)
+            width = QFontMetrics(small).horizontalAdvance(problem.badge) + 10
+            badge = QRect(x, rect.top() + 3, width, rect.height() - 6)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(problem.color))
+            painter.drawRoundedRect(badge, 3, 3)
+            painter.setPen(QColor("white"))
+            painter.setFont(small)
+            painter.drawText(badge, Qt.AlignCenter, problem.badge)
+            x += width + 8
+            draw(problem.message, opt.font, color)
         else:
             _kind, path, found = parts
             mono = self.tree.mono
@@ -274,6 +306,30 @@ class ResultTree(QTreeWidget):
             item.addChild(child)
         item.setExpanded(expanded if expanded is not None else (True if new else was_expanded))
         return item
+
+    def set_problems(self, path: Path, problems: list[Problem], folder: str = "", package: str = ""):
+        """Show a file's problems (instead of whatever was shown), keeping
+        the scroll position when it's the same file again."""
+        scroll = self.verticalScrollBar().value() if path in self.items else 0
+        self.clear()
+        self.items.clear()
+        self.forget(path)
+        item = self.items[path] = QTreeWidgetItem()
+        self.addTopLevelItem(item)
+        item.setText(0, path.name)
+        item.setToolTip(0, str(path))
+        item.setData(0, PARTS_ROLE, ("file", path, path.name, folder, package, len(problems)))
+        item.setData(0, RESULT_ROLE, (str(path), None))
+        for problem in problems:
+            child = QTreeWidgetItem([f"{problem.line}: {problem.badge} {problem.message}"])
+            lines = self.file_lines(path)
+            code = lines[problem.line - 1].strip() if 0 < problem.line <= len(lines) else ""
+            child.setToolTip(0, f"{problem.message}\n\nLine {problem.line}: {code[:200]}")
+            child.setData(0, PARTS_ROLE, ("problem", path, problem))
+            child.setData(0, RESULT_ROLE, (str(path), problem))
+            item.addChild(child)
+        item.setExpanded(True)
+        self.verticalScrollBar().setValue(scroll)
 
     def remove_file(self, path: Path):
         item = self.items.pop(path, None)

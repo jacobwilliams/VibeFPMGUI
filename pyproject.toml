@@ -36,6 +36,7 @@ dependencies = [
     "pygments>=2.21.0",  # syntax highlighting
     "pathspec>=1.1.1",   # .gitignore matching in the file tree
     "pyte>=0.8.2",       # the Terminal tab's terminal emulation
+    "pyspellchecker>=0.8.0",  # spell checking comments and strings in the editor
     "pywinpty>=2.0.1; sys_platform == 'win32'",  # (and its shell on Windows)
 ]
 

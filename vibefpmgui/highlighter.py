@@ -26,7 +26,7 @@ from pygments.lexers import (
     get_lexer_for_filename,
 )
 from pygments.styles import get_all_styles, get_style_by_name
-from pygments.token import Name, Text, Token
+from pygments.token import Comment, Generic, Keyword, Name, String, Text, Token
 from pygments.util import ClassNotFound
 from qtpy.QtCore import QTimer, Signal
 from qtpy.QtGui import QColor, QFont, QPalette, QSyntaxHighlighter, QTextCharFormat
@@ -116,6 +116,25 @@ def lexer_for_path(path) -> object:
         return get_lexer_for_filename(name)
     except ClassNotFound:
         return TextLexer()
+
+
+# Lexers for files that are all prose (their text is spell checked, not only
+# comments and strings).
+PROSE_LEXERS = {"Text only", "Markdown", "reStructuredText"}
+NOT_PROSE = (Comment.Preproc, Comment.PreprocFile, String.Escape, String.Interpol, String.Regex,
+             String.Symbol, String.Affix, String.Backtick)  # (Markdown's `code`)
+
+
+def token_role(ttype, all_prose: bool) -> str | None:
+    """"prose" (a comment or string: spell checked), "name" (a name or
+    keyword: not a misspelling elsewhere) or None."""
+    if any(ttype in t for t in NOT_PROSE):
+        return None
+    if ttype in Comment or ttype in String or (all_prose and (ttype in Text or ttype in Generic)):
+        return "prose"
+    if ttype in Name or ttype in Keyword:
+        return "name"
+    return None
 
 
 def token_format(style, ttype) -> QTextCharFormat:
@@ -208,6 +227,8 @@ class PygmentsHighlighter(QSyntaxHighlighter):
         self._starts: list[int] = []
         self._formats: dict = {}
         self._text = ""          # the text the spans are for
+        self.prose: list[tuple[int, int]] = []  # (position, length) of each comment and string in it
+        self.names: set[str] = set()  # the names and keywords in it (lowercase)
         self._full = True        # recolor every line next time (the style or lexer changed)
         self._lexing = False     # a thread is lexing
         self._generation = 0     # changes with the style or lexer (a thread's answer from before is stale)
@@ -257,10 +278,15 @@ class PygmentsHighlighter(QSyntaxHighlighter):
         """Lex ``text`` and work out what to recolor (on a thread for a big
         document: no Qt objects but formats, which are plain values).
         Returns (text, spans, starts, new formats, (start, end) or None for
-        everything); spans [] if lexing failed (plain text)."""
+        everything, prose, names); spans [] if lexing failed (plain text).
+        prose and names: for spell checking (see `token_role`)."""
         formats = dict(formats)  # (the window's own copy is not touched here)
         added = {}
         spans, pos = [], 0
+        prose: list[tuple[int, int]] = []
+        names: set[str] = set()
+        all_prose = getattr(lexer, "name", "") in PROSE_LEXERS
+        roles: dict = {}
         try:
             for ttype, value in lex(text, lexer):
                 # Pygments may append a trailing newline that isn't in the document.
@@ -270,12 +296,22 @@ class PygmentsHighlighter(QSyntaxHighlighter):
                     if fmt is None:
                         fmt = formats[ttype] = added[ttype] = token_format(style, ttype)
                     spans.append((pos, length, fmt))
+                    role = roles.get(ttype, 0)
+                    if role == 0:
+                        role = roles[ttype] = token_role(ttype, all_prose)
+                    if role == "prose":
+                        if prose and prose[-1][0] + prose[-1][1] == pos:  # (one comment: several tokens)
+                            prose[-1] = (prose[-1][0], prose[-1][1] + length)
+                        else:
+                            prose.append((pos, length))
+                    elif role == "name":
+                        names.add(value.strip().lower())
                 pos += len(value)
         except Exception:  # noqa: BLE001 - never let highlighting break the editor
-            spans, full = [], True
+            spans, full, prose, names = [], True, [], set()
         starts = [s[0] for s in spans]
         region = None if full else PygmentsHighlighter._changed(old_text, old_spans, text, spans)
-        return text, spans, starts, added, region
+        return text, spans, starts, added, region, prose, names
 
     @staticmethod
     def _changed(old_text: str, old: list, text: str, new: list) -> tuple[int, int]:
@@ -332,13 +368,14 @@ class PygmentsHighlighter(QSyntaxHighlighter):
         self._lexed.emit((generation, result))
 
     def _apply(self, result):
-        generation, (text, spans, starts, added, region) = result
+        generation, (text, spans, starts, added, region, prose, names) = result
         self._lexing = False
         if text != self.document().toPlainText() or generation != self._generation:
             self._relex()  # (the text, style or lexer changed while lexing: again)
             return
         self._formats.update(added)
         self._spans, self._starts, self._text = spans, starts, text
+        self.prose, self.names = prose, names
         self._busy = True  # (recoloring changes the document's formats: not an edit)
         try:
             if self._full or region is None:
