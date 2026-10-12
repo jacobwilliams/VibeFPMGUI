@@ -635,7 +635,8 @@ class CodeEditor(QPlainTextEdit):
                 self.toggle_cursor_at(self.cursorForPosition(point).position())  # ⌥/Alt-click
                 return
             if mods & Qt.ControlModifier and mods & Qt.ShiftModifier:  # ⌘⇧/Ctrl+Shift-click
-                self.add_column_cursors(self.cursorForPosition(point).blockNumber())
+                clicked = self.cursorForPosition(point)
+                self.add_column_cursors(clicked.blockNumber(), clicked.positionInBlock())
                 return
             self.clear_extra_cursors()  # (any other click: back to one cursor)
         if (event.button() == Qt.LeftButton and event.modifiers() & Qt.ControlModifier
@@ -801,20 +802,30 @@ class CodeEditor(QPlainTextEdit):
         self.extra_cursors.append(cursor)
         self._cursors_changed()
 
-    def add_column_cursors(self, to_line: int):
+    def add_column_cursors(self, to_line: int, to_column: int | None = None):
         """⌘⇧/Ctrl+Shift-click: a cursor on each line from the main cursor's
-        line to ``to_line`` (0-based), at the main cursor's column (or the
-        end of a shorter line)."""
+        line to ``to_line`` (0-based). Clicked in the main cursor's column:
+        cursors in that column; in another (``to_column``): a box selection,
+        each line selected from the one column to the other, its cursor at
+        the clicked end (both clipped to a shorter line's end)."""
         main = self.textCursor()
         first, column = main.blockNumber(), main.positionInBlock()
+        end_column = column if to_column is None else to_column
+
+        def on_line(block) -> QTextCursor:
+            last = block.length() - 1  # (the line's end, before the line break)
+            cursor = QTextCursor(block)
+            cursor.setPosition(block.position() + min(column, last))
+            cursor.setPosition(block.position() + min(end_column, last), QTextCursor.KeepAnchor)
+            return cursor
+
+        self.setTextCursor(on_line(main.block()))
         step = 1 if to_line >= first else -1
         for number in range(first + step, to_line + step, step):
             block = self.document().findBlockByNumber(number)
             if not block.isValid():
                 break
-            cursor = QTextCursor(block)
-            cursor.setPosition(block.position() + min(column, block.length() - 1))
-            self.extra_cursors.append(cursor)
+            self.extra_cursors.append(on_line(block))
         self._cursors_changed()
 
     def clear_extra_cursors(self):

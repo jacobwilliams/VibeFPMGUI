@@ -69,8 +69,9 @@ def test_typing_and_deleting_at_every_cursor(editor):
 
 def test_column_of_cursors(editor):
     click(editor, 1, 5)
-    click(editor, 4, 0, COMMAND_SHIFT)
+    click(editor, 4, 5, COMMAND_SHIFT)  # (the same column: cursors, no selection)
     assert len(editor.editor.extra_cursors) == 3
+    assert not any(c.hasSelection() for c in editor.editor.all_cursors())
     QTest.keyClicks(editor.editor, "|")
     # ("go" is shorter: its cursor is at the end of the line)
     assert text(editor) == "alpha| = 1\nbeta |= 2\ngo|\ndelta| = 4\n"
@@ -165,3 +166,23 @@ def test_cursors_look_alike_and_blink_together(qtbot, editor, monkeypatch):
     assert code._caret_on  # (typing shows them again)
     QTest.keyClick(code, Qt.Key_Escape)
     assert code.cursorWidth() == qt_width and not code._caret_timer.isActive()  # (one cursor: Qt's own)
+
+
+def test_column_click_in_another_column_selects_a_box(editor):
+    click(editor, 1, 2)
+    click(editor, 4, 5, COMMAND_SHIFT)
+    code = editor.editor
+    selected = [c.selectedText() for c in code.all_cursors()]
+    assert selected == ["pha", "ta ", "", "lta"]  # ("go" is shorter than both columns: just a cursor)
+    QTest.keyClicks(code, "#")
+    assert text(editor) == "al# = 1\nbe#= 2\ngo#\nde# = 4\n"
+
+
+def test_box_selection_leftwards_and_upwards(editor):
+    click(editor, 4, 5)
+    click(editor, 1, 1, COMMAND_SHIFT)
+    code = editor.editor
+    assert [c.selectedText() for c in code.all_cursors()] == ["lpha", "eta ", "o", "elta"]
+    assert all(c.position() < c.anchor() for c in code.all_cursors() if c.hasSelection())  # (cursor at the click)
+    QTest.keyClick(code, Qt.Key_Backspace)
+    assert text(editor) == "a = 1\nb= 2\ng\nd = 4\n"

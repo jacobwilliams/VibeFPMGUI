@@ -102,7 +102,9 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   Minimap* turns it off. *View → Word Wrap* (⌥/Alt+Z) wraps long lines at
   the window's edge instead of scrolling sideways. Multiple cursors: ⌥/Alt-click adds a
   cursor (again to remove it); ⌘⇧/Ctrl+Shift-click adds one on every line
-  from the cursor to the clicked line, in the same column. Typing, deleting,
+  from the cursor to the clicked line: in the same column, or, clicked in
+  another column, with each line selected between the two columns (a box
+  selection). Typing, deleting,
   Enter, Tab, the arrow keys (with ⇧ to select), copy, cut and paste then
   work at all of them (pasting as many lines as there are cursors puts one
   at each); Esc or a click goes back to one cursor. Saving the project's `fpm.toml`
