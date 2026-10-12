@@ -617,6 +617,14 @@ class SearchPanel(QWidget):
         self.status.setText("Type to search the project and its dependencies.")
         self._update_buttons()
 
+    def reset(self):
+        """Another project was opened: no search text or results (the options
+        and file patterns are kept)."""
+        self.find_edit.clear()
+        self.replace_edit.clear()
+        self._timer.stop()  # (no search for the cleared text)
+        self.clear()
+
     def _clear_results(self):
         self.collapse_button.setText("Collapse All")
         self.tree.clear_results()

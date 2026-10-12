@@ -1048,6 +1048,8 @@ class MainWindow(QMainWindow):
                 kill_process_tree(self.process)
                 self.process.waitForFinished(3000)
             self._clear_run_panels()
+            self.search_panel.reset()
+            self.references_panel.reset()
         self.manifest_path = path
         if self.remember_last:
             self.settings.setValue("last_manifest", str(self.manifest_path))

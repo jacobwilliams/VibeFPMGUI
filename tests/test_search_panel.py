@@ -130,3 +130,15 @@ def test_result_lines_are_syntax_colored(qtbot, window, project):
     c_file.write_text("int a;\n/* start\n   bump inside\n*/\nint bump;\n")
     inside, code = panel.tree.line_formats(c_file, 3), panel.tree.line_formats(c_file, 5)
     assert inside[3].foreground().color() != code[0].foreground().color()
+
+
+def test_another_project_starts_a_new_search(qtbot, window, conflict_project):
+    panel = search_for(qtbot, window, "count", case_button=True)
+    panel.replace_edit.setText("total")
+    assert panel._results
+    window.open_manifest(conflict_project / "fpm.toml")
+    assert panel.find_edit.text() == panel.replace_edit.text() == ""
+    assert not panel._results and panel.tree.topLevelItemCount() == 0
+    assert panel.case_button.isChecked()  # (the options stay)
+    qtbot.wait(400)  # (past the typing pause: no search for the cleared text)
+    assert panel._worker is None and not panel._results

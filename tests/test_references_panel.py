@@ -43,3 +43,10 @@ def test_no_references(window):
     window._show_references("nothing", [])
     assert "No references" in window.references_panel.title.text()
     assert window.references_panel.tree.topLevelItemCount() == 0
+
+
+def test_another_project_clears_the_references(window, project, conflict_project):
+    panel = show_count_references(window, project)
+    window.open_manifest(conflict_project / "fpm.toml")
+    assert panel.tree.topLevelItemCount() == 0
+    assert panel.title.text() == panel.HINT

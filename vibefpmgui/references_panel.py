@@ -27,10 +27,11 @@ def short_path(path: Path, project_dir: Path | None) -> str:
 
 class ReferencesPanel(QWidget):
     open_requested = Signal(str, int, int, int, int)  # file, line, column, end line, end column
+    HINT = "Use Find References (⇧F12) on a name in the editor to list its uses here."
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.title = QLabel("Use Find References (⇧F12) on a name in the editor to list its uses here.")
+        self.title = QLabel(self.HINT)
         self.title.setWordWrap(True)
         self.title.setContentsMargins(8, 6, 8, 2)
         self.tree = ResultTree()
@@ -40,6 +41,11 @@ class ReferencesPanel(QWidget):
         layout.setSpacing(2)
         layout.addWidget(self.title)
         layout.addWidget(self.tree, 1)
+
+    def reset(self):
+        """Another project was opened: no results."""
+        self.tree.clear_results()
+        self.title.setText(self.HINT)
 
     def show_results(self, name: str, results: list[tuple[Path, int, int, int]], roots: list[Root],
                      project_dir: Path | None):
