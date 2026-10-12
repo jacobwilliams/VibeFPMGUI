@@ -205,3 +205,33 @@ def test_fixed_tabs(window, project):
     window._fill_tab_list(menu)
     kinds = ["separator" if a.isSeparator() else a.text() for a in menu.actions()]
     assert kinds[:4] == ["Dependency graph", "Build outputs", "separator", "fpm.toml"]
+
+
+def test_editor_tabs_have_the_file_icon(window, project, monkeypatch):
+    from qtpy.QtWidgets import QTabBar
+
+    from vibefpmgui.icons import fortran_file_icon
+
+    def shown(editor):  # (the icon in the tab: a widget beside the name, not a tab icon)
+        return editor.tab_icon.pixmap().toImage()
+
+    def image(icon):
+        return icon.pixmap(16, 16).toImage()
+
+    editor = open_editor(window, project / "src/foo.f90")
+    index = window.tabs.indexOf(editor)
+    assert window.tabs.tabIcon(index).isNull()  # (macOS's style cuts the name off after a tab icon)
+    assert shown(editor) == image(fortran_file_icon())
+    bar = window.tabs.tabBar()
+    assert bar.tabButton(index, QTabBar.LeftSide) is editor.tab_icon  # (the icon left of the name,
+    assert bar.tabButton(index, QTabBar.RightSide) is editor.close_button  # the × right: one small widget each)
+    manifest = open_editor(window, project / "fpm.toml")
+    assert shown(manifest) == image(window.project_tree.icon_for(project / "fpm.toml"))  # (with the fpm badge)
+    target = project / "src/foo.inc"  # (Save As another kind of file: its icon)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(target), ""))
+    window.tabs.setCurrentWidget(editor)
+    window.save_as_action.trigger()
+    assert shown(editor) == image(fortran_file_icon(include=True))
+    menu = QMenu()
+    window._fill_tab_list(menu)
+    assert not next(a for a in menu.actions() if a.text() == "foo.inc").icon().isNull()

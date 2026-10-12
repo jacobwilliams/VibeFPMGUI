@@ -36,6 +36,7 @@ from qtpy.QtGui import (
     QDesktopServices,
     QFont,
     QFontDatabase,
+    QIcon,
     QKeySequence,
     QPalette,
     QTextCursor,
@@ -61,7 +62,6 @@ from qtpy.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QStackedWidget,
-    QStyle,
     QTabBar,
     QTabWidget,
     QTextBrowser,
@@ -1878,8 +1878,11 @@ class MainWindow(QMainWindow):
             editor.editor.setFocus()
 
     def _add_close_button(self, editor: EditorTab):
-        """Our own × on an editor tab: macOS's dark-mode close button is
-        hard (or impossible) to see. On the side the platform puts it."""
+        """The file's icon on the left of an editor tab's name, and our own ×
+        on the right (macOS's dark-mode close button is hard, or impossible,
+        to see). Each side gets one small widget: macOS's style places the
+        name as if the widget beside it were the usual size, so a wider one
+        (or a tab icon) covers the start of the name."""
         button = QToolButton()
         button.setAutoRaise(True)
         button.setFixedSize(18, 18)
@@ -1892,23 +1895,35 @@ class MainWindow(QMainWindow):
         button.clicked.connect(lambda _=False, e=editor: self.close_editor(self.tabs.indexOf(e)))
         editor.close_button = button
         self._style_close_button(button)
+        icon = QLabel()
+        icon.setFixedSize(16, 16)
+        editor.tab_icon = icon
+        self._set_tab_icon(editor)
         bar = self.tabs.tabBar()
-        side = (QTabBar.LeftSide if bar.style().styleHint(QStyle.SH_TabBar_CloseButtonPosition, None, bar) == 0
-                else QTabBar.RightSide)
-        bar.setTabButton(self.tabs.indexOf(editor), side, button)
+        index = self.tabs.indexOf(editor)
+        bar.setTabButton(index, QTabBar.LeftSide, icon)
+        bar.setTabButton(index, QTabBar.RightSide, button)
+
+    def _set_tab_icon(self, editor: EditorTab):
+        """The file's icon, as in Project files (it changes with Save As)."""
+        label = getattr(editor, "tab_icon", None)
+        if label is not None:
+            label.setPixmap(self.project_tree.icon_for(editor.path).pixmap(16, 16))
 
     @staticmethod
     def _style_close_button(button: QToolButton):
-        color = QColor(QApplication.palette().color(QPalette.WindowText))
-        color.setAlpha(190)
-        button.setIcon(make_icon("close", color))
+        # A mid gray: seen on the dark tabs and on the light selected one
+        # (macOS's dark mode draws the selected tab light).
+        button.setIcon(make_icon("close", QColor(140, 140, 140)))
 
     def _fill_tab_list(self, menu: QMenu):
         """The tab-list menu: every open tab (the current one ticked)."""
         menu.clear()
         current = self.tabs.currentIndex()
         for index in range(self.tabs.count()):
-            action = menu.addAction(self.tabs.tabText(index))
+            widget = self.tabs.widget(index)
+            icon = self.project_tree.icon_for(widget.path) if isinstance(widget, EditorTab) else QIcon()
+            action = menu.addAction(icon, self.tabs.tabText(index))
             action.setCheckable(True)
             action.setChecked(index == current)
             action.setToolTip(self.tabs.tabToolTip(index))
@@ -1963,6 +1978,7 @@ class MainWindow(QMainWindow):
         if index >= 0:
             self.tabs.setTabText(index, ("• " if editor.is_dirty() else "") + editor.path.name)
             self.tabs.setTabToolTip(index, str(editor.path))
+            self._set_tab_icon(editor)
         self._update_editor_actions()
 
     def _editor_saved(self, path: str):
