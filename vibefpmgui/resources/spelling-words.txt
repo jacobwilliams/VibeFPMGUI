@@ -28,6 +28,7 @@ endwhere
 enum
 forall
 fortran
+fpm
 goto
 inout
 len
