@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 import fnmatch
 import hashlib
 import html
@@ -173,6 +174,9 @@ class MainWindow(QMainWindow):
         self._refresh_after = False
         self._monitoring = False
         self._partial = ""  # output text after the last newline
+        # The running command's output as text: a character whose bytes arrive
+        # in two reads is decoded whole (see _begin_output).
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self._esc_tail = ""  # color code cut off at the end of the last output chunk
         self._full_output_path = Path(tempfile.gettempdir()) / f"vibefpmgui-output-{os.getpid()}.log"
         self._full_output = None  # the file the running command's whole output is saved to
@@ -206,7 +210,7 @@ class MainWindow(QMainWindow):
         reload_action.setShortcut(QKeySequence("Ctrl+Shift+R"))  # Ctrl/⌘+R is Run
         reload_action.triggered.connect(self.reload)
         open_new_action = QAction("Open fpm.toml in New Window…", self)
-        open_new_action.setShortcut(QKeySequence("Ctrl+Shift+O"))
+        open_new_action.setShortcut(QKeySequence("Ctrl+Shift+N"))  # (⌘⇧O: Open File in Editor)
         open_new_action.setStatusTip("Open another project in its own window, keeping this one open")
         open_new_action.triggered.connect(lambda: self.browse(new_window=True))
         file_menu = self.menuBar().addMenu("&File")
@@ -1056,16 +1060,12 @@ class MainWindow(QMainWindow):
         clearing = getattr(self, "_clearing_settings", False)
         if not clearing:
             self._save_session()
+        # Every question first: answering Cancel or No leaves everything running.
         for editor in self.editors():
             self.tabs.setCurrentWidget(editor)
             if not editor.maybe_save():
                 event.ignore()
                 return
-        for editor in self.editors():
-            editor.close_down()
-        self.lsp_client.stop()
-        self.search_panel.shutdown()
-        self.terminal_panel.shutdown()
         if self.process is not None:
             answer = QMessageBox.question(self, "fpm is running",
                                           "An fpm command is still running. Stop it and quit?")
@@ -1074,6 +1074,11 @@ class MainWindow(QMainWindow):
                 return
             kill_process_tree(self.process)
             self.process.waitForFinished(2000)
+        for editor in self.editors():
+            editor.close_down()
+        self.lsp_client.stop()
+        self.search_panel.shutdown()
+        self.terminal_panel.shutdown()
         self._shutdown_ai()
         if clearing:
             super().closeEvent(event)
@@ -1133,17 +1138,19 @@ class MainWindow(QMainWindow):
         path = Path(filename).resolve()
         new_project = path != self.manifest_path
         if new_project:
-            self._save_session()  # the old project's open files, for next time
-            # The open files belong to the old project: ask about unsaved
-            # changes first (Cancel keeps the current project open).
-            if not self.close_all_editors():
-                return
+            # Both questions before anything changes: No or Cancel keeps the
+            # current project as it is, its files still open.
             if self.process is not None:
                 answer = QMessageBox.question(
                     self, "fpm is running",
                     "An fpm command is still running for the current project. Stop it and open the new one?")
                 if answer != QMessageBox.Yes:
                     return
+            self._save_session()  # the old project's open files, for next time
+            # The open files belong to the old project: ask about unsaved changes.
+            if not self.close_all_editors():
+                return
+            if self.process is not None:
                 kill_process_tree(self.process)
                 self.process.waitForFinished(3000)
             self._clear_run_panels()
@@ -2753,6 +2760,7 @@ class MainWindow(QMainWindow):
     def _begin_output(self):
         """A command is starting: reset the output limit and the saved copy."""
         self._end_output(show_tail=False)
+        self._decoder.reset()
         self._shown_chars = self._hidden_chars = self._hidden_lines = 0
         self._tail.clear()
         self._tail_partial = ""
@@ -2779,10 +2787,14 @@ class MainWindow(QMainWindow):
             self.console_writer.write("\n".join(tail) + "\n", ansi=True)
             self._hidden_chars = 0
 
-    def _read_output(self):
+    def _read_output(self, final: bool = False):
+        """New output from the running command; ``final``: it has finished
+        (bytes of an unfinished character are shown as "�")."""
         if self.process is None:
             return
-        data = bytes(self.process.readAllStandardOutput()).decode("utf-8", errors="replace")
+        data = self._decoder.decode(bytes(self.process.readAllStandardOutput()), final=final)
+        if not data:
+            return
         data, self._esc_tail = ansi.split_partial(self._esc_tail + data)
         # fpm redraws progress lines with \r; keep only the final state of each line.
         data = data.replace("\r\n", "\n")
@@ -2855,7 +2867,7 @@ class MainWindow(QMainWindow):
             self._monitoring = False
 
     def _finished(self, code: int, status):
-        self._read_output()
+        self._read_output(final=True)
         crashed = status == QProcess.CrashExit
         self._flush_monitor(code, crashed)
         self._end_output()

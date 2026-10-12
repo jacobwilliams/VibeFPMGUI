@@ -118,3 +118,90 @@ def test_word_wrap_reaches_the_output(window, make_window, project):
     window.word_wrap_action.setChecked(True)
     assert modes(window) == {QPlainTextEdit.WidgetWidth}
     assert modes(make_window(project / "fpm.toml")) == {QPlainTextEdit.WidgetWidth}  # (remembered)
+
+
+# ------------------------------------------------- code review: step 1
+def test_no_two_actions_share_a_shortcut(window):
+    from qtpy.QtCore import Qt
+    from qtpy.QtGui import QAction
+
+    seen = {}
+    for action in window.findChildren(QAction):
+        if action.shortcutContext() == Qt.WidgetShortcut:
+            continue  # (shown in a context menu only)
+        for key in action.shortcuts():
+            text = key.toString()
+            assert text not in seen, f"{text}: {seen[text]!r} and {action.text()!r}"
+            seen[text] = action.text()
+    assert "Ctrl+Shift+N" in seen and "Ctrl+Shift+O" in seen
+
+
+def busy(window):
+    """A command "running" (a process that just waits), as fpm would be."""
+    import sys
+
+    from qtpy.QtCore import QProcess
+
+    process = QProcess(window)
+    process.start(sys.executable, ["-c", "import time; time.sleep(60)"])
+    assert process.waitForStarted(5000)
+    window.process = process
+    return process
+
+
+def spy(monkeypatch, obj, name, calls):
+    real = getattr(obj, name)
+    monkeypatch.setattr(obj, name, lambda *a, **k: calls.append(name) or real(*a, **k))
+
+
+def test_no_to_quitting_while_running_leaves_everything_working(qtbot, window, project, monkeypatch):
+    from qtpy.QtCore import QProcess
+    from qtpy.QtWidgets import QMessageBox
+
+    editor = open_editor(window, project / "src/foo.f90")
+    process = busy(window)
+    calls = []
+    for obj, name in ((editor, "close_down"), (window.lsp_client, "stop"),
+                      (window.search_panel, "shutdown"), (window.terminal_panel, "shutdown")):
+        spy(monkeypatch, obj, name, calls)
+    answers = iter([QMessageBox.No, QMessageBox.Yes])
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: next(answers))
+    assert not window.close()  # (No: still running, nothing shut down)
+    assert calls == [] and window.isVisible() and process.state() == QProcess.Running
+    assert window.close()  # (Yes: the command is stopped, then everything shuts down)
+    assert set(calls) == {"close_down", "stop", "shutdown"}
+    assert process.state() == QProcess.NotRunning
+
+
+def test_no_to_opening_another_project_while_running_keeps_its_files(window, project, conflict_project,
+                                                                      monkeypatch):
+    from qtpy.QtWidgets import QMessageBox
+
+    editor = open_editor(window, project / "src/foo.f90")
+    busy(window)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.No)
+    window.open_manifest(conflict_project / "fpm.toml")
+    assert window.manifest_path == (project / "fpm.toml").resolve()
+    assert window.tabs.indexOf(editor) >= 0  # (still open)
+    window.stop()
+
+
+def test_a_character_split_between_reads_is_shown_whole(qtbot, window, tmp_path):
+    import os
+    import sys
+
+    program = tmp_path / ("show.exe" if os.name == "nt" else "show")
+    script = tmp_path / "show.py"
+    # "°C" with the two bytes of "°" written separately, half a second apart.
+    script.write_text("import sys, time\nout = sys.stdout.buffer\n"
+                      "out.write(b'temp 21\\xc2'); out.flush(); time.sleep(0.5)\n"
+                      "out.write(b'\\xb0C\\n'); out.flush()\n")
+    if os.name == "nt":
+        import pytest
+        pytest.skip("needs a script that runs as a program")
+    program.write_text(f"#!{sys.executable}\nexec(open({str(script)!r}).read())\n")
+    program.chmod(0o755)
+    window.run_program(str(program))
+    qtbot.waitUntil(lambda: window.process is None, timeout=15_000)
+    text = window.console.toPlainText()
+    assert "temp 21°C" in text and "�" not in text
