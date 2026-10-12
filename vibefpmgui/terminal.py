@@ -1159,6 +1159,13 @@ class TerminalPanel(QWidget):
     def focus(self):
         self.view.setFocus()
 
+    def type_command(self, command: str):
+        """Type ``command`` at the shell's prompt and press Return (starting
+        the shell first if needed)."""
+        self.start()
+        if self.shell is not None:
+            self.shell.write((command + "\r").encode())
+
     def showEvent(self, event):
         super().showEvent(event)
         QTimer.singleShot(0, self.start)  # (the first time the tab is shown: after it's laid out)

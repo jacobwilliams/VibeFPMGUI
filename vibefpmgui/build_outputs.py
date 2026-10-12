@@ -34,6 +34,7 @@ from qtpy.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -344,12 +345,14 @@ def delete_folders(paths: list[Path]) -> list[str]:
 # --------------------------------------------------------------------- view
 class ConfigCard(QFrame):
     run_requested = Signal(str)
+    run_in_terminal_requested = Signal(str)
     reveal_requested = Signal(str)
     delete_requested = Signal(object)  # Configuration
 
     def __init__(self, config: Configuration, pal: dict):
         super().__init__()
         self.config = config
+        self.rows: dict[QWidget, tuple[str, Path]] = {}  # row label -> (kind, file), for its menu
         self.setObjectName("ConfigCard")
         accent = pal["accent1"] if config.current else pal["line"]
         self.setStyleSheet(f"""
@@ -410,12 +413,14 @@ class ConfigCard(QFrame):
             row = QLabel(f"📚 <b>{lib.name}</b> <span style='color:{muted}'>library · "
                          f"{human_size(lib.stat().st_size) if lib.exists() else ''}</span>")
             row.setToolTip(str(lib))
+            self.rows[row] = ("library", lib)
             layout.addWidget(row)
         for kind, program in config.programs:
             row = QHBoxLayout()
             icon = {"program": "▶", "test": "🧪", "example": "💡"}.get(kind, "•")
             label = QLabel(f"{icon} <b>{program.name}</b> <span style='color:{muted}'>{kind}</span>")
             label.setToolTip(str(program))
+            self.rows[label] = (kind, program)
             row.addWidget(label)
             row.addStretch(1)
             run = QPushButton("Run")
@@ -428,11 +433,39 @@ class ConfigCard(QFrame):
             layout.addWidget(QLabel(f"<span style='color:{muted}'>No programs or library here "
                                     "(compiled files only).</span>"))
 
+    def context_menu(self, pos) -> QMenu:
+        """The right-click menu at ``pos``: for a program or library when it's
+        on one, else for the whole configuration."""
+        menu = QMenu(self)
+        child = self.childAt(pos)
+        if child in self.rows:
+            kind, path = self.rows[child]
+            if kind != "library":
+                menu.addAction("Run", lambda: self.run_requested.emit(str(path)))
+                action = menu.addAction("Run in Terminal", lambda: self.run_in_terminal_requested.emit(str(path)))
+                action.setToolTip("Type the command in the Terminal panel (for programs that read input)")
+            menu.addAction(reveal_label(), lambda: self.reveal_requested.emit(str(path)))
+            menu.addAction("Copy Path", lambda: QApplication.clipboard().setText(str(path)))
+            return menu
+        folder = self.config.folders[0].path
+        menu.addAction(reveal_label(), lambda: self.reveal_requested.emit(str(folder)))
+        if self.config.flags:
+            menu.addAction("Copy Flags", lambda: QApplication.clipboard().setText(self.config.flags))
+        menu.addSeparator()
+        menu.addAction("Delete…", lambda: self.delete_requested.emit(self.config))
+        return menu
+
+    def contextMenuEvent(self, event):
+        menu = self.context_menu(event.pos())
+        menu.exec(event.globalPos())
+        menu.deleteLater()
+
 
 class BuildOutputsView(QWidget):
     """The "Build outputs" tab."""
 
     run_requested = Signal(str)
+    run_in_terminal_requested = Signal(str)
     reveal_requested = Signal(str)
     delete_requested = Signal(object)   # list[Configuration]
     refresh_requested = Signal()
@@ -487,6 +520,7 @@ class BuildOutputsView(QWidget):
         for config in configs:
             card = ConfigCard(config, pal)
             card.run_requested.connect(self.run_requested)
+            card.run_in_terminal_requested.connect(self.run_in_terminal_requested)
             card.reveal_requested.connect(self.reveal_requested)
             card.delete_requested.connect(lambda c: self.delete_requested.emit([c]))
             card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)

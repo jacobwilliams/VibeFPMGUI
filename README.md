@@ -220,6 +220,10 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   older folders are grouped as "built outside the app"), when it was built,
   its size, the library and module counts, and its programs, tests and
   examples with a **Run** button (runs them directly, without rebuilding).
+  Right-click a program for *Run in Terminal* (types the command in the
+  Terminal panel, for programs that read input), *Show in Finder/Explorer*
+  and *Copy Path*; right-click the card to show its build folder, copy its
+  flags or delete it.
   Delete a configuration, or all except the current one, to free space.
 * *Show Compile Command* (right-click a file in the Build tab or a source in
   the Project files tree): the exact compiler command from

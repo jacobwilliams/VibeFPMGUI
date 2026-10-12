@@ -454,6 +454,7 @@ class MainWindow(QMainWindow):
         self.tabs.setCornerWidget(self.tab_list_button, Qt.TopRightCorner)
         self.outputs_view = bo.BuildOutputsView()
         self.outputs_view.run_requested.connect(self.run_program)
+        self.outputs_view.run_in_terminal_requested.connect(self.run_program_in_terminal)
         self.outputs_view.reveal_requested.connect(reveal_in_file_manager)
         self.outputs_view.delete_requested.connect(self.delete_configurations)
         self.outputs_view.refresh_requested.connect(self.refresh_build_outputs)
@@ -1211,6 +1212,18 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Build outputs", "Some folders could not be deleted:\n" + "\n".join(errors))
         else:
             self.statusBar().showMessage(f"Deleted {size} of build outputs", 5000)
+
+    def run_program_in_terminal(self, path: str):
+        """Type the command to run an already-built program (with the Program
+        args) in the Terminal panel: there it can read what you type."""
+        try:
+            args = split_args(self.runner_args_edit.text())
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid arguments", str(exc))
+            return
+        self.show_panel(self.terminal_panel)
+        self.terminal_panel.type_command(join_args([path, *args]))
+        self.terminal_panel.focus()
 
     def run_program(self, path: str):
         """Run an already-built program directly (no fpm, no rebuild)."""

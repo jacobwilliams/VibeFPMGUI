@@ -470,3 +470,15 @@ def test_choosing_the_tab_focuses_the_terminal(qtbot, window, monkeypatch):
     QTest.mouseClick(bar, Qt.LeftButton, Qt.NoModifier, bar.tabRect(index).center())
     assert window.panel_in_front(window.terminal_panel)
     qtbot.waitUntil(lambda: QApplication.focusWidget() is window.terminal_panel.view, timeout=2_000)
+
+
+def test_run_in_terminal_types_the_command(qtbot, window, project, monkeypatch):
+    monkeypatch.setenv("SHELL", "/bin/sh")
+    program = project / "say hi"  # (a space: the command is quoted)
+    program.write_text("#!/bin/sh\necho \"hi from $2 $1\"\n")
+    program.chmod(0o755)
+    window.runner_args_edit.setText("the terminal")
+    window.run_program_in_terminal(str(program))
+    assert window.panel_in_front(window.terminal_panel)
+    qtbot.waitUntil(lambda: "hi from terminal the" in screen(window.terminal_panel).replace("\n", ""),
+                    timeout=5_000)
