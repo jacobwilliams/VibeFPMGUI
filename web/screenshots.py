@@ -194,8 +194,8 @@ w.run_fpm(["build"], True, True)
 wait_idle(w)
 expand("src")
 expand("app")
-w.tabs.setCurrentIndex(0)
-w.monitor_tabs.setCurrentWidget(w.build_monitor)
+w.show_panel(w.docks["graph"].widget())
+w.show_panel(w.build_monitor)
 wait(1.5)
 w.graph_view.select_package(w.graph.root) if hasattr(w.graph_view, "select_package") else None
 wait(0.5)
@@ -241,7 +241,7 @@ def _():
 def _():
     w.run_tests()
     wait_idle(w)
-    w.monitor_tabs.setCurrentWidget(w.test_monitor)
+    w.show_panel(w.test_monitor)
     wait(0.8)
     pix = opaque(w)
     top = w.bottom_split.mapTo(w, QPoint(0, 0))
@@ -252,7 +252,7 @@ def _():
 def _():
     w.run_programs()
     wait_idle(w)
-    w.monitor_tabs.setCurrentWidget(w.run_monitor)
+    w.show_panel(w.run_monitor)
     wait(0.8)
     pix = opaque(w)
     top = w.bottom_split.mapTo(w, QPoint(0, 0))
@@ -261,7 +261,7 @@ def _():
 
 @shot("outputs")
 def _():
-    w.tabs.setCurrentWidget(w.outputs_view)
+    w.show_panel(w.outputs_view)
     wait(1.0)
     save(opaque(w.outputs_view), "outputs")
 
@@ -459,7 +459,7 @@ def _():
         if w._ai_thread is None and time.time() - t > 5:
             break
     wait(1.5)
-    w.monitor_tabs.setCurrentWidget(w.review_monitor)
+    w.show_panel(w.review_monitor)
     wait(0.5)
     save(opaque(w), "review")
 

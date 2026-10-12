@@ -31,7 +31,7 @@ def test_shortcut_searches_the_selection(qtbot, window, project):
     editor.editor.setTextCursor(cursor)
     window.find_files_action.trigger()
     panel = window.search_panel
-    assert window.monitor_tabs.currentWidget() is panel
+    assert window.panel_in_front(panel)
     assert panel.find_edit.text() == "count"
     qtbot.waitUntil(lambda: panel._worker is None and bool(panel._results), timeout=10_000)
     assert result_files(panel) == ["check.f90", "dl.f90", "foo.f90"]

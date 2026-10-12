@@ -180,7 +180,7 @@ def test_review_in_the_window(qtbot, window, project, ollama):
     assert sorted((f.line, f.category) for f in rows) == [(2, "style"), (5, "performance"), (6, "bug")]
     assert set(editor._review_markers) == {2, 5, 6}  # (a range is marked on its first line)
     assert editor._review_markers[6][0][1].startswith("AI (bug): count is incremented")
-    assert window.monitor_tabs.currentWidget() is window.review_monitor
+    assert window.panel_in_front(window.review_monitor)
     prompt = ollama.chats[0]["messages"][1]["content"]
     assert "foo.f90" in prompt and "module foo" in prompt
     window._go_to_finding(6)

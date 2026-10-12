@@ -14,7 +14,7 @@ def show_count_references(window, project):
 
 def test_results_grouped_like_the_search_tab(window, project):
     panel = show_count_references(window, project)
-    assert window.monitor_tabs.currentWidget() is panel
+    assert window.panel_in_front(panel)
     assert "4 references in 3 files" in panel.title.text()
     tree = panel.tree
     files = [tree.topLevelItem(i).data(0, PARTS_ROLE) for i in range(tree.topLevelItemCount())]

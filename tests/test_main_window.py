@@ -23,17 +23,12 @@ def test_without_a_project(make_window):
 
 
 def test_menu_shortcuts(window):
-    def shortcuts(menu):
-        for action in menu.actions():
-            if action.menu() is not None:
-                yield from shortcuts(action.menu())
-            elif action.text():
-                yield action.text(), action.shortcut().toString()
+    from qtpy.QtWidgets import QMenu
 
-    found = {}
-    for top in window.menuBar().actions():
-        if top.menu() is not None:
-            found.update(shortcuts(top.menu()))
+    # (every menu as the window's child, not through action.menu(): PySide
+    # invalidates a menu fetched that way)
+    found = {action.text(): action.shortcut().toString()
+             for menu in window.findChildren(QMenu) for action in menu.actions() if action.text()}
     assert found["Find in Files…"] == "Ctrl+Shift+F"
     assert found["Replace in Files…"] == "Ctrl+Shift+H"
     assert found["Word Wrap"] == "Alt+Z"

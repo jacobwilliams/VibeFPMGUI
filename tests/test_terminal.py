@@ -110,7 +110,7 @@ def test_shutdown_ends_the_shell(qtbot, panel):
 def test_window_shortcut_opens_the_terminal(qtbot, window, monkeypatch):
     monkeypatch.setenv("SHELL", "/bin/sh")
     window.terminal_action.trigger()
-    assert window.monitor_tabs.currentWidget() is window.terminal_panel
+    assert window.panel_in_front(window.terminal_panel)
     qtbot.waitUntil(lambda: window.terminal_panel.shell is not None
                     and window.terminal_panel.shell.is_running(), timeout=5_000)
 
@@ -457,11 +457,16 @@ def test_opening_another_project_moves_the_terminal(qtbot, window, conflict_proj
 
 
 def test_choosing_the_tab_focuses_the_terminal(qtbot, window, monkeypatch):
+    from qtpy.QtWidgets import QTabBar
+
     monkeypatch.setenv("SHELL", "/bin/sh")
     window.activateWindow()
-    tabs = window.monitor_tabs
-    tabs.setCurrentWidget(window.build_monitor)
-    QTest.mouseClick(tabs.tabBar(), Qt.LeftButton, Qt.NoModifier,
-                     tabs.tabBar().tabRect(tabs.indexOf(window.terminal_panel)).center())
-    assert tabs.currentWidget() is window.terminal_panel
+    window.show_panel(window.build_monitor)
+    qtbot.wait(50)  # (the window is laid out: choosing the tab is the user's)
+    # The stacked panels' tab bar (the main window's), with a "Terminal" tab.
+    bar = next(b for b in window.findChildren(QTabBar)
+               if any(b.tabText(i) == "Terminal" for i in range(b.count())))
+    index = next(i for i in range(bar.count()) if bar.tabText(i) == "Terminal")
+    QTest.mouseClick(bar, Qt.LeftButton, Qt.NoModifier, bar.tabRect(index).center())
+    assert window.panel_in_front(window.terminal_panel)
     qtbot.waitUntil(lambda: QApplication.focusWidget() is window.terminal_panel.view, timeout=2_000)

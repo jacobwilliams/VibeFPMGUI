@@ -4,6 +4,15 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
 
 ## Features
 
+* A window of panels around the editor: *Build options* and *Project files*
+  on the left, the *Dependency graph* and *Build outputs* on the right,
+  *Build*, *Tests*, *Run*, *Review*, *References*, *Search* and *Terminal*
+  at the bottom with *Output* beside them, the files open in the editor in
+  the middle. Drag a panel by its title (or its tab) to the left, right or
+  bottom, onto another to stack them as tabs, or out of the window to float
+  it; double-click the title to float it or dock it again. *View → Panels*
+  shows or hides each one, and *Reset Layout* puts them all back. The
+  layout is remembered.
 * Open any `fpm.toml` and run `fpm build`, `run`, `test`, `update` and `clean`
   from the toolbar or the *Commands* menu (Build ⌘B, Run ⌘R, Test ⌘U,
   Stop ⌘.; Ctrl on Linux/Windows), with live output and the usual options
@@ -64,8 +73,8 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   program), like the Tests tab. Toolbar Run builds first (shown in the Build
   tab), then runs every program — or those matching *Target* — through the
   same marker wrapper as Test; run times are remembered for estimates.
-* Terminal (*View → Terminal*, ⌃\` as in VS Code): your shell in a tab
-  of the bottom panel, started in the project's folder with exactly the
+* Terminal (*View → Terminal*, ⌃\` as in VS Code): your shell in the
+  *Terminal* panel, started in the project's folder with exactly the
   environment VibeFPMGUI was started with (e.g. the activated pixi or conda
   environment), so `fpm` and the compilers are the ones the app uses. Your
   shell's startup files aren't read, as they would change that environment
@@ -204,7 +213,7 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   Small local models are helpful but fallible — treat findings as hints.
   See [AI code review](#ai-code-review) below for setup and where models
   are stored.
-* *Build outputs* tab: what fpm keeps in `build/`, one card per
+* *Build outputs* panel: what fpm keeps in `build/`, one card per
   configuration (fpm writes a separate set of `<compiler>_<hash>` folders for
   every combination of settings and never removes old ones). Each card shows
   the settings it was built with (recorded when the GUI runs the build;

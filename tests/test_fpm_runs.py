@@ -80,7 +80,7 @@ def test_build_error(qtbot, fpm_window, fpm_project):
     calc = next(t for t in fpm_window.build_monitor.targets if "calc.f90" in t.name)
     assert calc.status == FAILED
     assert any(d.line == 7 and d.severity.startswith("error") for d in calc.diagnostics)
-    assert fpm_window.monitor_tabs.currentWidget() is fpm_window.build_monitor
+    assert fpm_window.panel_in_front(fpm_window.build_monitor)
     # Opening it from the Build tab shows the error in the editor.
     fpm_window.show_build_details(calc.row)
     fpm_window.build_monitor.open_file_requested.emit(str(calc.path), calc.diagnostics)
@@ -167,7 +167,7 @@ def test_compile_command(built, fpm_project, monkeypatch):
 def test_build_outputs_and_running_a_program(qtbot, built, monkeypatch):
     from qtpy.QtWidgets import QMessageBox
 
-    built.tabs.setCurrentWidget(built.outputs_view)  # (refreshes the tab)
+    built.show_panel(built.outputs_view)  # (refreshes the panel)
     configs = built.outputs_view.configs
     assert configs and configs[0].programs
     kind, program = next(p for p in configs[0].programs if p[1].name.startswith("calc"))

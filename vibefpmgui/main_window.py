@@ -46,10 +46,10 @@ from qtpy.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QDockWidget,
     QFileDialog,
     QFontDialog,
     QFormLayout,
-    QGroupBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -243,7 +243,7 @@ class MainWindow(QMainWindow):
             app.setProperty("vibefpm_base_font", QFont(app.font()))
         self._base_font = QFont(app.property("vibefpm_base_font"))
         self.font_delta = 0
-        view_menu = self.menuBar().addMenu("&View")
+        view_menu = self.view_menu = self.menuBar().addMenu("&View")
         self.bigger_action = QAction("Bigger Text", self)
         self.bigger_action.setShortcuts([QKeySequence(QKeySequence.ZoomIn), QKeySequence("Ctrl+=")])
         self.bigger_action.triggered.connect(lambda: self.set_font_delta(self.font_delta + 1))
@@ -325,7 +325,7 @@ class MainWindow(QMainWindow):
         self.style_menu.aboutToShow.connect(self._fill_style_menu)
 
         # --- left: build options + commands
-        options = QGroupBox("Build options")
+        options = QWidget()  # (in the "Build options" panel)
         form = QFormLayout(options)
         # macOS defaults to fields staying at their size hint; let them widen with the panel.
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
@@ -398,16 +398,10 @@ class MainWindow(QMainWindow):
         self.project_tree = ProjectTree()
         self.project_tree.open_requested.connect(lambda path: self.open_file(path))
         self.project_tree.compile_command_requested.connect(self.show_compile_command)
-        files_box = QGroupBox("Project files")
+        files_box = QWidget()  # (in the "Project files" panel)
         files_layout = QVBoxLayout(files_box)
-        files_layout.setContentsMargins(6, 6, 6, 6)
+        files_layout.setContentsMargins(4, 4, 4, 4)
         files_layout.addWidget(self.project_tree)
-        left = QSplitter(Qt.Vertical)
-        left.addWidget(options)
-        left.addWidget(files_box)
-        left.setStretchFactor(0, 0)
-        left.setStretchFactor(1, 1)
-        left.setCollapsible(0, False)
 
         # --- right: tabs (graph / manifest) over the output console
         self.graph_view = DependencyGraphView()
@@ -458,24 +452,18 @@ class MainWindow(QMainWindow):
         tab_list.aboutToShow.connect(lambda: self._fill_tab_list(tab_list))
         self.tab_list_button.setMenu(tab_list)
         self.tabs.setCornerWidget(self.tab_list_button, Qt.TopRightCorner)
-        self.tabs.addTab(graph_tab, "Dependency graph")
         self.outputs_view = bo.BuildOutputsView()
         self.outputs_view.run_requested.connect(self.run_program)
         self.outputs_view.reveal_requested.connect(reveal_in_file_manager)
         self.outputs_view.delete_requested.connect(self.delete_configurations)
         self.outputs_view.refresh_requested.connect(self.refresh_build_outputs)
-        self.tabs.addTab(self.outputs_view, "Build outputs")
-        # Files opened in the built-in editor get their own closable tabs.
+        # The middle of the window: files open in the editor, each in a closable tab.
         self.tabs.setTabsClosable(True)
         self.tabs.setMovable(True)
-        for index in (0, 1):  # the graph and the build outputs stay open
-            for side in (QTabBar.LeftSide, QTabBar.RightSide):
-                self.tabs.tabBar().setTabButton(index, side, None)
         self.tabs.tabCloseRequested.connect(self.close_editor)
         self.tabs.currentChanged.connect(self._update_editor_actions)
         self.tabs.currentChanged.connect(self._reveal_current_file)
-        self.tabs.currentChanged.connect(
-            lambda _i: self.tabs.currentWidget() is self.outputs_view and self.refresh_build_outputs())
+        self.tabs.currentChanged.connect(self._update_central)
 
         self.console = QPlainTextEdit()
         self.console.setReadOnly(True)
@@ -536,34 +524,21 @@ class MainWindow(QMainWindow):
         self.build_monitor.details_requested.connect(self.show_build_details)
         self.build_monitor.open_file_requested.connect(self.open_file)
         self.build_monitor.compile_command_requested.connect(self.show_compile_command)
-        self.monitor_tabs = QTabWidget()
-        self.monitor_tabs.setDocumentMode(True)
-        self.monitor_tabs.addTab(self.build_monitor, "Build")
-        self.monitor_tabs.addTab(self.test_monitor, "Tests")
         self.run_monitor = RunMonitor()
         self.run_monitor.test_selected.connect(
             lambda name: self._show_marked_output(self.run_monitor, name))
         self.run_monitor.build_percent = lambda: self.build_monitor._percent
-        self.monitor_tabs.addTab(self.run_monitor, "Run")
         self.review_monitor = ReviewMonitor()
         self.review_monitor.finding_selected.connect(self._go_to_finding)
-        self.monitor_tabs.addTab(self.review_monitor, "Review")
         self.references_panel = ReferencesPanel()
         self.references_panel.open_requested.connect(self._open_search_match)
-        self.monitor_tabs.addTab(self.references_panel, "References")
         self.search_panel = SearchPanel(self.settings)
         self.search_panel.provider = self._search_sources
         self.search_panel.open_requested.connect(self._open_search_match)
         self.search_panel.replace_requested.connect(self._replace_in_files)
-        self.monitor_tabs.addTab(self.search_panel, "Search")
         self.terminal_panel = TerminalPanel()
         self.terminal_panel.set_font(self._mono_font(editor=True))
         self.terminal_panel.set_word_wrap(EditorTab.word_wrap)
-        self.monitor_tabs.addTab(self.terminal_panel, "Terminal")
-        # Choosing the Terminal tab: type there straight away (after the click is done).
-        self.monitor_tabs.currentChanged.connect(
-            lambda _i: self.monitor_tabs.currentWidget() is self.terminal_panel
-            and QTimer.singleShot(0, self.terminal_panel.focus))
         # The two lists of places in files (vibefpmgui.result_tree), drawn alike.
         self.result_trees = [self.references_panel.tree, self.search_panel.tree]
         for tree in self.result_trees:
@@ -571,28 +546,133 @@ class MainWindow(QMainWindow):
             tree.text_for = self._open_text
             tree.mono = self._mono_font()
             tree.refresh_style()
-        self.bottom_split = QSplitter(Qt.Horizontal)
-        self.bottom_split.addWidget(self.monitor_tabs)
-        self.bottom_split.addWidget(console_box)
-        self.bottom_split.setStretchFactor(0, 2)
-        self.bottom_split.setStretchFactor(1, 3)
-        self.bottom_split.setSizes([620, 480])
-
-        self.right_split = QSplitter(Qt.Vertical)
-        self.right_split.addWidget(self.tabs)
-        self.right_split.addWidget(self.bottom_split)
-        self.right_split.setStretchFactor(0, 3)
-        self.right_split.setStretchFactor(1, 2)
-
-        self.main_split = QSplitter(Qt.Horizontal)
-        self.main_split.addWidget(left)
-        self.main_split.addWidget(self.right_split)
-        self.main_split.setStretchFactor(1, 1)
-        self.main_split.setSizes([300, 1000])
-        self.setCentralWidget(self.main_split)
+        # The editor in the middle (a hint while no file is open); every other
+        # panel is a dock: moved to the left, right or bottom, stacked as tabs
+        # on another, floated as a window of its own, closed (View → Panels).
+        self.no_file_hint = QLabel("Open a file from <b>Project files</b>, or with "
+                                   "<b>File → Open File in Editor…</b>")
+        self.no_file_hint.setAlignment(Qt.AlignCenter)
+        self.no_file_hint.setStyleSheet("color: gray;")
+        self.central = QStackedWidget()
+        self.central.addWidget(self.no_file_hint)
+        self.central.addWidget(self.tabs)
+        self.setCentralWidget(self.central)
+        self.setDockOptions(QMainWindow.AnimatedDocks | QMainWindow.AllowNestedDocks
+                            | QMainWindow.AllowTabbedDocks | QMainWindow.GroupedDragging)
+        self.setTabPosition(Qt.AllDockWidgetAreas, QTabWidget.North)  # (stacked panels: tabs on top)
+        self.setDocumentMode(True)
+        self.setCorner(Qt.BottomLeftCorner, Qt.LeftDockWidgetArea)  # (the left panels: full height)
+        self.setCorner(Qt.BottomRightCorner, Qt.BottomDockWidgetArea)
+        self.docks: dict[str, QDockWidget] = {}
+        self._dock_of: dict[QWidget, QDockWidget] = {}
+        for name, title, widget in [
+            ("options", "Build options", options), ("files", "Project files", files_box),
+            ("graph", "Dependency graph", graph_tab), ("outputs", "Build outputs", self.outputs_view),
+            ("build", "Build", self.build_monitor), ("tests", "Tests", self.test_monitor),
+            ("run", "Run", self.run_monitor), ("review", "Review", self.review_monitor),
+            ("references", "References", self.references_panel), ("search", "Search", self.search_panel),
+            ("terminal", "Terminal", self.terminal_panel), ("output", "Output", console_box),
+        ]:
+            self._make_dock(name, title, widget)
+        self._docks_ready = False  # (until the window is shown: see _dock_shown)
+        self.docks["outputs"].visibilityChanged.connect(lambda shown: shown and self.refresh_build_outputs())
+        self.docks["terminal"].visibilityChanged.connect(self._terminal_dock_shown)
+        self.docks["graph"].visibilityChanged.connect(self._update_editor_actions)  # (Find: the graph's search)
+        self.default_layout()
+        self._update_central()
+        view_menu.addSeparator()
+        panels = self.panels_menu = view_menu.addMenu("Panels")  # (kept: PySide would let it go)
+        for dock in self.docks.values():
+            panels.addAction(dock.toggleViewAction())  # (ticked while shown)
+        panels.addSeparator()
+        reset = panels.addAction("Reset Layout")
+        reset.setStatusTip("Put every panel back where it starts: build options and project files on the "
+                           "left, the graph and build outputs on the right, the rest at the bottom")
+        reset.triggered.connect(self.reset_layout)
         self.statusBar().showMessage("Ready")
         self._set_project_enabled(False)
         self._build_help_menu()
+
+    # ------------------------------------------------------------- panels
+    PANEL_AREAS = Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea | Qt.BottomDockWidgetArea
+    LAYOUT_VERSION = 1  # (saved layouts of another version aren't restored)
+
+    def _make_dock(self, name: str, title: str, widget: QWidget) -> QDockWidget:
+        dock = QDockWidget(title, self)
+        dock.setObjectName(f"panel_{name}")  # (how a saved layout knows it)
+        dock.setWidget(widget)
+        dock.setAllowedAreas(self.PANEL_AREAS)
+        dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable
+                         | QDockWidget.DockWidgetClosable)
+        self.docks[name] = dock
+        self._dock_of[widget] = dock
+        return dock
+
+    def default_layout(self):
+        """Build options above Project files on the left; the dependency graph
+        and Build outputs (stacked) on the right; Build, Tests, Run, Review,
+        References, Search and Terminal (stacked) at the bottom, Output beside them."""
+        d = self.docks
+        for dock in d.values():
+            self.removeDockWidget(dock)
+        self.addDockWidget(Qt.LeftDockWidgetArea, d["options"])
+        self.splitDockWidget(d["options"], d["files"], Qt.Vertical)
+        self.addDockWidget(Qt.RightDockWidgetArea, d["graph"])
+        self.tabifyDockWidget(d["graph"], d["outputs"])
+        self.addDockWidget(Qt.BottomDockWidgetArea, d["build"])
+        # (Output beside Build first: split next to a stacked panel, it would be stacked too.)
+        self.splitDockWidget(d["build"], d["output"], Qt.Horizontal)
+        for name in ("tests", "run", "review", "references", "search", "terminal"):
+            self.tabifyDockWidget(d["build"], d[name])
+        for dock in d.values():
+            dock.setFloating(False)  # (after it's placed: a floating one stays floating otherwise)
+            dock.show()
+        d["graph"].raise_()
+        d["build"].raise_()
+        self._default_sizes()
+
+    def _default_sizes(self):
+        """The default panels' sizes, for the window's size (applied again once
+        it's shown: before that it isn't its real size)."""
+        d = self.docks
+        self.resizeDocks([d["options"], d["graph"]], [310, max(420, self.width() // 3)], Qt.Horizontal)
+        # Build options as tall as its fields need; Project files gets the rest.
+        options = d["options"].widget().sizeHint().height() + 30
+        self.resizeDocks([d["options"], d["files"]], [options, max(200, self.height() - options)], Qt.Vertical)
+        self.resizeDocks([d["build"]], [max(220, self.height() // 3)], Qt.Vertical)
+        self.resizeDocks([d["build"], d["output"]], [3, 2], Qt.Horizontal)
+
+    def reset_layout(self):
+        self.default_layout()
+        self.statusBar().showMessage("Panels back in their places", 3000)
+
+    def show_panel(self, widget: QWidget):
+        """Show a panel and bring it to the front of its stack."""
+        dock = self._dock_of.get(widget)
+        if dock is not None:
+            dock.show()
+            dock.raise_()
+
+    def panel_in_front(self, widget: QWidget) -> bool:
+        """Whether a panel is shown (and not behind another in its stack)."""
+        dock = self._dock_of.get(widget)
+        return dock is not None and not dock.isHidden() and widget.isVisible()
+
+    def _update_central(self, *_):
+        """The editor's tabs, or a hint while no file is open."""
+        self.central.setCurrentWidget(self.tabs if self.tabs.count() else self.no_file_hint)
+
+    def _terminal_dock_shown(self, shown: bool):
+        # Choosing the Terminal tab: type there straight away (after the click
+        # is done). Not while the window is being built and laid out.
+        if shown and self._docks_ready:
+            QTimer.singleShot(0, self.terminal_panel.focus)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._docks_ready and not getattr(self, "_layout_restored", False):
+            QTimer.singleShot(0, self._default_sizes)  # (now the window has its size)
+        QTimer.singleShot(0, lambda: setattr(self, "_docks_ready", True))
 
     def _apply_highlight_style(self):
         """The chosen Pygments style, or one matching the system's light/dark mode."""
@@ -861,6 +941,8 @@ class MainWindow(QMainWindow):
         geometry = s.value("geometry")
         if geometry is not None:
             self.restoreGeometry(geometry)
+        layout = s.value("panels")  # (where each panel was: docked, stacked, floating, hidden)
+        self._layout_restored = layout is not None and self.restoreState(layout, self.LAYOUT_VERSION)
         # Applied once the project's own [profiles] are in the list.
         self._wanted_profile = s.value("profile", "(default)")
         self.profile_combo.setCurrentText(self._wanted_profile)
@@ -897,6 +979,7 @@ class MainWindow(QMainWindow):
         self._shutdown_ai()
         s = self.settings
         s.setValue("geometry", self.saveGeometry())
+        s.setValue("panels", self.saveState(self.LAYOUT_VERSION))
         s.setValue("profile", self.profile_combo.currentText())
         s.setValue("compiler", self.compiler_edit.text())
         s.setValue("flags", self.flag_edit.text())
@@ -1039,8 +1122,7 @@ class MainWindow(QMainWindow):
                           "column": cursor.positionInBlock(),
                           "scroll": editor.editor.verticalScrollBar().value()})
         current = self.current_editor()
-        state = {"files": files, "current": str(current.path) if current else None,
-                 "tab": self.tabs.currentIndex()}
+        state = {"files": files, "current": str(current.path) if current else None}
         tree = self.project_tree.view_state()
         if tree is None:  # filtered: keep what was saved before
             try:
@@ -1076,9 +1158,6 @@ class MainWindow(QMainWindow):
         current = self._open_editor_for(Path(state["current"])) if state.get("current") else None
         if current is not None:
             self.tabs.setCurrentWidget(current)
-        elif isinstance(state.get("tab"), int) and 0 <= state["tab"] < self.tabs.count() \
-                and not isinstance(self.tabs.widget(state["tab"]), EditorTab):
-            self.tabs.setCurrentIndex(state["tab"])
 
     # -------------------------------------------------------- build outputs
     def _config_records(self) -> bo.ConfigRecords:
@@ -1166,7 +1245,7 @@ class MainWindow(QMainWindow):
         self.show_all_output()
         self.run_monitor.begin_listing(f"{Path(path).parent.parent.name} · run directly, no rebuild")
         self.run_monitor.start([name], self._load_durations("run"))
-        self.monitor_tabs.setCurrentWidget(self.run_monitor)
+        self.show_panel(self.run_monitor)
         rel = os.path.relpath(path, self.manifest_path.parent)
         self._append(f"\n$ cd {quote_arg(str(self.manifest_path.parent))}\n"
                      f"$ {join_args([rel] + args)}\n", bold=True)
@@ -1312,7 +1391,7 @@ class MainWindow(QMainWindow):
         self.stop_review()
         self._ai_editor = None
         self.review_monitor.reset()
-        self.monitor_tabs.setCurrentWidget(self.build_monitor)
+        self.show_panel(self.build_monitor)
 
     def reload(self):
         if not self.manifest_path:
@@ -1636,7 +1715,7 @@ class MainWindow(QMainWindow):
     def _show_references(self, name: str, results: list):
         roots, _texts, project_dir = self._search_sources()
         self.references_panel.show_results(name, results, roots, project_dir)
-        self.monitor_tabs.setCurrentWidget(self.references_panel)
+        self.show_panel(self.references_panel)
         self.statusBar().showMessage(f"{len(results)} reference{'s' * (len(results) != 1)} to {name}", 5000)
 
     def _preview_rename(self, old: str, new: str, edits: dict):
@@ -1678,16 +1757,10 @@ class MainWindow(QMainWindow):
         self.project_tree.refresh()
 
     def show_terminal(self):
-        """Show the Terminal tab (starting the shell) and type there."""
-        self._show_bottom_panel()
-        self.monitor_tabs.setCurrentWidget(self.terminal_panel)
+        """Show the Terminal panel (starting the shell) and type there."""
+        self.show_panel(self.terminal_panel)
         self.terminal_panel.start()
         self.terminal_panel.focus()
-
-    def _show_bottom_panel(self):
-        sizes = self.right_split.sizes()
-        if len(sizes) == 2 and sizes[1] < 120:  # (the bottom panel is closed)
-            self.right_split.setSizes([max(200, sum(sizes) - 300), 300])
 
     # ---------------------------------------------------- find in files
     def find_in_files(self, replace: bool = False):
@@ -1698,8 +1771,7 @@ class MainWindow(QMainWindow):
             selected = editor.editor.textCursor().selectedText()
             if selected and "\u2029" not in selected:  # (one line only)
                 text = selected
-        self._show_bottom_panel()
-        self.monitor_tabs.setCurrentWidget(self.search_panel)
+        self.show_panel(self.search_panel)
         self.search_panel.open_find(text, replace)
 
     def _open_text(self, path: Path) -> str | None:
@@ -2016,8 +2088,18 @@ class MainWindow(QMainWindow):
             widget.deleteLater()
             self._save_session()
 
+    def _graph_in_use(self) -> bool:
+        """Find goes to the graph's search box: the graph panel has the focus,
+        or it's shown and no file is open."""
+        dock = self.docks["graph"]
+        focus = QApplication.focusWidget()
+        if focus is not None and dock.isAncestorOf(focus):
+            return True
+        return self.current_editor() is None and self.panel_in_front(dock.widget())
+
     def _find(self):
-        if self.tabs.currentIndex() == 0:  # the dependency graph
+        if self._graph_in_use():
+            self.show_panel(self.docks["graph"].widget())
             self.graph_view.focus_search()
         else:
             self._with_editor(lambda e: e.find_bar.open_bar())
@@ -2028,7 +2110,8 @@ class MainWindow(QMainWindow):
                        self.find_action, self.replace_action, self.find_next_action,
                        self.find_previous_action, self.goto_action):
             action.setEnabled(has_editor)
-        self.find_action.setEnabled(has_editor or self.tabs.currentIndex() == 0)
+        graph = getattr(self, "docks", {}).get("graph")  # (the panels exist)
+        self.find_action.setEnabled(has_editor or (graph is not None and self.panel_in_front(graph.widget())))
         editor = self.current_editor()
         self.format_action.setEnabled(editor is not None and formatter.can_format(editor.path)
                                       and formatter.executable() is not None)
@@ -2393,7 +2476,7 @@ class MainWindow(QMainWindow):
                 self.show_all_output()  # any file shown on its own is gone
             # Show the build's progress (Test switches to its tab once the
             # tests themselves start).
-            self.monitor_tabs.setCurrentWidget(self.build_monitor)
+            self.show_panel(self.build_monitor)
 
         self._append(f"\n$ cd {quote_arg(str(self.manifest_path.parent))}\n"
                      f"$ {join_args([program] + args)}\n", bold=True)
@@ -2527,7 +2610,7 @@ class MainWindow(QMainWindow):
             self._update_tree_marks()
             self._monitoring = False
         self._marker_monitor().build_finished()
-        self.monitor_tabs.setCurrentWidget(self._marker_monitor())
+        self.show_panel(self._marker_monitor())
 
     def _flush_monitor(self, exit_code: int, stopped: bool):
         if self._phase in ("marked", "direct"):
@@ -2635,11 +2718,11 @@ class MainWindow(QMainWindow):
         names = parse_test_list(output)
         if stopped or code != 0:
             monitor.finish(code, stopped=stopped)
-            self.monitor_tabs.setCurrentWidget(self.build_monitor)
+            self.show_panel(self.build_monitor)
             return
         if names == []:
             monitor.finish(0, no_tests=True)
-            self.monitor_tabs.setCurrentWidget(monitor)
+            self.show_panel(monitor)
             self.statusBar().showMessage(monitor.word("none"))
             return
         run_args, inner_runner, patterns = self._test_args
@@ -2848,7 +2931,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "AI review", "Ollama isn't running and the 'ollama' program "
                                 "wasn't found. Run 'pixi install', or install Ollama from ollama.com.")
             return
-        self.monitor_tabs.setCurrentWidget(self.review_monitor)
+        self.show_panel(self.review_monitor)
         self.review_monitor.begin("starting the local Ollama server", "Starting Ollama")
         self._ollama_process = QProcess(self)
         self._ollama_process.setProcessChannelMode(QProcess.MergedChannels)
@@ -2877,7 +2960,7 @@ class MainWindow(QMainWindow):
             "Models are a few GB; this happens once, and everything runs locally afterwards.")
         if answer != QMessageBox.Yes:
             return
-        self.monitor_tabs.setCurrentWidget(self.review_monitor)
+        self.show_panel(self.review_monitor)
         self.review_monitor.begin(f"downloading {self.ai_model}", "Downloading")
         worker = ai.ReviewWorker(ai.DEFAULT_HOST, self.ai_model, pull_only=True)
         worker.progress.connect(self._pull_progress)
@@ -2906,7 +2989,7 @@ class MainWindow(QMainWindow):
         prompt = ai.build_prompt(editor.path.name, editor.highlighter.lexer.name, code,
                                  self.ai_focus, diagnostics)
         focus = ai.FOCUS_LABELS.get(self.ai_focus, self.ai_focus)
-        self.monitor_tabs.setCurrentWidget(self.review_monitor)
+        self.show_panel(self.review_monitor)
         self.review_monitor.begin(f"{editor.path.name} · {self.ai_model} · {focus.lower()}", "Thinking")
         self._show_single_output(f"AI review of {editor.path.name} ({self.ai_model})", "")
         self._review_text = ""

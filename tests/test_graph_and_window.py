@@ -191,20 +191,77 @@ def test_tab_list_and_close_all(window, project):
     assert window.editors() == []
 
 
-def test_fixed_tabs(window, project):
+def test_editor_in_the_middle(window, project):
     tabs = window.tabs
-    assert [tabs.tabText(i) for i in range(tabs.count())] == ["Dependency graph", "Build outputs"]
-    from qtpy.QtWidgets import QTabBar
-
-    for index in (0, 1):  # (no close buttons)
-        assert tabs.tabBar().tabButton(index, QTabBar.RightSide) is None
-        assert tabs.tabBar().tabButton(index, QTabBar.LeftSide) is None
+    assert tabs.count() == 0 and window.central.currentWidget() is window.no_file_hint  # (a hint, no tabs)
     open_editor(window, project / "fpm.toml")  # (the manifest: an ordinary, closable editor tab)
-    assert tabs.tabText(2).endswith("fpm.toml")
+    assert window.central.currentWidget() is tabs and tabs.tabText(0).endswith("fpm.toml")
     menu = QMenu()
     window._fill_tab_list(menu)
-    kinds = ["separator" if a.isSeparator() else a.text() for a in menu.actions()]
-    assert kinds[:4] == ["Dependency graph", "Build outputs", "separator", "fpm.toml"]
+    assert [a.text() for a in menu.actions() if a.text()][:1] == ["fpm.toml"]
+    window.close_all_editor_tabs()
+    assert window.central.currentWidget() is window.no_file_hint
+
+
+def areas(window) -> dict[str, str]:
+    names = {Qt.LeftDockWidgetArea: "left", Qt.RightDockWidgetArea: "right", Qt.BottomDockWidgetArea: "bottom",
+             Qt.NoDockWidgetArea: "none"}
+    return {name: names.get(window.dockWidgetArea(dock), "?") for name, dock in window.docks.items()}
+
+
+def stack_of(window, name) -> set[str]:
+    dock = window.docks[name]
+    return {n for n, d in window.docks.items() if d in window.tabifiedDockWidgets(dock)} | {name}
+
+
+def test_default_panels(window):
+    assert areas(window) == {"options": "left", "files": "left", "graph": "right", "outputs": "right",
+                             "build": "bottom", "tests": "bottom", "run": "bottom", "review": "bottom",
+                             "references": "bottom", "search": "bottom", "terminal": "bottom",
+                             "output": "bottom"}
+    assert stack_of(window, "graph") == {"graph", "outputs"}
+    assert stack_of(window, "build") == {"build", "tests", "run", "review", "references", "search", "terminal"}
+    assert "output" not in stack_of(window, "build")  # (beside the stack)
+    assert window.panel_in_front(window.docks["graph"].widget())  # (in front of Build outputs)
+    assert window.panel_in_front(window.build_monitor)
+    # (window.panels_menu, not action.menu(): PySide invalidates a menu fetched that way)
+    assert [a.text() for a in window.panels_menu.actions()][:3] == ["Build options", "Project files",
+                                                                     "Dependency graph"]
+
+
+def test_moving_floating_and_reset(qtbot, window):
+    graph = window.docks["graph"]
+    window.addDockWidget(Qt.BottomDockWidgetArea, graph)  # (dragged to the bottom)
+    window.docks["search"].setFloating(True)
+    window.docks["review"].hide()  # (closed)
+    assert areas(window)["graph"] == "bottom" and window.docks["search"].isFloating()
+    window.show_panel(window.review_monitor)  # (a review brings it back)
+    assert window.panel_in_front(window.review_monitor)
+    window.reset_layout()
+    assert areas(window)["graph"] == "right" and not window.docks["search"].isFloating()
+    assert all(not d.isHidden() for d in window.docks.values())
+
+
+def test_layout_is_remembered(make_window, project):
+    from conftest import close_window
+
+    first = make_window(project / "fpm.toml")
+    first.addDockWidget(Qt.LeftDockWidgetArea, first.docks["terminal"])
+    first.docks["outputs"].hide()
+    close_window(first)
+    second = make_window(project / "fpm.toml")
+    assert areas(second)["terminal"] == "left" and second.docks["outputs"].isHidden()
+
+
+def test_find_goes_to_the_graph_or_the_editor(window, project, monkeypatch):
+    searched = []
+    monkeypatch.setattr(window.graph_view, "focus_search", lambda: searched.append(True))
+    window.show_panel(window.docks["graph"].widget())
+    window.find_action.trigger()  # (no file open: the graph's search box)
+    assert searched
+    editor = open_editor(window, project / "src/foo.f90")
+    window.find_action.trigger()
+    assert editor.find_bar.isVisible()
 
 
 def test_editor_tabs_have_the_file_icon(window, project, monkeypatch):
