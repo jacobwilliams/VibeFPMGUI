@@ -213,6 +213,8 @@ class ProjectTree(QWidget):
 
     open_requested = Signal(str)
     compile_command_requested = Signal(str)
+    rename_requested = Signal(str)  # a file to rename (the window asks for the new name)
+    delete_requested = Signal(str)  # a file to move to the trash (the window asks first)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -740,10 +742,17 @@ class ProjectTree(QWidget):
             stack.extend(item.child(r) for r in range(item.rowCount()))
 
     def _context_menu(self, pos):
+        menu = self.context_menu(pos)
+        menu.exec(self.view.viewport().mapToGlobal(pos))
+        menu.deleteLater()
+
+    def context_menu(self, pos) -> QMenu:
+        """The right-click menu for the row at ``pos`` (viewport coordinates)."""
         index = self.view.indexAt(pos)
         path = index.data(PATH_ROLE) if index.isValid() else None
+        is_file = bool(path) and index.data(KIND_ROLE) == "file"
         menu = QMenu(self)
-        if path and index.data(KIND_ROLE) == "file":
+        if is_file:
             menu.addAction("Open", lambda: self.open_requested.emit(path))
             menu.addAction("Open in Default App",
                            lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(path)))
@@ -754,6 +763,10 @@ class ProjectTree(QWidget):
             menu.addAction(reveal_label(), lambda: reveal_in_file_manager(path))
             menu.addAction("Copy Path", lambda: QApplication.clipboard().setText(path))
             menu.addSeparator()
+        if is_file:
+            menu.addAction("Rename…", lambda: self.rename_requested.emit(path))
+            menu.addAction("Move to Trash…", lambda: self.delete_requested.emit(path))
+            menu.addSeparator()
         menu.addAction("Refresh", self.refresh)
         menu.addAction("Collapse All", self.view.collapseAll)
-        menu.exec(self.view.viewport().mapToGlobal(pos))
+        return menu

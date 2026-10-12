@@ -21,6 +21,7 @@ from pathlib import Path
 
 from qtpy.QtCore import (
     QEvent,
+    QFile,
     QProcess,
     QProcessEnvironment,
     QSettings,
@@ -431,6 +432,8 @@ class MainWindow(QMainWindow):
         self.project_tree = ProjectTree()
         self.project_tree.open_requested.connect(lambda path: self.open_file(path))
         self.project_tree.compile_command_requested.connect(self.show_compile_command)
+        self.project_tree.rename_requested.connect(self.rename_file)
+        self.project_tree.delete_requested.connect(self.delete_file)
         files_box = QWidget()  # (in the "Project files" panel)
         files_layout = QVBoxLayout(files_box)
         files_layout.setContentsMargins(4, 4, 4, 4)
@@ -2181,6 +2184,71 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Saved {path}", 4000)
         if self.manifest_path and Path(path) == self.manifest_path:
             self.reload()  # graph, features and profiles may have changed
+
+    def rename_file(self, path: str):
+        """Project files → Rename…: rename a file on disk; a tab it's open in
+        follows it (unsaved changes included)."""
+        old = Path(path).resolve()
+        name, ok = QInputDialog.getText(self, "Rename", f"New name for {old.name}:", text=old.name)
+        name = name.strip() if ok else ""
+        if not name or name == old.name:
+            return
+        if "/" in name or "\\" in name or name in (".", ".."):
+            QMessageBox.warning(self, "Rename", f"“{name}” isn't a file name (it can't contain / or \\).")
+            return
+        new = old.with_name(name)
+        if new.exists() and not os.path.samefile(new, old):  # (another file; a change of case is fine)
+            QMessageBox.warning(self, "Rename", f"There's already a file named {name} in {old.parent.name}.")
+            return
+        try:
+            old.rename(new)
+        except OSError as exc:
+            QMessageBox.warning(self, "Rename", f"Couldn't rename {old.name}:\n{exc}")
+            return
+        editor = self._open_editor_for(old)
+        if editor is not None:
+            editor.renamed(new)
+            self._save_session()
+        self._lsp_diagnostics_by_file.pop(old, None)
+        self.search_panel.file_changed(old)
+        self.search_panel.file_changed(new)
+        self.project_tree.refresh()
+        self.project_tree.reveal(str(new))
+        self.statusBar().showMessage(f"Renamed {old.name} to {name}", 4000)
+
+    def delete_file(self, path: str):
+        """Project files → Move to Trash…: after asking (and, for a file open
+        with unsaved changes, whether to save them first), move a file to the
+        trash and close its tab."""
+        file = Path(path).resolve()
+        editor = self._open_editor_for(file)
+        if editor is not None and editor.is_dirty():
+            self.tabs.setCurrentWidget(editor)
+            answer = QMessageBox.question(
+                self, "Move to Trash",
+                f"{file.name} has unsaved changes. Save them before moving it to the trash?",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel, QMessageBox.Cancel)
+            if answer == QMessageBox.Cancel or (answer == QMessageBox.Save and not editor.save()):
+                return
+        else:
+            answer = QMessageBox.question(self, "Move to Trash", f"Move {file.name} to the trash?",
+                                          QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel)
+            if answer != QMessageBox.Yes:
+                return
+        moved = QFile.moveToTrash(str(file))
+        moved = moved[0] if isinstance(moved, tuple) else moved  # (PySide: (ok, path in the trash))
+        if not moved:
+            QMessageBox.warning(self, "Move to Trash", f"Couldn't move {file.name} to the trash.")
+            return
+        if editor is not None:
+            editor.close_down()
+            self.tabs.removeTab(self.tabs.indexOf(editor))
+            editor.deleteLater()
+            self._save_session()
+        self._lsp_diagnostics_by_file.pop(file, None)
+        self.search_panel.file_changed(file)
+        self.project_tree.refresh()
+        self.statusBar().showMessage(f"Moved {file.name} to the trash", 4000)
 
     def close_all_editors(self) -> bool:
         """Close every editor tab. Unsaved files are asked about first; if

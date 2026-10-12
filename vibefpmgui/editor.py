@@ -2116,13 +2116,27 @@ class EditorTab(QWidget):
             return False
         client = self.lsp
         self.detach_lsp()  # (under the old name)
-        self.path = Path(filename).resolve()
-        self.highlighter.set_lexer(lexer_for_path(self.path))
-        self.path_changed.emit(str(self.path))
+        self._set_path(filename)
         saved = self.save()
         self.lint()  # it may (no longer) be a Fortran file
         self.attach_lsp(client)
         return saved
+
+    def renamed(self, path: str | Path):
+        """The file was renamed or moved (on disk): the tab follows it,
+        keeping any unsaved changes."""
+        client = self.lsp
+        self.detach_lsp()  # (under the old name)
+        self._set_path(path)
+        self._watch()
+        self.lint()  # it may (no longer) be a Fortran file
+        self.attach_lsp(client)
+        self._update_status()
+
+    def _set_path(self, path: str | Path):
+        self.path = Path(path).resolve()
+        self.highlighter.set_lexer(lexer_for_path(self.path))
+        self.path_changed.emit(str(self.path))
 
     def maybe_save(self) -> bool:
         """Ask about unsaved changes; True if it's fine to close."""
