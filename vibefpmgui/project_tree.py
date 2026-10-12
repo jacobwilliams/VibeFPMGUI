@@ -13,7 +13,15 @@ import subprocess
 import sys
 from pathlib import Path
 
-from qtpy.QtCore import QFileInfo, QSortFilterProxyModel, Qt, QTimer, QUrl, Signal
+from qtpy.QtCore import (
+    QEvent,
+    QFileInfo,
+    QSortFilterProxyModel,
+    Qt,
+    QTimer,
+    QUrl,
+    Signal,
+)
 from qtpy.QtGui import (
     QColor,
     QDesktopServices,
@@ -181,6 +189,12 @@ def reveal_in_file_manager(path: str):
         QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
 
 
+# Keys that move the tree's selection: a file reached with them is previewed
+# once the selection has rested this long.
+NAVIGATION_KEYS = {Qt.Key_Up, Qt.Key_Down, Qt.Key_PageUp, Qt.Key_PageDown, Qt.Key_Home, Qt.Key_End}
+KEY_PREVIEW_MS = 150
+
+
 class _Filter(QSortFilterProxyModel):
     """Case-insensitive name filter that keeps the parents of matches.
     Files ignored by git and greyed-out entries only match when
@@ -213,6 +227,7 @@ class ProjectTree(QWidget):
 
     open_requested = Signal(str)
     compile_command_requested = Signal(str)
+    preview_requested = Signal(str)  # a file clicked once: shown in a preview tab
     rename_requested = Signal(str)  # a file to rename (the window asks for the new name)
     delete_requested = Signal(str)  # a file to move to the trash (the window asks first)
 
@@ -256,6 +271,18 @@ class ProjectTree(QWidget):
         self.view.setContextMenuPolicy(Qt.CustomContextMenu)
         self.view.customContextMenuRequested.connect(self._context_menu)
         self.view.activated.connect(self._activated)  # double-click / Enter
+        self.view.clicked.connect(self._clicked)      # one click: a preview
+        # Moving through the files with the arrow keys previews them too, once
+        # the selection rests (holding ↓ doesn't open every file on the way).
+        # Only keys count: the app moves the selection itself too (revealing
+        # the current tab's file, a refresh), and that mustn't open anything.
+        self._key_moving = False
+        self._key_preview_timer = QTimer(self)
+        self._key_preview_timer.setSingleShot(True)
+        self._key_preview_timer.setInterval(KEY_PREVIEW_MS)
+        self._key_preview_timer.timeout.connect(lambda: self._clicked(self.view.currentIndex()))
+        self.view.installEventFilter(self)
+        self.view.selectionModel().currentChanged.connect(self._current_changed)
         self.view.expanded.connect(self._expanded)     # folders load when opened
 
         self.empty = QLabel("Open an fpm.toml to see its files.")
@@ -713,6 +740,20 @@ class ProjectTree(QWidget):
         visit(self.view.rootIndex())
 
     # ------------------------------------------------------------- actions
+    def eventFilter(self, obj, event):
+        if obj is self.view and event.type() == QEvent.KeyPress and event.key() in NAVIGATION_KEYS:
+            self._key_moving = True  # (the view moves the selection now: see _current_changed)
+            QTimer.singleShot(0, lambda: setattr(self, "_key_moving", False))
+        return super().eventFilter(obj, event)
+
+    def _current_changed(self, current, _previous):
+        if self._key_moving:
+            self._key_preview_timer.start()
+
+    def _clicked(self, index):
+        if index.data(KIND_ROLE) == "file" and not index.data(HIDDEN_ROLE) and index.data(PATH_ROLE):
+            self.preview_requested.emit(index.data(PATH_ROLE))
+
     def _activated(self, index):
         path = index.data(PATH_ROLE)
         if index.data(KIND_ROLE) == "file":

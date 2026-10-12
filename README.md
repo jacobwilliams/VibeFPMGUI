@@ -67,8 +67,11 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   packages are shown greyed out (greyed folders don't expand; double-click
   shows them in Finder). Files ignored by git (the project's `.gitignore`
   files, or each dependency's own) are shown in a medium grey, with the
-  responsible `.gitignore` in the tooltip. Double-click a file to open it in
-  the editor; right-click for Open in Default App, Show in Finder, Copy
+  responsible `.gitignore` in the tooltip. Click a file (or move to it with
+  the arrow keys) to preview it in the editor: its tab's name is in italics, and the next file clicked takes its
+  place (as in VS Code); editing it, or double-clicking the file or the tab,
+  keeps it open. Double-click a file to open it in the editor straight away;
+  right-click for Open in Default App, Show in Finder, Copy
   Path, Rename… and Move to Trash… (a tab the file is open in follows the
   rename, unsaved changes included; moving a file with unsaved changes to
   the trash asks whether to save them first). Files with errors or warnings

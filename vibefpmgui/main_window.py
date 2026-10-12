@@ -38,6 +38,7 @@ from qtpy.QtGui import (
     QDesktopServices,
     QFont,
     QFontDatabase,
+    QFontMetrics,
     QIcon,
     QKeySequence,
     QPalette,
@@ -64,6 +65,9 @@ from qtpy.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QStackedWidget,
+    QStyle,
+    QStyleOptionTab,
+    QStylePainter,
     QTabBar,
     QTabWidget,
     QTextBrowser,
@@ -134,7 +138,49 @@ def _signature(graph: m.DependencyGraph):
 
 class ScrollingTabBar(QTabBar):
     """A tab bar where the mouse wheel or a trackpad scrolls the tabs
-    sideways when they don't all fit, rather than switching tabs."""
+    sideways when they don't all fit, rather than switching tabs; a preview
+    tab's name is in italics (see set_italic)."""
+
+    def set_tab_name(self, index: int, name: str, italic: bool = False):
+        """A tab's name, in italics or not. Qt has no font per tab: an italic
+        one's own text is left empty, and its name drawn here (paintEvent)."""
+        self.setTabData(index, name if italic else None)
+        self.setTabText(index, "" if italic else name)
+        self.updateGeometry()
+        self.update()
+
+    def tab_name(self, index: int) -> str:
+        return self.italic_name(index) or self.tabText(index)
+
+    def italic_name(self, index: int) -> str | None:
+        name = self.tabData(index)
+        return name if isinstance(name, str) else None
+
+    def _italic_font(self) -> QFont:
+        font = QFont(self.font())
+        font.setItalic(True)
+        return font
+
+    def tabSizeHint(self, index):
+        size = super().tabSizeHint(index)
+        name = self.italic_name(index)
+        if name is not None:  # (room for the name it doesn't have as text)
+            size.setWidth(size.width() + QFontMetrics(self._italic_font()).horizontalAdvance(name) + 4)
+        return size
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        names = [(i, self.italic_name(i)) for i in range(self.count())]
+        if not any(name for _i, name in names):
+            return
+        painter = QStylePainter(self)
+        painter.setFont(self._italic_font())
+        for index, name in names:
+            if name is not None:
+                option = QStyleOptionTab()
+                self.initStyleOption(option, index)
+                option.text = name
+                painter.drawControl(QStyle.CE_TabBarTabLabel, option)
 
     def wheelEvent(self, event):
         arrows = [b for b in self.findChildren(QToolButton) if b.isVisible() and b.arrowType() in
@@ -469,6 +515,8 @@ class MainWindow(QMainWindow):
         # Project files below the build options (drag the divider to resize).
         self.project_tree = ProjectTree()
         self.project_tree.open_requested.connect(lambda path: self.open_file(path))
+        self.project_tree.preview_requested.connect(self.preview_file)
+        self._preview: EditorTab | None = None  # the preview tab (one click in Project files), if any
         self.project_tree.compile_command_requested.connect(self.show_compile_command)
         self.project_tree.rename_requested.connect(self.rename_file)
         self.project_tree.delete_requested.connect(self.delete_file)
@@ -536,6 +584,7 @@ class MainWindow(QMainWindow):
         self.tabs.setTabsClosable(True)
         self.tabs.setMovable(True)
         self.tabs.tabCloseRequested.connect(self.close_editor)
+        self.tabs.tabBarDoubleClicked.connect(lambda i: self._make_permanent(self.tabs.widget(i)))
         self.tabs.currentChanged.connect(self._update_editor_actions)
         self.tabs.currentChanged.connect(self._reveal_current_file)
         self.tabs.currentChanged.connect(self._update_central)
@@ -2159,21 +2208,46 @@ class MainWindow(QMainWindow):
             editor.set_lint_enabled(on)
         self._update_editor_actions()  # (the Fix … Issues items)
 
-    def open_file(self, path: str, diagnostics: list | None = None, force_editor: bool = False):
+    def preview_file(self, path: str):
+        """Project files → one click: show the file in the preview tab (its
+        name in italics), in place of the one previewed before. Editing it,
+        or double-clicking the file or the tab, keeps it open."""
+        file = Path(path).resolve()
+        if self.use_editor_action.isChecked() and file.is_file() and EditorTab.is_probably_text(file):
+            self.open_file(str(file), force_editor=True, preview=True)
+
+    def _preview_editor(self) -> EditorTab | None:
+        return self._preview if self._preview in self.editors() else None
+
+    def _make_permanent(self, editor):
+        """A preview tab stays open from now on (its name no longer in italics)."""
+        if editor is not None and editor is self._preview:
+            self._preview = None
+            self._update_editor_title(editor)
+
+    def open_file(self, path: str, diagnostics: list | None = None, force_editor: bool = False,
+                  preview: bool = False):
         """Open a file in the built-in editor (or the default application),
-        marking any compiler diagnostics and jumping to the first one."""
+        marking any compiler diagnostics and jumping to the first one.
+        ``preview``: in the preview tab (see preview_file), and the keyboard
+        stays where it is."""
         file = Path(path).resolve()
         use_editor = force_editor or self.use_editor_action.isChecked()
         if not use_editor or not file.is_file() or not EditorTab.is_probably_text(file):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(file)))
             return
         editor = next((e for e in self.editors() if e.path == file), None)
+        if editor is not None and not preview:
+            self._make_permanent(editor)  # (opened for real: a preview no longer)
         if editor is None:
             try:
                 editor = EditorTab(file)
             except OSError as exc:
                 QMessageBox.warning(self, "Can't open file", f"{file}:\n{exc}")
                 return
+            # A new preview takes the old one's place (unless that one has changes: then it stays).
+            replaced = self._preview_editor() if preview else None
+            index = self.tabs.indexOf(replaced) if replaced is not None and not replaced.is_dirty() else -1
             editor.set_font(self._mono_font(editor=True))
             editor.dirty_changed.connect(lambda _dirty, e=editor: self._update_editor_title(e))
             editor.path_changed.connect(lambda _p, e=editor: self._update_editor_title(e))
@@ -2187,7 +2261,15 @@ class MainWindow(QMainWindow):
                                             else None)
             editor.editor.textChanged.connect(lambda e=editor: self.search_panel.file_changed(e.path))
             editor.attach_lsp(self.lsp_client)
-            self.tabs.addTab(editor, file.name)
+            # (Changing a preview's text keeps it open.)
+            editor.dirty_changed.connect(lambda dirty, e=editor: dirty and self._make_permanent(e))
+            if preview:
+                self._preview = editor
+            if index >= 0:
+                self.tabs.insertTab(index, editor, file.name)
+                self._close_tab(replaced)
+            else:
+                self.tabs.addTab(editor, file.name)
             self._add_close_button(editor)
             self._update_editor_title(editor)
             self._save_session()
@@ -2195,8 +2277,16 @@ class MainWindow(QMainWindow):
         if diagnostics:
             editor.show_diagnostics(diagnostics)
             editor.editor.go_to_line(diagnostics[0].line)
-        else:
+        elif not preview:
             editor.editor.setFocus()
+
+    def _close_tab(self, editor: EditorTab):
+        """Close an editor tab without asking (see close_editor for that)."""
+        editor.close_down()
+        self.tabs.removeTab(self.tabs.indexOf(editor))
+        editor.deleteLater()
+        if editor is self._preview:
+            self._preview = None
 
     def _add_close_button(self, editor: EditorTab):
         """The file's icon on the left of an editor tab's name, and our own ×
@@ -2244,7 +2334,7 @@ class MainWindow(QMainWindow):
         for index in range(self.tabs.count()):
             widget = self.tabs.widget(index)
             icon = self.project_tree.icon_for(widget.path) if isinstance(widget, EditorTab) else QIcon()
-            action = menu.addAction(icon, self.tabs.tabText(index))
+            action = menu.addAction(icon, self.tabs.tabBar().tab_name(index))
             action.setCheckable(True)
             action.setChecked(index == current)
             action.setToolTip(self.tabs.tabToolTip(index))
@@ -2297,7 +2387,8 @@ class MainWindow(QMainWindow):
     def _update_editor_title(self, editor: EditorTab):
         index = self.tabs.indexOf(editor)
         if index >= 0:
-            self.tabs.setTabText(index, ("• " if editor.is_dirty() else "") + editor.path.name)
+            self.tabs.tabBar().set_tab_name(index, ("• " if editor.is_dirty() else "") + editor.path.name,
+                                            italic=editor is self._preview)
             self.tabs.setTabToolTip(index, str(editor.path))
             self._set_tab_icon(editor)
         self._update_editor_actions()
@@ -2363,9 +2454,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Move to Trash", f"Couldn't move {file.name} to the trash.")
             return
         if editor is not None:
-            editor.close_down()
-            self.tabs.removeTab(self.tabs.indexOf(editor))
-            editor.deleteLater()
+            self._close_tab(editor)
             self._save_session()
         self._lsp_diagnostics_by_file.pop(file, None)
         self.search_panel.file_changed(file)
@@ -2382,9 +2471,7 @@ class MainWindow(QMainWindow):
                 if not editor.maybe_save():
                     return False
         for editor in editors:
-            editor.close_down()
-            self.tabs.removeTab(self.tabs.indexOf(editor))
-            editor.deleteLater()
+            self._close_tab(editor)
         return True
 
     def close_editor(self, index: int):
@@ -2393,9 +2480,7 @@ class MainWindow(QMainWindow):
             return
         self.tabs.setCurrentIndex(index)
         if widget.maybe_save():
-            widget.close_down()
-            self.tabs.removeTab(index)
-            widget.deleteLater()
+            self._close_tab(widget)
             self._save_session()
 
     def _graph_in_use(self) -> bool:
