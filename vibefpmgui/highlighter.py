@@ -4,7 +4,9 @@ The whole document is lexed at once (so multi-line strings and the like are
 handled correctly) and each text block then just applies the token formats
 that overlap it. After an edit (once typing pauses) the document is lexed
 again, on a thread for a big one, and only the lines whose colors changed
-are recolored.
+are recolored. Meanwhile the line being typed on is lexed on its own, at
+once, so what's typed is colored straight away (the whole-document lexing
+then corrects anything that depends on other lines).
 """
 
 from __future__ import annotations
@@ -223,6 +225,9 @@ def _quick_thread_switching(interval: float = 0.0005):
                 sys.setswitchinterval(_quick_thread_switching.saved)
 
 
+QUICK_LINES = 50  # lines colored on their own per edit (more, e.g. the whole text replaced: wait for the lexing)
+
+
 class PygmentsHighlighter(QSyntaxHighlighter):
     relexed = Signal()  # the whole document has new colors (e.g. for the minimap)
     _lexed = Signal(object)  # (text, tokens) from the lexing thread
@@ -240,6 +245,7 @@ class PygmentsHighlighter(QSyntaxHighlighter):
         self._lexing = False     # a thread is lexing
         self._generation = 0     # changes with the style or lexer (a thread's answer from before is stale)
         self._busy = False
+        self._quick_budget = QUICK_LINES  # (see _quick_line)
         self.style = None
         self._style_name = None
         # While typing, wait for a short pause before lexing again.
@@ -401,6 +407,10 @@ class PygmentsHighlighter(QSyntaxHighlighter):
     def highlightBlock(self, text: str):
         start = self.currentBlock().position()
         end = start + len(text)
+        lexed = self._text
+        if (not self._busy and lexed and (lexed[start:end] != text or (end < len(lexed) and lexed[end] != "\n"))
+                and self._quick_line(text)):
+            return  # (an edited line, colored on its own until the next lexing)
         spans, count = self._spans, len(self._spans)
         i = max(bisect_right(self._starts, start) - 1, 0)
         while i < count:  # (by index: slicing the list would copy the rest of it for every line)
@@ -412,3 +422,25 @@ class PygmentsHighlighter(QSyntaxHighlighter):
                 continue
             a, b = max(pos, start), min(pos + length, end)
             self.setFormat(a - start, b - a, fmt)
+
+    def _quick_line(self, text: str) -> bool:
+        """Color a line that changed since the last lexing by lexing just it,
+        so typing is colored at once (False: over QUICK_LINES this edit)."""
+        if self._quick_budget <= 0:
+            return False
+        if self._quick_budget == QUICK_LINES:
+            QTimer.singleShot(0, self._reset_quick_budget)  # (the budget is per edit)
+        self._quick_budget -= 1
+        pos = 0
+        try:
+            for ttype, value in lex(text, self.lexer):
+                length = min(len(value), len(text) - pos)
+                if length > 0:
+                    self.setFormat(pos, length, self._format(ttype))
+                pos += len(value)
+        except Exception:  # noqa: BLE001 - never let highlighting break the editor
+            return False
+        return True
+
+    def _reset_quick_budget(self):
+        self._quick_budget = QUICK_LINES

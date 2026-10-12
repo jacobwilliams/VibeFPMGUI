@@ -138,3 +138,33 @@ def test_change_bars_on_a_big_file():
     whole = difflib.SequenceMatcher(None, lines, edited, autojunk=False).get_opcodes()
     changed = {j + 1 for tag, _i1, _i2, j1, j2 in whole if tag in ("replace", "insert") for j in range(j1, j2)}
     assert set(marks) == changed
+
+
+def line_colors(edit, line: int) -> set[str]:
+    block = edit.document().findBlockByNumber(line)
+    return {r.format.foreground().color().name() for r in block.layout().formats()}
+
+
+def test_typing_is_colored_at_once(qtbot, edit):
+    comment = line_colors(edit, 0)  # ("! routine 0": a comment)
+    code_line = 2  # ("  real :: x  ! ...")
+    assert line_colors(edit, code_line) != comment
+    cursor = QTextCursor(edit.document().findBlockByNumber(code_line))
+    cursor.insertText("!")  # (the whole line is a comment now)
+    assert edit.highlighter._text != edit.toPlainText()  # (not lexed again yet…)
+    assert line_colors(edit, code_line) == comment       # (…but colored already)
+    settle(qtbot, edit)
+    assert formats(edit) == recolor_everything(qtbot, edit)  # (and right once it is)
+
+
+def test_replacing_everything_colors_few_lines_on_their_own(qtbot, edit, monkeypatch):
+    quick = []
+    real = edit.highlighter._quick_line
+    monkeypatch.setattr(edit.highlighter, "_quick_line", lambda text: quick.append(text) or real(text))
+    cursor = QTextCursor(edit.document())
+    cursor.select(QTextCursor.Document)
+    cursor.insertText(SOURCE.upper())
+    assert sum(1 for _ in quick) >= hl.QUICK_LINES  # (asked for every line…)
+    assert edit.highlighter._quick_budget == 0       # (…but only QUICK_LINES were lexed on their own)
+    settle(qtbot, edit)
+    assert formats(edit) == recolor_everything(qtbot, edit)
