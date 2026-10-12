@@ -3,6 +3,9 @@ match the current text color (light or dark mode) at any screen scale."""
 
 from __future__ import annotations
 
+import math
+import re
+from functools import cache
 from pathlib import Path
 
 from qtpy.QtCore import QPointF, QRectF, Qt
@@ -335,43 +338,73 @@ def app_icon() -> QIcon:
     icon = QIcon()
     if not renderer.isValid():
         return icon
-    view = renderer.viewBoxF()
-    aspect = view.width() / view.height() if view.height() else 1.0
     for size in (16, 32, 48, 64, 128, 256, 512, 1024):
         pixmap = QPixmap(size, size)
         pixmap.fill(Qt.transparent)
         p = QPainter(pixmap)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setRenderHint(QPainter.SmoothPixmapTransform)
-        # macOS icons leave ~10% margin around the rounded square.
-        margin = size * 0.09
-        tile = QRectF(margin, margin, size - 2 * margin, size - 2 * margin)
-        radius = tile.width() * 0.225
-        if size >= 32:  # a soft shadow (too muddy at tiny sizes)
-            for i, alpha in enumerate((18, 12, 6)):
-                grow = size * 0.006 * (i + 1)
-                p.setPen(Qt.NoPen)
-                p.setBrush(QColor(0, 0, 0, alpha))
-                p.drawRoundedRect(tile.adjusted(-grow, -grow + size * 0.012, grow, grow + size * 0.012),
-                                  radius + grow, radius + grow)
-        gradient = QLinearGradient(tile.topLeft(), tile.bottomLeft())
-        gradient.setColorAt(0, QColor("#ffffff"))
-        gradient.setColorAt(1, QColor("#eef0f6"))
-        p.setBrush(gradient)
-        p.setPen(QPen(QColor(0, 0, 0, 28), max(1.0, size / 256)))
-        p.drawRoundedRect(tile, radius, radius)
-        # The logo, as large as fits with some breathing room.
-        box = tile.adjusted(tile.width() * 0.16, tile.height() * 0.12,
-                            -tile.width() * 0.16, -tile.height() * 0.12)
-        h = box.height()
-        w = h * aspect
-        if w > box.width():
-            w = box.width()
-            h = w / aspect
-        renderer.render(p, QRectF(box.center().x() - w / 2, box.center().y() - h / 2, w, h))
+        draw_app_icon(p, size, renderer)
         p.end()
         icon.addPixmap(pixmap)
     return icon
+
+
+def draw_app_icon(p: QPainter, size: float, renderer):
+    """Paint the app icon (`app_icon`) at (0, 0), ``size`` across, with the
+    logo from ``renderer`` (a QSvgRenderer)."""
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setRenderHint(QPainter.SmoothPixmapTransform)
+    view = renderer.viewBoxF()
+    aspect = view.width() / view.height() if view.height() else 1.0
+    # macOS icons leave ~10% margin around the rounded square.
+    margin = size * 0.09
+    tile = QRectF(margin, margin, size - 2 * margin, size - 2 * margin)
+    radius = tile.width() * 0.225
+    if size >= 32:  # a soft shadow (too muddy at tiny sizes)
+        for i, alpha in enumerate((18, 12, 6)):
+            grow = size * 0.006 * (i + 1)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(0, 0, 0, alpha))
+            p.drawRoundedRect(tile.adjusted(-grow, -grow + size * 0.012, grow, grow + size * 0.012),
+                              radius + grow, radius + grow)
+    gradient = QLinearGradient(tile.topLeft(), tile.bottomLeft())
+    gradient.setColorAt(0, QColor("#ffffff"))
+    gradient.setColorAt(1, QColor("#eef0f6"))
+    p.setBrush(gradient)
+    p.setPen(QPen(QColor(0, 0, 0, 28), max(1.0, size / 256)))
+    p.drawRoundedRect(tile, radius, radius)
+    # The logo, as large as fits with some breathing room.
+    box = tile.adjusted(tile.width() * 0.16, tile.height() * 0.12,
+                        -tile.width() * 0.16, -tile.height() * 0.12)
+    h = box.height()
+    w = h * aspect
+    if w > box.width():
+        w = box.width()
+        h = w / aspect
+    renderer.render(p, QRectF(box.center().x() - w / 2, box.center().y() - h / 2, w, h))
+
+
+@cache
+def _logo_text() -> str:
+    return LOGO_PATH.read_text()
+
+
+def recolored_logo(turn: float) -> bytes:
+    """The fpm logo's SVG with each piece's color moved ``turn`` of the way
+    around the color wheel (0 to 1), and a little more or less for each piece
+    (so the colors ripple as ``turn`` grows), keeping their depth. At 0 (or
+    1) it's the logo's own colors."""
+    svg = _logo_text()
+    pieces = iter(range(100))
+
+    def shift(match: re.Match) -> str:
+        color = QColor(match.group(1))
+        h, s, v, _ = color.getHsvF()
+        phase = 2 * math.pi * next(pieces) / 5
+        ripple = 0.04 * (math.sin(4 * math.pi * turn + phase) - math.sin(phase))  # (0 at turn 0 and 1)
+        color.setHsvF((max(h, 0) + turn + ripple) % 1.0, s, v)
+        return f"fill:{color.name()}"
+
+    return re.sub(r"fill:(#[0-9a-fA-F]{6})", shift, svg).encode()
 
 
 # ------------------------------------------------------------ symbol kinds

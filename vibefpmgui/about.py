@@ -7,12 +7,21 @@ import platform
 import re
 import shutil
 import subprocess
+import time
 
-from qtpy.QtCore import QSize, Qt, qVersion
-from qtpy.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+from qtpy.QtCore import Qt, QTimer, qVersion
+from qtpy.QtGui import QPainter
+from qtpy.QtWidgets import (
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from . import __version__
-from .icons import app_icon
+from .icons import draw_app_icon, recolored_logo
 
 FPM_DOCS_URL = "https://fpm.fortran-lang.org"
 PROJECT_URL = "https://github.com/jacobwilliams/VibeFPMGUI"
@@ -35,14 +44,54 @@ def fpm_version(fpm: str) -> str:
     return match.group(1).strip() if match else line
 
 
+class AnimatedLogo(QWidget):
+    """The app icon, its colors slowly going around the color wheel while
+    it's shown."""
+
+    PERIOD = 20.0  # seconds for once around
+    FRAME_MS = 50
+
+    def __init__(self, size: int = 128, parent=None):
+        from qtpy.QtSvg import QSvgRenderer
+
+        super().__init__(parent)
+        self.setFixedSize(size, size)
+        self.renderer = QSvgRenderer(self)
+        self.turn = 0.0
+        self._start = time.monotonic()
+        self.timer = QTimer(self)
+        self.timer.setInterval(self.FRAME_MS)
+        self.timer.timeout.connect(self._tick)
+        self._recolor()
+
+    def _recolor(self):
+        self.renderer.load(recolored_logo(self.turn))
+        self.update()
+
+    def _tick(self):
+        self.turn = ((time.monotonic() - self._start) / self.PERIOD) % 1.0
+        self._recolor()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.timer.start()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self.timer.stop()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        draw_app_icon(p, self.width(), self.renderer)
+        p.end()
+
+
 class AboutDialog(QDialog):
     def __init__(self, fpm: str, compiler: str, compiler_source: str = "", parent=None):
         super().__init__(parent)
         self.setWindowTitle("About VibeFPMGUI")
 
-        icon = QLabel()
-        icon.setPixmap(app_icon().pixmap(QSize(128, 128)))
-        icon.setAlignment(Qt.AlignTop)
+        self.logo = AnimatedLogo(128)
 
         title = QLabel(f"<h2 style='margin:0'>VibeFPMGUI</h2>"
                        f"<p style='margin-top:2px; color:gray'>Version {html.escape(__version__)}</p>")
@@ -96,7 +145,7 @@ class AboutDialog(QDialog):
 
         top = QHBoxLayout()
         top.setSpacing(16)
-        top.addWidget(icon)
+        top.addWidget(self.logo, 0, Qt.AlignTop)
         top.addLayout(text, 1)
 
         copy = QPushButton("Copy Versions")

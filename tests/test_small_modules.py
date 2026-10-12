@@ -188,3 +188,29 @@ def test_split_runner(text):
     args, runner = split_runner(["--runner", "mpirun -np 2", "--flag", text] if text else [])
     assert runner == ("mpirun -np 2" if text else "")
     assert "--runner" not in args
+
+
+def test_about_logo_changes_color_while_shown(qtbot, monkeypatch):
+    import re
+
+    from vibefpmgui import icons
+    from vibefpmgui.about import AnimatedLogo
+
+    def fills(svg: bytes) -> list[str]:
+        return re.findall(r"fill:(#[0-9a-f]{6})", svg.decode())
+
+    original = fills(icons.LOGO_PATH.read_bytes())
+    assert len(original) == 5
+    assert fills(icons.recolored_logo(0.0)) == fills(icons.recolored_logo(1.0)) == original
+    assert all(a != b for a, b in zip(fills(icons.recolored_logo(0.3)), original))
+    logo = AnimatedLogo(64)
+    qtbot.addWidget(logo)
+    assert not logo.timer.isActive()
+    monkeypatch.setattr(AnimatedLogo, "PERIOD", 1.0)
+    logo.show()
+    qtbot.waitExposed(logo)
+    assert logo.timer.isActive()
+    qtbot.waitUntil(lambda: logo.turn > 0.1, timeout=2_000)
+    assert not logo.grab().isNull()
+    logo.hide()
+    assert not logo.timer.isActive()  # (no work when it isn't seen)
