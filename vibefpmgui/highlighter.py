@@ -260,6 +260,7 @@ class PygmentsHighlighter(QSyntaxHighlighter):
         self._lexing = False     # a thread is lexing
         self._generation = 0     # changes with the style or lexer (a thread's answer from before is stale)
         self._busy = False
+        self._closed = False      # its tab is closed (see close): a lexing thread then drops its answer
         self._quick_budget = QUICK_LINES  # (see _quick_line)
         self.style = None
         self._style_name = None
@@ -276,6 +277,13 @@ class PygmentsHighlighter(QSyntaxHighlighter):
         if not self._busy:
             self._timer.start()
 
+    def close(self):
+        """Its tab is closing: no more lexing, and a thread still lexing
+        drops its answer instead of sending it to a highlighter that's gone."""
+        self._closed = True
+        self._timer.stop()
+        self._generation += 1
+
     def set_lexer(self, lexer):
         self.lexer = keep_positions(lexer)
         self._full = True
@@ -290,7 +298,7 @@ class PygmentsHighlighter(QSyntaxHighlighter):
         self._formats.clear()
         self._full = True
         self._generation += 1
-        QTimer.singleShot(0, self._relex)  # (once, even when the text is set just after)
+        QTimer.singleShot(0, self, self._relex)  # (once, even when the text is set just after; not if deleted)
 
     def background(self) -> QColor:
         return QColor(self.style.background_color)
@@ -380,7 +388,7 @@ class PygmentsHighlighter(QSyntaxHighlighter):
     def _relex(self, *_):
         """Lex the text again (on a thread for a big document) and recolor
         what changed."""
-        if self._busy:
+        if self._busy or self._closed:
             return
         self._timer.stop()
         text = document_text(self.document())
@@ -403,7 +411,12 @@ class PygmentsHighlighter(QSyntaxHighlighter):
         # each time. A shorter interval while lexing keeps the window responsive.
         with _quick_thread_switching():
             result = self._work(*args)
-        self._lexed.emit((generation, result))
+        if self._closed:
+            return  # (its tab was closed meanwhile: nobody wants the colors)
+        try:
+            self._lexed.emit((generation, result))
+        except RuntimeError:
+            pass  # (deleted meanwhile without close(): the same)
 
     def _apply(self, result):
         generation, (text, spans, starts, added, region, prose, names) = result
@@ -454,7 +467,7 @@ class PygmentsHighlighter(QSyntaxHighlighter):
         if self._quick_budget <= 0:
             return False
         if self._quick_budget == QUICK_LINES:
-            QTimer.singleShot(0, self._reset_quick_budget)  # (the budget is per edit)
+            QTimer.singleShot(0, self, self._reset_quick_budget)  # (the budget is per edit)
         self._quick_budget -= 1
         pos = 0
         try:

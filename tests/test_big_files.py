@@ -185,3 +185,34 @@ def test_leading_blank_lines_dont_shift_the_colors(qtbot):
     body = "    module argv_module\n    implicit none\n    end module argv_module\n"
     assert colored("\n\n" + body)[2:] == colored(body)
     assert not hl.lexer_for_path("x.f90").stripnl and not hl.lexer_for_path("x.toml").stripnl
+
+
+def test_a_closed_tab_s_lexing_thread_ends_quietly(qtbot, monkeypatch):
+    """A big file is lexed on a thread; its tab closed meanwhile, the thread
+    must not send its colors to a highlighter that's gone (it raised
+    "Signal source has been deleted" in the thread)."""
+    import threading
+    import time
+
+    from qtpy.QtCore import QCoreApplication, QEvent
+
+    errors = []
+    monkeypatch.setattr(threading, "excepthook", lambda args: errors.append(args.exc_value))
+    monkeypatch.setattr(hl, "LEX_IN_THREAD", 100)
+    for closed_first in (True, False):  # (closed properly, or just deleted)
+        widget = QPlainTextEdit()
+        widget.setPlainText(SOURCE * 40)
+        highlighter = hl.PygmentsHighlighter(widget.document(), FortranLexer())
+        highlighter._full, highlighter._text = False, "x"
+        highlighter._relex()
+        assert highlighter._lexing  # (on a thread)
+        if closed_first:
+            highlighter.close()
+            highlighter._relex()  # (closed: nothing more)
+        highlighter.deleteLater()
+        widget.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        deadline = time.monotonic() + 10
+        while any(t.name == "Syntax highlighting" for t in threading.enumerate()) and time.monotonic() < deadline:
+            time.sleep(0.05)
+    assert errors == []

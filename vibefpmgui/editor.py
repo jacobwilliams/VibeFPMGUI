@@ -2052,6 +2052,7 @@ class EditorTab(QWidget):
         """Before the tab is closed: stop background work."""
         self.stop_lint()
         self.detach_lsp()
+        self.highlighter.close()  # (a big file may be being lexed on a thread)
 
     # -------------------------------------------------------------- lint
     def can_lint(self) -> bool:

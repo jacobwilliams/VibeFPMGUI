@@ -165,7 +165,16 @@ quit.
 *Fix:* return early while `_ollama_process` is running or a poll is pending,
 and disable the action meanwhile.
 
-### 1.9 Low — the highlighter's thread can outlive its tab
+### ~~1.9 Low — the highlighter's thread can outlive its tab~~
+
+> ✅ **Done.** Reproduced first (`RuntimeError: Signal source has been
+> deleted` in the thread). `PygmentsHighlighter.close()`, called by the tab's
+> `close_down()`, stops any further lexing; a thread still lexing then drops
+> its answer, and also ignores the error if the highlighter was deleted without
+> `close()`. Its two delayed calls (`QTimer.singleShot`) now name the
+> highlighter as their context, so Qt cancels them if it's deleted first. A
+> test covers both closing and plain deletion.
+
 `PygmentsHighlighter._lex_in_thread` (`highlighter.py:357–367`) is a daemon
 `threading.Thread` that emits `_lexed` when it's done. If the tab is closed
 meanwhile (common for a big file opened by mistake), it emits on a deleted
