@@ -4033,7 +4033,7 @@ class MainWindow(QMainWindow):
         if findings and keys != self._chat_keys:
             self._chat_keys = keys
             entry.findings = findings
-            self.review_monitor.refresh(entry)
+            self.review_monitor.refresh_soon(entry)
             editor.show_review(findings)
 
     def _chat_new_edits(self):
@@ -4244,7 +4244,7 @@ class MainWindow(QMainWindow):
         if keys != self._review_keys:
             self._review_keys = keys
             entry.findings = findings
-            self.review_monitor.refresh(entry)
+            self.review_monitor.refresh_soon(entry)  # (with the answer's next showing)
             if editor in self.editors():
                 editor.show_review(findings)
 

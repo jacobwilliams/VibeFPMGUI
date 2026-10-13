@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 from conftest import open_editor
 from qtpy.QtCore import Qt
-from qtpy.QtWidgets import QMessageBox
+from qtpy.QtWidgets import QMessageBox, QToolButton
 
 from vibefpmgui import ai_review as ai
 
@@ -828,3 +828,102 @@ def test_an_answer_stopped_by_a_reset_is_forgotten(qtbot, window, ollama, reset)
     ollama.endless = False
     ask(qtbot, window, "Hello", with_file=False)
     assert [m["role"] for m in ollama.chats[-1]["messages"]] == ["system", "user"]
+
+
+def test_finding_rows_are_kept_not_rebuilt(qtbot):
+    from vibefpmgui.review_monitor import Entry, ReviewMonitor
+
+    monitor = ReviewMonitor()
+    qtbot.addWidget(monitor)
+    entry = monitor.add_entry(Entry("review", "General", None, "f.f90"))
+    view = monitor.widget_for(entry).findings
+    entry.findings = [ai.Finding(3, 3, "bug", "one")]
+    monitor.refresh(entry)
+    first = view.rows[0]
+    entry.findings = [ai.Finding(3, 3, "bug", "one, explained further"), ai.Finding(9, 9, "style", "two")]
+    monitor.refresh(entry)
+    assert view.rows[0] is first and len(view.rows) == 2  # (the same row, its text changed; one added)
+    assert "explained further" in first.label.text()
+    clicked, fixed = [], []
+    view.clicked.connect(clicked.append)
+    view.fix.connect(fixed.append)
+    from qtpy.QtCore import QPointF
+    from qtpy.QtGui import QMouseEvent
+    first.mousePressEvent(QMouseEvent(QMouseEvent.MouseButtonPress, QPointF(5, 5), QPointF(5, 5),
+                                      Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
+    first.findChild(QToolButton).click()
+    assert clicked[0].comment == fixed[0].comment == "one, explained further"  # (the row's finding as it is now)
+    entry.findings = entry.findings[:1]
+    monitor.refresh(entry)
+    assert len(view.rows) == 1
+
+
+def test_a_review_with_hundreds_of_findings_streams_in_quickly(qtbot):
+    """(Every row was rebuilt for each new finding: a few dozen made the
+    window crawl, 100 took over ten minutes.)"""
+    import time
+
+    from qtpy.QtWidgets import QApplication
+
+    from vibefpmgui.review_monitor import Entry, ReviewMonitor
+
+    monitor = ReviewMonitor()
+    qtbot.addWidget(monitor)
+    monitor.resize(1000, 800)
+    monitor.show()
+    entry = monitor.add_entry(Entry("review", "General", None, "big.f90"))
+    started = time.monotonic()
+    for n in range(1, 301):  # (a finding at a time, as a review streams in)
+        entry.findings = [ai.Finding(i, i, "style", f"finding {i}: a comment long enough to wrap across "
+                                     "the width of the panel, as the model's comments often are") for i in range(1, n + 1)]
+        monitor.refresh_soon(entry)
+        monitor.add_answer("x")
+        QApplication.processEvents()
+    monitor.finish(True, "done")
+    assert len(monitor.widget_for(entry).findings.rows) == 300  # (all of them, at the end)
+    assert time.monotonic() - started < 30
+
+
+def test_a_finding_coming_in_between_leaves_the_other_rows_alone(qtbot):
+    from vibefpmgui.review_monitor import Entry, ReviewMonitor, WrappedLabel
+
+    monitor = ReviewMonitor()
+    qtbot.addWidget(monitor)
+    entry = monitor.add_entry(Entry("review", "General", None, "f.f90"))
+    view = monitor.widget_for(entry).findings
+    entry.findings = [ai.Finding(i, i, "style", f"finding {i}") for i in range(10, 110)]
+    monitor.refresh(entry)
+    rows = {row.finding.line: row for row in view.rows}
+    texts = []
+    real = WrappedLabel.setText
+    WrappedLabel.setText = lambda self, text: (texts.append(text), real(self, text))
+    try:
+        entry.findings = [ai.Finding(5, 5, "bug", "a new one, first by line"), *entry.findings]
+        monitor.refresh(entry)
+    finally:
+        WrappedLabel.setText = real
+    assert len(texts) == 1 and "a new one" in texts[0]  # (only the new row's text: none of the others)
+    assert view.rows[0].finding.line == 5 and all(rows[row.finding.line] is row for row in view.rows[1:])
+    assert [view.layout_.itemAt(i).widget() for i in range(len(view.rows))] == view.rows  # (in line order)
+
+
+def test_a_wrapped_label_is_measured_once_for_its_text(qtbot):
+    from vibefpmgui.review_monitor import WrappedLabel
+
+    label = WrappedLabel("a comment long enough to wrap across a narrow label, as findings are")
+    qtbot.addWidget(label)
+    height = label.heightForWidth(120)
+    assert label._heights == {120: height} and label.heightForWidth(120) == height
+    label.setText("short")
+    assert label._heights == {} and label.heightForWidth(120) < height  # (new text: measured again)
+
+
+def test_showing_the_answer_waits_longer_when_it_takes_long(qtbot):
+    from vibefpmgui.review_monitor import Entry, ReviewMonitor
+
+    monitor = ReviewMonitor()
+    qtbot.addWidget(monitor)
+    monitor.add_entry(Entry("ask", "q"))
+    monitor._render_cost = 0.5  # (the last showing, with its layout, took half a second)
+    monitor._render_soon()
+    assert monitor._render_timer.interval() == 1000  # (twice that before the next)

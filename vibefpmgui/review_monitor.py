@@ -235,8 +235,83 @@ class MarkdownView(QTextBrowser):
             self.set_markdown(text)
 
 
+class WrappedLabel(QLabel):
+    """A word-wrapped label that remembers its size for its text: Qt asks a
+    wrapped label its height again on every layout pass, laying out its text
+    each time, and with the timeline's findings (hundreds of rows) and an
+    answer streaming in, that kept the window busy."""
+
+    def __init__(self, text: str = ""):
+        super().__init__(text)
+        self.setWordWrap(True)
+        self._heights: dict[int, int] = {}
+        self._hints: dict[str, object] = {}
+
+    def setText(self, text: str):
+        if text != self.text():
+            self._forget()
+        super().setText(text)
+
+    def _forget(self):
+        self._heights.clear()
+        self._hints.clear()
+
+    def changeEvent(self, event):
+        if event.type() in (QEvent.FontChange, QEvent.StyleChange):
+            self._forget()
+        super().changeEvent(event)
+
+    def heightForWidth(self, width: int) -> int:
+        height = self._heights.get(width)
+        if height is None:
+            height = self._heights[width] = super().heightForWidth(width)
+        return height
+
+    def sizeHint(self):
+        if "size" not in self._hints:
+            self._hints["size"] = super().sizeHint()
+        return self._hints["size"]
+
+    def minimumSizeHint(self):
+        if "minimum" not in self._hints:
+            self._hints["minimum"] = super().minimumSizeHint()
+        return self._hints["minimum"]
+
+
+class FindingRow(QWidget):
+    """One finding: its line, category and comment; click to go to the
+    line; Fix with AI…"""
+
+    def __init__(self, view: FindingsView):
+        super().__init__()
+        self.finding: Finding | None = None
+        self.setObjectName("FindingRow")
+        self.setCursor(Qt.PointingHandCursor)
+        self.label = WrappedLabel()
+        self.label.setToolTip("Go to the line")
+        fix = QToolButton()
+        fix.setText("Fix with AI…")
+        fix.setToolTip("Ask the AI for an edit that addresses this finding")
+        fix.clicked.connect(lambda: self.finding is not None and view.fix.emit(self.finding))
+        box = QHBoxLayout(self)
+        box.setContentsMargins(6, 3, 6, 3)
+        box.addWidget(self.label, 1)
+        box.addWidget(fix, 0, Qt.AlignTop)
+        self._view = view
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self.finding is not None:
+            self._view.clicked.emit(self.finding)
+        super().mousePressEvent(event)
+
+
 class FindingsView(QWidget):
-    """Findings, one row each: click to go to the line; Fix with AI…"""
+    """Findings, one row each: click to go to the line; Fix with AI…
+
+    The rows are kept and updated in place (only a row whose finding changed
+    gets new text; new findings add rows at the end): rebuilding every row
+    for each finding a review streamed in took ever longer, and with a few
+    dozen findings the window crawled."""
 
     clicked = Signal(object)
     fix = Signal(object)
@@ -246,40 +321,42 @@ class FindingsView(QWidget):
         self.layout_ = QVBoxLayout(self)
         self.layout_.setContentsMargins(0, 0, 0, 0)
         self.layout_.setSpacing(2)
-        self._keys: list = []
+        self.rows: list[FindingRow] = []
 
     def show_findings(self, findings: list[Finding], pal: dict, is_light: bool):
-        keys = [(f.line, f.end_line, f.category, f.comment) for f in findings] + [is_light]
-        if keys == self._keys:
-            return
-        self._keys = keys
-        while self.layout_.count():
-            item = self.layout_.takeAt(0)
-            if item.widget() is not None:
-                item.widget().deleteLater()
+        family = monospace_font(editor=True).family()
+        # Each row stays with its finding (by line and category): a finding
+        # coming in between others gets a new row there, rather than every
+        # row below taking the next one's text (and being measured again).
+        spare: dict[tuple, list[FindingRow]] = {}
+        for row in self.rows:
+            spare.setdefault(self._key(row.finding), []).append(row)
+        rows = []
         for f in sorted(findings, key=lambda f: f.line):
+            same = spare.get(self._key(f))
+            row = same.pop(0) if same else FindingRow(self)
+            row.finding = f
             color = CATEGORY_COLORS.get(f.category, pal["muted"])
             lines = str(f.line) if f.end_line == f.line else f"{f.line}–{f.end_line}"
-            row = QWidget()
-            row.setObjectName("FindingRow")
-            row.setCursor(Qt.PointingHandCursor)
-            label = QLabel(f"<span style='font-family:\"{monospace_font(editor=True).family()}\"'>{lines}</span>"
-                           f"&nbsp;&nbsp;<b style='color:{color}'>{CATEGORY_ICONS.get(f.category, '')} "
-                           f"{_esc(f.category)}</b>&nbsp;&nbsp;{_esc(f.comment)}")
-            label.setWordWrap(True)
-            label.setToolTip("Go to the line")
-            fix = QToolButton()
-            fix.setText("Fix with AI…")
-            fix.setToolTip("Ask the AI for an edit that addresses this finding")
-            fix.clicked.connect(lambda _=False, f=f: self.fix.emit(f))
-            box = QHBoxLayout(row)
-            box.setContentsMargins(6, 3, 6, 3)
-            box.addWidget(label, 1)
-            box.addWidget(fix, 0, Qt.AlignTop)
-            row.mousePressEvent = lambda event, f=f: self.clicked.emit(f) \
-                if event.button() == Qt.LeftButton else None
-            self.layout_.addWidget(row)
+            text = (f"<span style='font-family:\"{family}\"'>{lines}</span>"
+                    f"&nbsp;&nbsp;<b style='color:{color}'>{CATEGORY_ICONS.get(f.category, '')} "
+                    f"{_esc(f.category)}</b>&nbsp;&nbsp;{_esc(f.comment)}")
+            if row.label.text() != text:  # (only what changed is measured again)
+                row.label.setText(text)
+            rows.append(row)
+        for left in spare.values():
+            for row in left:
+                self.layout_.removeWidget(row)
+                row.deleteLater()
+        for index, row in enumerate(rows):  # (new rows into their places; the others keep theirs)
+            if self.layout_.indexOf(row) != index:
+                self.layout_.insertWidget(index, row)
+        self.rows = rows
         self.setVisible(bool(findings))
+
+    @staticmethod
+    def _key(f: Finding | None) -> tuple:
+        return (f.line, f.end_line, f.category) if f is not None else ()
 
 
 class EntryWidget(QFrame):
@@ -726,6 +803,15 @@ class ReviewMonitor(QWidget):
 
     RENDER_INTERVAL = 0.15  # seconds, at least, between showings of the answer being written
 
+    def refresh_soon(self, entry: Entry):
+        """Show an entry again: the running one with the next showing (see
+        _render_soon: what the model writes comes in many small pieces),
+        any other one now."""
+        if entry is self.current:
+            self._render_soon()
+        else:
+            self.refresh(entry)
+
     def _render_soon(self):
         if not self._render_timer.isActive():
             # (Twice what the last showing took, if more: the window stays responsive.)
@@ -735,6 +821,9 @@ class ReviewMonitor(QWidget):
         if self.current is not None:
             started = time.monotonic()
             self.refresh(self.current)
+            # (Laid out now, not later: the time it takes counts, so a costly
+            # showing makes the next one wait longer and the window stays free.)
+            QApplication.sendPostedEvents(None, QEvent.LayoutRequest)
             self._render_cost = time.monotonic() - started
 
     def add_reasoning(self, text: str):
