@@ -540,3 +540,54 @@ def test_typing_repaints_only_the_rows_it_changes(qtbot, view):
     view._selection = ((0, 0), (1, 3))  # (a selection: drawn per row, with its columns)
     assert view._row_selection(0, 80) == (0, 80) and view._row_selection(1, 80) == (0, 4)
     assert view._row_selection(2, 80) is None
+
+
+def wheel(view, pixel_dy: int = 0, angle_dy: int = 0, pixel_dx: int = 0):
+    from qtpy.QtCore import QPoint, QPointF
+    from qtpy.QtGui import QWheelEvent
+
+    event = QWheelEvent(QPointF(50, 50), QPointF(view.mapToGlobal(QPoint(50, 50))), QPoint(pixel_dx, pixel_dy),
+                        QPoint(pixel_dx * 3, angle_dy), Qt.NoButton, Qt.NoModifier, Qt.ScrollUpdate, False)
+    view.wheelEvent(event)
+
+
+def test_trackpad_scrolling_doesnt_drift(view):
+    """A trackpad sends many small steps (a few pixels each): each one used to
+    move at least a whole line, so up and back down the same distance drifted."""
+    view.resize(800, 400)
+    view.feed(b"".join(b"line %d\r\n" % i for i in range(300)))
+    view.scroll_lines(40)  # (somewhere in the scrollback)
+    start = view._scroll
+    for _ in range(3):
+        for _ in range(36):
+            wheel(view, pixel_dy=3, angle_dy=9)     # (up: 108 px in small steps…)
+        for _ in range(18):
+            wheel(view, pixel_dy=-6, angle_dy=-18)  # (…and back down the same, faster: fewer, bigger steps)
+    assert view._scroll == start  # (it used to move a line per step: 36 up, 18 down)
+    for _ in range(37):
+        wheel(view, pixel_dy=3, angle_dy=9)
+    assert view._scroll - start == int(111 / view.cell_height)  # (the distance, in lines)
+    wheel(view, angle_dy=120)  # (a mouse wheel's notch: 3 lines)
+    assert view._scroll - start == int(111 / view.cell_height) + 3 or view._scroll == len(view.screen.history)
+
+
+
+def test_trackpad_scrolling_is_smooth(view):
+    """A trackpad moves the text by its pixels (part of a line at a time), and
+    a vertical swipe's bit of sideways movement doesn't stop it."""
+    view.resize(800, 400)
+    view.feed(b"".join(b"line %d\r\n" % i for i in range(300)))
+    ch = view.cell_height
+    wheel(view, pixel_dy=5, angle_dy=15)
+    assert view._scroll == 0 and view._scroll_px == 5  # (5 px: not yet a line, but it moved)
+    wheel(view, pixel_dy=int(ch), angle_dy=45, pixel_dx=1)  # (up a line, with a pixel sideways)
+    assert abs(view._scroll * ch + view._scroll_px - (5 + int(ch))) < 1e-6  # (exactly where the pixels say)
+    n, _col = view._cell_at(QPointF(10, 4 + 2))  # (the partly shown line at the top)
+    assert n == len(view.screen.history) - 2
+    assert not view.grab().isNull()
+    view._scrolled(view.scroll_bar.value() if view.scroll_bar else len(view.screen.history) - 1)
+    assert view._scroll_px == 0  # (the scroll bar, keys, typing: whole lines)
+    wheel(view, pixel_dy=-10_000, angle_dy=-30_000)  # (down past the end: at the bottom, following)
+    assert view._scroll == 0 and view._scroll_px == 0
+    wheel(view, pixel_dy=100_000, angle_dy=300_000)  # (up past the top: at the first line)
+    assert view._scroll == len(view.screen.history) and view._scroll_px == 0

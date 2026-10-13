@@ -548,11 +548,13 @@ class TerminalView(QWidget):
         self.word_wrap = True       # View → Word Wrap (off: a wide terminal, scrolled sideways)
         self._hscroll = 0           # pixels scrolled to the right (without word wrap)
         self._scroll = 0            # lines scrolled up from the bottom (0: following the output)
+        self._scroll_px = 0.0       # and pixels more, into the line above (trackpad: smooth, see scroll_pixels)
         self._selection = None      # ((line, column), (line, column)) in all lines (scrollback + screen)
         self._colors: dict[str, QColor] = {}
         self.set_colors(QColor("#1e1e1e"), QColor("#d4d4d4"), DARK)
         self.set_terminal_font(QFont("Menlo" if MAC else "Monospace"))
         self._redraw_all = True     # (else only the rows the output changed: see _after_output)
+        self._wheel_rest = 0.0      # part of a line scrolled, not yet moved (see wheelEvent)
         self._cursor_drawn_at = 0   # the screen row the cursor was last drawn on
         self._repaint_timer = QTimer(self)  # (output in bursts: draw at most every few ms)
         self._repaint_timer.setSingleShot(True)
@@ -626,7 +628,7 @@ class TerminalView(QWidget):
         self._update_scroll_bar()
         self.ensure_cursor_visible()
         self._update_hscroll_bar()
-        if self._redraw_all or self._scroll or self._hscroll != hscroll:
+        if self._redraw_all or self._scroll or self._scroll_px or self._hscroll != hscroll:
             self.update()  # (scrolled: every row in view is another)
         else:
             self._update_rows(set(self.screen.dirty))
@@ -707,7 +709,7 @@ class TerminalView(QWidget):
     def ensure_cursor_visible(self):
         """Without word wrap: scroll sideways to the cursor (as you type, and
         back to the left at a new prompt)."""
-        if self.word_wrap or self._scroll:
+        if self.word_wrap or self._scroll or self._scroll_px:
             return
         x = PADDING + self.screen.cursor.x * self.cell_width
         margin = 4 * self.cell_width
@@ -730,12 +732,25 @@ class TerminalView(QWidget):
 
     def _scrolled(self, value: int):
         self._scroll = max(0, len(self.screen.history) - value)
+        self._scroll_px = 0.0
         self._update_hscroll_bar()  # (the lines now in view may be wider or narrower)
+        self.update()
+
+    def scroll_pixels(self, pixels: float):
+        """Scroll the view up (positive) or down by pixels, through the
+        scrollback: smoothly, part of a line at a time (a trackpad)."""
+        history, ch = len(self.screen.history), self.cell_height
+        total = max(0.0, min(history * ch, self._scroll * ch + self._scroll_px + pixels))
+        self._scroll = min(history, int(total // ch))
+        self._scroll_px = total - self._scroll * ch if self._scroll < history else 0.0
+        self._update_scroll_bar()
+        self._update_hscroll_bar()
         self.update()
 
     def scroll_lines(self, lines: int):
         """Scroll the view up (positive) or down through the scrollback."""
         self._scroll = max(0, min(len(self.screen.history), self._scroll + lines))
+        self._scroll_px = 0.0
         self._update_scroll_bar()
         self._update_hscroll_bar()
         self.update()
@@ -813,7 +828,7 @@ class TerminalView(QWidget):
     def clear_scrollback(self):
         """⌘K: forget the scrollback and redraw the prompt at the top."""
         self.screen.history.clear()
-        self._scroll = 0
+        self._scroll, self._scroll_px = 0, 0.0
         self._selection = None
         self._update_scroll_bar()
         self._input(b"\x0c")  # Ctrl+L
@@ -821,8 +836,8 @@ class TerminalView(QWidget):
     # ------------------------------------------------------------ keys
     def _input(self, data: bytes):
         """Typing goes to the shell, and back to the bottom of the output."""
-        if self._scroll or self._selection:
-            self._scroll, self._selection = 0, None
+        if self._scroll or self._scroll_px or self._selection:
+            self._scroll, self._scroll_px, self._selection = 0, 0.0, None
             self._update_scroll_bar()
             self.update()
         self.write(data)
@@ -909,9 +924,9 @@ class TerminalView(QWidget):
     # ------------------------------------------------------------ mouse
     def _cell_at(self, pos) -> tuple[int, int]:
         """(line in scrollback + screen, column) under a point."""
-        row = int((pos.y() - PADDING) // self.cell_height)
+        row = int((pos.y() - PADDING - self._scroll_px) // self.cell_height)
         col = int((pos.x() + self._hscroll - PADDING) // self.cell_width)
-        row = max(0, min(self.screen.lines - 1, row))
+        row = max(-1 if self._scroll_px else 0, min(self.screen.lines - 1, row))
         col = max(0, min(self.screen.columns - 1, col))
         return len(self.screen.history) - self._scroll + row, col
 
@@ -954,18 +969,32 @@ class TerminalView(QWidget):
             self.update()
 
     def wheelEvent(self, event):
-        sideways = event.angleDelta().x() or (event.angleDelta().y() if event.modifiers() & Qt.ShiftModifier else 0)
-        if sideways:  # (a trackpad's sideways swipe, or Shift+wheel: without word wrap)
-            self.scroll_sideways(-sideways)
+        """Scroll through the scrollback (or, in a full-screen program, send it
+        arrow keys, as xterm does). A trackpad's distance is in pixels and
+        comes in many small steps: they add up, the part of a line left over
+        kept for the next one, so a swipe up and back down the same distance
+        ends where it started."""
+        pixels, angle = event.pixelDelta(), event.angleDelta()
+        dx, dy = pixels.x() or angle.x(), pixels.y() or angle.y()
+        if event.modifiers() & Qt.ShiftModifier:
+            dx, dy = dx or dy, 0  # (Shift+wheel: sideways)
+        if abs(dx) > abs(dy):  # (mostly sideways: a vertical swipe's bit of sideways doesn't count)
+            self.scroll_sideways(-dx)
             return
-        steps = event.angleDelta().y() / 120 * 3
-        if not steps:
+        # Up and down: a trackpad in its exact pixels; a mouse wheel 3 lines a notch.
+        distance = pixels.y() if pixels.y() else angle.y() / 120 * 3 * self.cell_height
+        if not distance:
             return
-        if self.screen.alternate:  # (full-screen programs: the wheel moves them, as in xterm)
-            key = Qt.Key_Up if steps > 0 else Qt.Key_Down
-            self.write(self.key_bytes(key, Qt.NoModifier, "") * int(abs(steps)))
-        else:
-            self.scroll_lines(int(steps) or (1 if steps > 0 else -1))
+        if not self.screen.alternate:
+            self.scroll_pixels(distance)
+            return
+        # Full-screen programs: the wheel is arrow keys (as in xterm), a line at a time.
+        self._wheel_rest += distance / max(1.0, self.cell_height)
+        whole = int(self._wheel_rest)  # (towards zero: the rest waits for the next step)
+        self._wheel_rest -= whole
+        if whole:
+            key = Qt.Key_Up if whole > 0 else Qt.Key_Down
+            self.write(self.key_bytes(key, Qt.NoModifier, "") * abs(whole))
 
     def contextMenuEvent(self, event):
         from qtpy.QtWidgets import QMenu
@@ -989,7 +1018,7 @@ class TerminalView(QWidget):
         rows = max(1, int((self.height() - 2 * PADDING) // self.cell_height))
         if (rows, cols) != (self.screen.lines, self.screen.columns):
             self.screen.resize(rows, cols)
-            self._scroll = min(self._scroll, len(self.screen.history))
+            self._scroll, self._scroll_px = min(self._scroll, len(self.screen.history)), 0.0
             self._update_scroll_bar()
             self.size_changed.emit(rows, cols)
 
@@ -1023,7 +1052,8 @@ class TerminalView(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.fillRect(self.rect(), self.background)
-        painter.translate(-self._hscroll, 0)  # (scrolled sideways, without word wrap)
+        offset = self._scroll_px  # (scrolled part of a line further: everything a bit lower)
+        painter.translate(-self._hscroll, offset)  # (and sideways, without word wrap)
         screen = self.screen
         history = len(screen.history)
         first = history - self._scroll
@@ -1031,10 +1061,12 @@ class TerminalView(QWidget):
         palette = self.palette()
         select_bg = palette.color(QPalette.Highlight)
         select_fg = palette.color(QPalette.HighlightedText)
-        top_row = max(0, int((event.rect().top() - PADDING) // ch))
-        bottom_row = min(screen.lines - 1, int((event.rect().bottom() - PADDING) // ch))
+        top_row = max(-1 if offset else 0, int((event.rect().top() - PADDING - offset) // ch))
+        bottom_row = min(screen.lines - 1, int((event.rect().bottom() - PADDING - offset) // ch))
         for row in range(top_row, bottom_row + 1):
             n = first + row
+            if n < 0:
+                continue
             line = self.line(n)
             width = min(len(line), screen.columns) if isinstance(line, list) else screen.columns
             span = self._row_selection(n, width)  # (once per row: not per cell)
