@@ -508,3 +508,34 @@ def test_chat_while_busy_waits(qtbot, window, ollama):
     window.send_chat("Hi", False)
     assert "busy" in window.statusBar().currentMessage() and not ollama.chats
     window._ai_starting = False
+
+
+def test_up_and_down_recall_earlier_questions(qtbot, window, ollama):
+    from qtpy.QtCore import Qt
+    from qtpy.QtTest import QTest
+
+    monitor = window.review_monitor
+    edit = monitor.chat_edit
+    for question in ("first", "second", "second", "third"):  # (a repeat right after: kept once)
+        ask(qtbot, window, question, with_file=False)
+    assert monitor.asked == ["first", "second", "third"]
+    edit.setText("half-typed")
+    QTest.keyClick(edit, Qt.Key_Up)
+    assert edit.text() == "third"
+    QTest.keyClick(edit, Qt.Key_Up)
+    QTest.keyClick(edit, Qt.Key_Up)
+    assert edit.text() == "first"
+    QTest.keyClick(edit, Qt.Key_Up)  # (the oldest: stays)
+    assert edit.text() == "first"
+    QTest.keyClick(edit, Qt.Key_Down)
+    assert edit.text() == "second"
+    QTest.keyClick(edit, Qt.Key_Down)
+    QTest.keyClick(edit, Qt.Key_Down)  # (past the newest: what was being typed)
+    assert edit.text() == "half-typed"
+    QTest.keyClick(edit, Qt.Key_Up, Qt.KeypadModifier)  # (as macOS sends arrow keys)
+    assert edit.text() == "third"
+    monitor.chat_edit.returnPressed.emit()  # (sent again: the newest, not added twice)
+    qtbot.waitUntil(lambda: not monitor.running and window._ai_thread is None, timeout=10_000)
+    assert monitor.asked == ["first", "second", "third"] and not edit.text()
+    QTest.keyClick(edit, Qt.Key_Up)
+    assert edit.text() == "third"

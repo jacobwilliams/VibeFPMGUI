@@ -241,6 +241,10 @@ class ReviewMonitor(SortableTable, QWidget):
         self.chat_edit.setPlaceholderText("Ask the AI about Fortran, fpm or the open file… (Return to send)")
         self.chat_edit.setClearButtonEnabled(True)
         self.chat_edit.returnPressed.connect(self._send_chat)
+        self.chat_edit.installEventFilter(self)  # (Up/Down: earlier questions)
+        self.asked: list[str] = []  # questions asked, oldest first (this run of the app only)
+        self._recall = 0            # where Up/Down are in them (len(asked): the text being typed)
+        self._draft = ""            # what was being typed before Up
         self.chat_file_check = QCheckBox("Send the open file")
         self.chat_file_check.setChecked(True)
         self.chat_file_check.setToolTip("Send the file open in the editor along with the question, so the "
@@ -325,7 +329,22 @@ class ReviewMonitor(SortableTable, QWidget):
     def _send_chat(self):
         question = self.chat_edit.text().strip()
         if question:
+            if not self.asked or self.asked[-1] != question:
+                self.asked.append(question)
+            self._recall, self._draft = len(self.asked), ""
             self.chat_requested.emit(question, self.chat_file_check.isChecked())
+
+    def _recall_question(self, step: int) -> bool:
+        """Up (-1) / Down (+1): the previous / next question asked, as in a
+        shell; past the newest, what was being typed. False at either end."""
+        position = self._recall + step
+        if not 0 <= position <= len(self.asked):
+            return False
+        if self._recall == len(self.asked):
+            self._draft = self.chat_edit.text()
+        self._recall = position
+        self.chat_edit.setText(self.asked[position] if position < len(self.asked) else self._draft)
+        return True
 
     def begin_chat(self, description: str, question: str):
         """A question to the model (a new conversation, or the next turn of
@@ -624,6 +643,11 @@ class ReviewMonitor(SortableTable, QWidget):
             self.table.viewport().update()
 
     def eventFilter(self, obj, event):
+        # (macOS marks arrow keys with KeypadModifier: only real modifiers count.)
+        if obj is self.chat_edit and event.type() == QEvent.KeyPress \
+                and not event.modifiers() & ~Qt.KeypadModifier and event.key() in (Qt.Key_Up, Qt.Key_Down):
+            self._recall_question(-1 if event.key() == Qt.Key_Up else 1)
+            return True
         if obj is self.table.viewport() and event.type() == QEvent.Leave:
             self._set_hover(-1, 0)
         return super().eventFilter(obj, event)
