@@ -91,6 +91,7 @@ class Entry:
     where: str = ""               # shown in the header: "foo.f90", "foo.f90:12"
     model: str = ""
     answer: str = ""              # as the model wrote it (Markdown)
+    reasoning: str = ""           # a thinking model's, before its answer (AI → Think Before Answering)
     findings: list[Finding] = field(default_factory=list)
     summary: str = ""             # a review's
     edits: list[ed.Edit] = field(default_factory=list)
@@ -322,6 +323,16 @@ class EntryWidget(QFrame):
         self.question = QLabel()
         self.question.setWordWrap(True)
         self.question.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.reasoning_button = QToolButton()
+        self.reasoning_button.setCheckable(True)
+        self.reasoning_button.setText("Show reasoning")
+        self.reasoning_button.toggled.connect(self._show_reasoning)
+        self.reasoning_button.setToolTip("What the model thought before it answered")
+        self.reasoning = QLabel()
+        self.reasoning.setWordWrap(True)
+        self.reasoning.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.reasoning.setTextFormat(Qt.PlainText)
+        self.reasoning.hide()
         self.answer = MarkdownView()
         self.findings = FindingsView()
         self.findings.clicked.connect(lambda f: monitor.finding_selected.emit(entry, f))
@@ -340,7 +351,8 @@ class EntryWidget(QFrame):
         body = QVBoxLayout(self.body)
         body.setContentsMargins(22, 4, 0, 0)
         body.setSpacing(6)
-        for widget in (self.question, self.answer, self.findings, self.summary, self.edit_list, self.footer):
+        for widget in (self.question, self.reasoning_button, self.reasoning, self.answer, self.findings,
+                       self.summary, self.edit_list, self.footer):
             body.addWidget(widget)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 8, 10, 8)
@@ -348,6 +360,11 @@ class EntryWidget(QFrame):
         layout.addWidget(self.header)
         layout.addWidget(self.body)
         self.refresh()
+
+    def _show_reasoning(self, on: bool):
+        self.reasoning_button.setText("Hide reasoning" if on else "Show reasoning")
+        self.reasoning.setText(self.entry.reasoning.strip())
+        self.reasoning.setVisible(on)
 
     def set_expanded(self, on: bool):
         self.expanded = on
@@ -379,6 +396,10 @@ class EntryWidget(QFrame):
         else:
             question = f"<b>You:</b> {_esc(e.question)}"
         self.question.setText(question)
+        self.reasoning_button.setVisible(bool(e.reasoning))
+        if e.reasoning and self.reasoning.isVisibleTo(self.body):
+            self.reasoning.setText(e.reasoning.strip())
+        self.reasoning.setStyleSheet(f"color: {muted};")
         if e.kind == "review":
             text = ""
         elif e.kind == "explain":
@@ -694,6 +715,18 @@ class ReviewMonitor(QWidget):
             self._status = word
             self._update_label()
         entry.answer += text
+        self.refresh(entry)
+
+    def add_reasoning(self, text: str):
+        """More of a thinking model's reasoning (before its answer)."""
+        entry = self.current
+        if entry is None:
+            return
+        self._tokens += 1
+        if self._status != "Reasoning":
+            self._status = "Reasoning"
+            self._update_label()
+        entry.reasoning += text
         self.refresh(entry)
 
     def finish(self, ok: bool, note: str = ""):

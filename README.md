@@ -263,7 +263,12 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   streams into the Output panel. *AI → Model* picks any installed Ollama
   model (default `qwen2.5-coder:7b`, downloaded on first use after asking);
   *AI → Focus* steers the review (bugs, modern Fortran style, performance,
-  documentation). The GUI starts `ollama serve` itself if it isn't running.
+  documentation). *AI → Answer Length* sets how much the model may write
+  (1,500 tokens by default, up to no limit; edits get at least 4,096), and
+  *AI → Think Before Answering* lets a thinking model (qwen3, deepseek-r1…)
+  reason first: slower, with its reasoning kept in the entry (*Show
+  reasoning*) and given room of its own. It's off by default: a thinking
+  model then answers straight away. The GUI starts `ollama serve` itself if it isn't running.
   Small local models are helpful but fallible — treat findings as hints.
   *Explain with AI* (right-click a compiler error, fortitude or fortls
   problem in the Problems panel, or a marked line in the editor) asks the

@@ -3526,6 +3526,26 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         self.model_menu = menu.addMenu("Model")
         self.model_menu.aboutToShow.connect(self._fill_model_menu)
+        self.ai_think = self.settings.value("ai_think", False, type=bool)
+        self.ai_answer_tokens = self.settings.value("ai_answer_tokens", ai.MAX_ANSWER_TOKENS, type=int)
+        self.think_action = menu.addAction("Think Before Answering")
+        self.think_action.setCheckable(True)
+        self.think_action.setChecked(self.ai_think)
+        self.think_action.setStatusTip(
+            "Let a thinking model (qwen3, deepseek-r1…) reason before it answers: slower, sometimes better. "
+            f"The reasoning gets {ai.REASONING_TOKENS:,} tokens of its own, on top of the answer's length")
+        self.think_action.toggled.connect(self._set_ai_think)
+        length_menu = self.answer_length_menu = menu.addMenu("Answer Length")
+        lengths = QActionGroup(self)
+        for tokens in ai.ANSWER_LENGTHS:
+            action = length_menu.addAction(f"{tokens:,} tokens" + (" (default)" if tokens == ai.MAX_ANSWER_TOKENS
+                                                                     else "") if tokens else "No limit")
+            action.setCheckable(True)
+            action.setChecked(tokens == self.ai_answer_tokens)
+            action.setStatusTip("How much the model may write in an answer (edits get at least "
+                                f"{ai.EDIT_ANSWER_TOKENS:,}); a longer answer needs more of its context")
+            action.triggered.connect(lambda _=False, t=tokens: self._set_ai_answer_tokens(t))
+            lengths.addAction(action)
         focus_menu = menu.addMenu("Focus")
         group = QActionGroup(self)
         for key, label in ai.FOCUS_LABELS.items():
@@ -3535,6 +3555,29 @@ class MainWindow(QMainWindow):
             action.setStatusTip(ai.FOCUS[key])
             action.triggered.connect(lambda _=False, k=key: self._set_ai_focus(k))
             group.addAction(action)
+
+    def _set_ai_think(self, on: bool):
+        self.ai_think = on
+        self.settings.setValue("ai_think", on)
+
+    def _set_ai_answer_tokens(self, tokens: int):
+        self.ai_answer_tokens = tokens
+        self.settings.setValue("ai_answer_tokens", tokens)
+
+    def _answer_options(self, edit: bool = False) -> dict:
+        """The worker's settings from AI → Think Before Answering and Answer
+        Length (an edit's answer, with its old and new text: at least
+        EDIT_ANSWER_TOKENS)."""
+        tokens = self.ai_answer_tokens
+        if edit and tokens:
+            tokens = max(tokens, ai.EDIT_ANSWER_TOKENS)
+        return {"num_predict": tokens, "think": self.ai_think}
+
+    def _start_answer(self, worker) -> None:
+        """Start a worker whose reasoning (if the model thinks) goes to the
+        running entry."""
+        worker.reasoning.connect(self.review_monitor.add_reasoning)
+        self._start_ai_worker(worker)
 
     def _set_ai_focus(self, key: str):
         self.ai_focus = key
@@ -3739,11 +3782,11 @@ class MainWindow(QMainWindow):
         self._review_keys = []
         self._review_code = code
         editor.clear_review()  # markers from an earlier review would be misleading
-        worker = ai.ReviewWorker(ai.DEFAULT_HOST, self.ai_model, prompt)
+        worker = ai.ReviewWorker(ai.DEFAULT_HOST, self.ai_model, prompt, **self._answer_options())
         worker.chunk.connect(self._review_chunk)
         worker.finished.connect(self._review_finished)
         worker.failed.connect(self._review_failed)
-        self._start_ai_worker(worker)
+        self._start_answer(worker)
 
     # ------------------------------------------------- explain with AI
     EXPLAINABLE = ("build", "fortitude", "fortls")  # (Problems' sources: compiler, linter, language server)
@@ -3768,12 +3811,13 @@ class MainWindow(QMainWindow):
                                          problem.message, problem.badge, self.effective_compiler()[0])
         self._explain_prompt = prompt
         self.review_monitor.set_status("Thinking")
-        worker = ai.ReviewWorker(ai.DEFAULT_HOST, self.ai_model, prompt, system=ai.EXPLAIN_SYSTEM_PROMPT)
+        worker = ai.ReviewWorker(ai.DEFAULT_HOST, self.ai_model, prompt, system=ai.EXPLAIN_SYSTEM_PROMPT,
+                                 **self._answer_options())
         # (Methods, not lambdas: a lambda would run in the worker's thread.)
         worker.chunk.connect(self.review_monitor.add_answer)
         worker.finished.connect(self._explain_finished)
         worker.failed.connect(self._explain_failed)
-        self._start_ai_worker(worker)
+        self._start_answer(worker)
 
     def _explain_finished(self, _text: str, stats: dict):
         entry = self._ai_entry
@@ -3892,8 +3936,10 @@ class MainWindow(QMainWindow):
         system = ai.EDIT_SYSTEM_PROMPT if editing else ai.CHAT_SYSTEM_PROMPT
         cap = self._chat_context()
         messages, tokens, dropped = ctx.compose(self._turns, self._chat_turn, system, cap, self._token_ratio)
-        answer_tokens = ai.EDIT_ANSWER_TOKENS if editing else ai.MAX_ANSWER_TOKENS
-        num_ctx = ai.context_for(tokens, cap, answer_tokens)
+        options = self._answer_options(edit=editing)
+        room = options["num_predict"] + (ai.REASONING_TOKENS if options["think"] else 0) \
+            if options["num_predict"] else ai.REASONING_TOKENS
+        num_ctx = ai.context_for(tokens, cap, room)
         self._chat_estimate = (tokens, len(self._turns) - dropped)
         monitor = self.review_monitor
         monitor.context_note = (f"context ~{tokens / 1000:.1f}k of {num_ctx // 1024}k"
@@ -3904,12 +3950,12 @@ class MainWindow(QMainWindow):
         self._chat_keys: list = []
         worker = ai.ReviewWorker(ai.DEFAULT_HOST, self.ai_model, messages[-1]["content"], system=system,
                                  history=messages[1:-1], num_ctx=num_ctx,
-                                 temperature=0.1 if editing else 0.2, num_predict=answer_tokens)
+                                 temperature=0.1 if editing else 0.2, **options)
         # (Methods, not lambdas: a lambda would run in the worker's thread.)
         worker.chunk.connect(self._chat_chunk)
         worker.finished.connect(self._chat_finished)
         worker.failed.connect(self._chat_failed)
-        self._start_ai_worker(worker)
+        self._start_answer(worker)
 
     def _chat_findings(self):
         """Lines of the sent file the answer points to: listed in its entry,
@@ -3952,7 +3998,9 @@ class MainWindow(QMainWindow):
             self._token_ratio = min(2.0, max(0.5, measured / raw))
         self._remember(self._ai_entry, self._chat_turn)
         detail = f"{stats.get('seconds', 0):.1f} s · {self.ai_model}" if stats.get("seconds") else self.ai_model
-        if stats.get("truncated"):
+        if stats.get("thinking"):
+            detail += " · the model spent its answer's length on reasoning (see AI → Answer Length)"
+        elif stats.get("truncated"):
             detail += " · cut off at the length limit"
         self.review_monitor.finish(True, detail)
 
@@ -4148,6 +4196,8 @@ class MainWindow(QMainWindow):
         detail = f"{stats.get('seconds', 0):.1f} s · {self.ai_model}" if stats else self.ai_model
         if stats.get("repeated"):
             detail += " · stopped a repetition loop"
+        elif stats.get("thinking"):
+            detail += " · the model spent its answer's length on reasoning (see AI → Answer Length)"
         elif stats.get("truncated"):
             detail += " · answer cut off at the length limit"
         self.review_monitor.finish(True, detail)

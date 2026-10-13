@@ -33,7 +33,9 @@ from .ai_edits import END_RE as EDIT_END_RE
 from .ai_edits import START_RE as EDIT_START_RE
 
 DEFAULT_MODEL = "qwen2.5-coder:7b"
-MAX_ANSWER_TOKENS = 1500  # plenty for a list of findings; stops runaway answers
+MAX_ANSWER_TOKENS = 1500  # the default answer length: plenty for a list of findings; stops runaway answers
+ANSWER_LENGTHS = (1500, 4000, 8000, 16000, 0)  # AI → Answer Length (0: no limit)
+REASONING_TOKENS = 8192  # room for a thinking model's reasoning (AI → Think Before Answering), on top
 DEFAULT_HOST = None  # the ollama library's default: $OLLAMA_HOST or localhost:11434
 CATEGORIES = ("bug", "warning", "performance", "style", "suggestion")
 
@@ -303,16 +305,6 @@ def model_context_length(model: str, host: str | None = DEFAULT_HOST) -> int | N
     return None
 
 
-def context_size(prompt: str) -> int:
-    """A context window big enough for the prompt plus the answer (Ollama's
-    default is much smaller than the files we send)."""
-    estimate = len(prompt) // 3 + len(SYSTEM_PROMPT) // 3 + 2048
-    size = 4096
-    while size < estimate and size < 32768:
-        size *= 2
-    return size
-
-
 def ollama_available() -> bool:
     try:
         import ollama  # noqa: F401
@@ -357,6 +349,7 @@ class ReviewWorker(QObject):
     """Runs a review (or a model download) on a background thread."""
 
     chunk = Signal(str)                 # streamed text of the answer
+    reasoning = Signal(str)             # streamed reasoning of a thinking model
     progress = Signal(str, float)       # download status, fraction (-1 = unknown)
     finished = Signal(str, dict)        # full answer, stats
     failed = Signal(str)
@@ -364,20 +357,29 @@ class ReviewWorker(QObject):
     def __init__(self, host: str | None, model: str, prompt: str = "", pull_only: bool = False,
                  system: str = SYSTEM_PROMPT, history: list[dict] | None = None,
                  num_ctx: int | None = None, temperature: float = 0.2,
-                 num_predict: int = MAX_ANSWER_TOKENS):
+                 num_predict: int = MAX_ANSWER_TOKENS, think: bool = False):
         """``system``: the model's instructions (a review's, by default;
         EXPLAIN_SYSTEM_PROMPT to explain one problem, CHAT_SYSTEM_PROMPT to
         chat, EDIT_SYSTEM_PROMPT for edits); ``history``: the conversation so
         far, as chat messages (``{"role": "user" | "assistant", "content":
         ...}``); ``num_ctx``: the context window (by default, from the
-        prompt's length)."""
+        prompt's and answer's lengths); ``num_predict``: the answer's length
+        (0: no limit); ``think``: let a thinking model reason first (it gets
+        REASONING_TOKENS more room for that)."""
         super().__init__()
         self.host, self.model, self.prompt, self.pull_only = host, model, prompt, pull_only
         self.system = system
         self.history = list(history or [])
-        self.num_ctx, self.temperature, self.num_predict = num_ctx, temperature, num_predict
+        self.num_ctx, self.temperature, self.num_predict, self.think = num_ctx, temperature, num_predict, think
         self._cancel = threading.Event()
         self._client = None
+
+    @property
+    def limit(self) -> int:
+        """The tokens the model may write (reasoning included); 0: no limit."""
+        if self.num_predict <= 0:
+            return 0
+        return self.num_predict + (REASONING_TOKENS if self.think else 0)
 
     def cancel(self):
         """Stop (from the GUI thread). Closing the connection also stops a
@@ -420,31 +422,49 @@ class ReviewWorker(QObject):
         self.finished.emit("", {})
 
     def _review(self, client):
+        asked = self.prompt + self.system + "".join(m["content"] for m in self.history)
         options = {
-            "num_ctx": self.num_ctx or context_size(self.prompt + "".join(m["content"] for m in self.history)),
+            "num_ctx": self.num_ctx or context_for(len(asked) // 3, answer=self.limit or REASONING_TOKENS),
             "temperature": self.temperature,
             # Discourage the repetition loops small models fall into, and
             # cap the answer so a runaway one always ends.
             "repeat_penalty": 1.1,
             "repeat_last_n": 512,
-            "num_predict": self.num_predict,
+            "num_predict": self.limit or -1,  # (-1: no limit)
         }
         started = time.monotonic()
-        stream = client.chat(model=self.model, stream=True, options=options, messages=[
-            {"role": "system", "content": self.system},
-            *self.history,
-            {"role": "user", "content": self.prompt},
-        ])
+        messages = [{"role": "system", "content": self.system}, *self.history,
+                    {"role": "user", "content": self.prompt}]
+        # Thinking models (qwen3, deepseek-r1…) reason at length before they
+        # answer, and that counts against num_predict: unless it's asked for
+        # (with room of its own, see limit), thinking is turned off, which is
+        # also much faster. A model that can't think, or can't stop, says so:
+        # it's asked again as it is.
+        stream = client.chat(model=self.model, stream=True, options=options, messages=messages, think=self.think)
+        parts_iter = iter(stream)
+        try:
+            first = next(parts_iter, None)
+        except Exception as exc:
+            if "think" not in str(exc).lower():
+                raise
+            stream = client.chat(model=self.model, stream=True, options=options, messages=messages)
+            parts_iter = iter(stream)
+            first = next(parts_iter, None)
         guard = RepeatGuard()
         parts: list[str] = []
         stats: dict = {}
+        thought = 0  # characters of reasoning (a model that thinks anyway)
         try:
-            for part in stream:
+            for part in _chain(first, parts_iter):
                 if self._cancel.is_set():
                     self.failed.emit(self._stopped_message())
                     return
                 message = getattr(part, "message", None)
                 text = getattr(message, "content", "") if message is not None else ""
+                thinking = (getattr(message, "thinking", "") or "") if message is not None else ""
+                if thinking:
+                    thought += len(thinking)
+                    self.reasoning.emit(thinking)
                 if text:
                     shown, stop = guard.feed(text)
                     if shown:
@@ -456,8 +476,10 @@ class ReviewWorker(QObject):
                     stats = {"tokens": getattr(part, "eval_count", 0) or 0,
                              "prompt_tokens": getattr(part, "prompt_eval_count", 0) or 0,
                              "seconds": (getattr(part, "total_duration", 0) or 0) / 1e9}
-                    if (stats["tokens"] or 0) >= self.num_predict:
+                    if self.limit and (stats["tokens"] or 0) >= self.limit:
                         stats["truncated"] = True
+                        if thought and thought > 3 * sum(map(len, parts)):
+                            stats["thinking"] = True  # (the limit went on reasoning, not the answer)
         finally:
             close = getattr(stream, "close", None)
             if close is not None:
@@ -471,6 +493,13 @@ class ReviewWorker(QObject):
             stats = {"seconds": time.monotonic() - started, "repeated": True}
             self.chunk.emit("\n[The model started repeating itself, so the review was stopped here.]\n")
         self.finished.emit("".join(parts), stats)
+
+
+def _chain(first, rest):
+    """``first`` (if any), then the rest of an iterator."""
+    if first is not None:
+        yield first
+    yield from rest
 
 
 def start_worker(worker: ReviewWorker, parent: QObject) -> QThread:

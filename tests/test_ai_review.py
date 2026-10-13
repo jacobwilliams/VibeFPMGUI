@@ -43,13 +43,40 @@ class FakeOllama:
             raise ConnectionError(self.error)
         return {"models": [{"model": name} for name in self.models]}
 
-    def chat(self, model, stream, options, messages):
-        self.chats.append({"model": model, "options": options, "messages": messages})
+    refuses_think = False  # (a model that can't turn its thinking off)
+    reasons = False        # (a model that reasons first when asked to think)
+    thinks = False         # (a model that reasons before it answers, whatever it's asked)
+
+    def chat(self, model, stream, options, messages, think=None):
+        self.chats.append({"model": model, "options": options, "messages": messages, "think": think})
         if self.error:
             raise RuntimeError(self.error)
+        if self.refuses_think and think is not None:
+            return self._refuse()
+        if self.reasons and think:
+            return self._reasoned()
         return self._stream()
 
+    def _reasoned(self):
+        for thought in ("The loop ", "looks fine. "):
+            yield SimpleNamespace(message=SimpleNamespace(content="", thinking=thought), done=False)
+        yield from self._stream()
+
+    def _refuse(self):
+        raise RuntimeError(f'"{self.chats[-1]["model"]}" does not support thinking (status code: 400)')
+        yield  # (a generator: the error comes when it's read, as Ollama's does)
+
+    def _thinking(self, budget):
+        for _ in range(budget):
+            yield SimpleNamespace(message=SimpleNamespace(content="", thinking="hmm, let me think. "),
+                                  done=False)
+        yield SimpleNamespace(message=SimpleNamespace(content="", thinking=""), done=True, eval_count=budget,
+                              prompt_eval_count=900, total_duration=1_500_000_000)
+
     def _stream(self):
+        if self.thinks:
+            yield from self._thinking(ai.MAX_ANSWER_TOKENS)
+            return
         if self.endless:  # (a long answer, until stopped)
             for i in range(10_000):
                 time.sleep(0.01)
@@ -117,8 +144,9 @@ def test_build_prompt_and_context():
     assert "Review this Fortran file: a.f90" in prompt and ai.FOCUS["bugs"] in prompt
     assert "1| line one" in prompt and "2| line two" in prompt and "3|" not in prompt
     assert "line 2: warning: unused" in prompt
-    assert ai.context_size("x") == 4096
-    assert ai.context_size("x" * 100_000) == 32768
+    assert ai.context_for(10) == 4096
+    assert ai.context_for(100_000) == 32768
+    assert ai.context_for(5000, answer=8000) == 16384  # (room for a longer answer)
 
 
 def test_models_and_server(ollama):
@@ -147,6 +175,25 @@ def test_worker_streams_a_review(ollama):
     assert stats == {"tokens": 42, "prompt_tokens": 900, "seconds": 1.5}
     chat = ollama.chats[0]
     assert chat["messages"][1]["content"] == "the prompt" and chat["options"]["num_ctx"] == 4096
+
+
+def test_thinking_is_turned_off(ollama):
+    out = run_worker(ai.ReviewWorker(None, "m", "the prompt"))
+    assert ollama.chats[0]["think"] is False and out["finished"][0] == ANSWER
+
+
+def test_a_model_that_cannot_stop_thinking_is_asked_as_it_is(ollama):
+    ollama.refuses_think = True
+    out = run_worker(ai.ReviewWorker(None, "m", "the prompt"))
+    assert [c["think"] for c in ollama.chats] == [False, None]  # (asked again, without it)
+    assert out["finished"][0] == ANSWER
+
+
+def test_reasoning_that_uses_up_the_answer_is_said_so(ollama):
+    ollama.thinks = True
+    out = run_worker(ai.ReviewWorker(None, "m", "the prompt"))
+    text, stats = out["finished"]
+    assert text == "" and stats["truncated"] and stats["thinking"]
 
 
 def test_worker_stops_a_repetition_loop(ollama):
@@ -664,3 +711,38 @@ def test_stop_the_ollama_server_the_app_started(qtbot, window, project, ollama, 
         return False
 
     qtbot.waitUntil(gone, timeout=5_000)  # (its runner too: not left holding the model's memory)
+
+
+def test_think_before_answering_and_answer_length(qtbot, window, ollama):
+    ollama.reasons = True
+    monitor = window.review_monitor
+    assert not window.think_action.isChecked() and window.ai_answer_tokens == ai.MAX_ANSWER_TOKENS
+    ask(qtbot, window, "Quick one?", with_file=False)
+    chat = ollama.chats[-1]
+    assert chat["think"] is False and chat["options"]["num_predict"] == ai.MAX_ANSWER_TOKENS
+    assert not window._ai_entry.reasoning
+
+    window.think_action.trigger()  # (on)
+    ask(qtbot, window, "Think about it?", with_file=False)
+    chat = ollama.chats[-1]
+    assert chat["think"] is True  # (with room of its own for the reasoning)
+    assert chat["options"]["num_predict"] == ai.MAX_ANSWER_TOKENS + ai.REASONING_TOKENS
+    entry = window._ai_entry
+    assert entry.reasoning == "The loop looks fine. " and entry.answer == ollama.answer
+    widget = monitor.widget_for(entry)
+    assert widget.reasoning_button.isVisibleTo(monitor) and not widget.reasoning.isVisibleTo(monitor)
+    widget.reasoning_button.click()
+    assert widget.reasoning.isVisibleTo(monitor) and widget.reasoning.text() == "The loop looks fine."
+
+    length_menu = window.answer_length_menu
+    labels = [a.text() for a in length_menu.actions()]
+    assert labels[0] == "1,500 tokens (default)" and labels[-1] == "No limit"
+    length_menu.actions()[-1].trigger()  # (no limit)
+    window.think_action.trigger()  # (off again)
+    ask(qtbot, window, "Long one?", with_file=False)
+    assert ollama.chats[-1]["options"]["num_predict"] == -1 and ollama.chats[-1]["think"] is False
+    length_menu.actions()[1].trigger()  # (4,000)
+    window.review_monitor.set_chat_kind("edit")
+    assert window._answer_options(edit=True)["num_predict"] == max(4000, ai.EDIT_ANSWER_TOKENS)
+    assert window.settings.value("ai_answer_tokens", type=int) == 4000
+    assert window.settings.value("ai_think", type=bool) is False
