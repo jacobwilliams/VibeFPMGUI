@@ -76,6 +76,7 @@ menu item says "not found" and the feature is off; without fprettify the
 |---|---|
 | `vibefpmgui.editor` | The editor tab: gutter markers, find/replace, hover popup, outline, saving |
 | `vibefpmgui.highlighter` | Pygments syntax highlighting and the *Syntax Colors* styles |
+| `vibefpmgui.themes` | *View → Theme*: the whole window's colors (System, Light, Dark and colorful ones) |
 | `vibefpmgui.lsp` | The client for the fortls language server (hover, definition, completion, references, rename) |
 | `vibefpmgui.completion` | The completion list and argument-hint popups |
 | `vibefpmgui.hover_card` | The HTML of the hover card |

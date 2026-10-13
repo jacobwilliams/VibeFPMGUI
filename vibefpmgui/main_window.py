@@ -77,7 +77,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from . import __version__, ansi, dep_updates, formatter, lint, lsp, spelling
+from . import __version__, ansi, dep_updates, formatter, lint, lsp, spelling, themes
 from . import ai_review as ai
 from . import build_outputs as bo
 from . import editor as editor_mod
@@ -86,7 +86,15 @@ from . import manifest as m
 from .about import FPM_DOCS_URL, AboutDialog
 from .background import call_in_background
 from .build_monitor import BuildMonitor, set_ui_scale
-from .compat import join_args, quote_arg, reveal_label, set_windows_app_id, split_args
+from .compat import (
+    join_args,
+    quote_arg,
+    reveal_label,
+    set_macos_bundle_name,
+    set_macos_display_name,
+    set_windows_app_id,
+    split_args,
+)
 from .editor import EditorTab, monospace_font
 from .graph_view import (
     EDGE_STYLES,
@@ -209,6 +217,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("VibeFPMGUI")
         self.resize(1300, 850)
         self.settings = make_settings()
+        themes.apply(str(self.settings.value("app_theme", themes.SYSTEM) or themes.SYSTEM))  # (before the widgets)
         self._session_busy = False  # restoring the open files (don't save meanwhile)
         self.lsp_client = lsp.LspClient(self)  # fortls, for the editor (see _update_language_server)
         self.lsp_client.stopped.connect(self._language_server_stopped)
@@ -437,6 +446,22 @@ class MainWindow(QMainWindow):
                                         "Go to Symbol for Fortran files, from fortls")
         view_menu.addAction(self.fortls_action)
         view_menu.addSeparator()
+        self.theme_menu = view_menu.addMenu("Theme")  # (kept: PySide would let it go)
+        self.theme_menu.setStatusTip("The colors of the whole window (Syntax Colors are the editor's)")
+        self.theme_actions: dict[str, QAction] = {}
+        group = QActionGroup(self.theme_menu)
+        previous = None
+        for key, theme in themes.THEMES.items():
+            kind = "native" if theme.native else "dark" if theme.dark else "light"
+            if previous is not None and kind != previous:
+                self.theme_menu.addSeparator()  # (System/Light/Dark · dark colorful · light colorful)
+            previous = kind
+            action = self.theme_menu.addAction(theme.title)
+            action.setCheckable(True)
+            action.setChecked(key == themes.current)
+            action.triggered.connect(lambda _=False, k=key: self.set_theme(k))
+            group.addAction(action)
+            self.theme_actions[key] = action
         hl.chosen_style = self.settings.value("syntax_style", hl.AUTO) or hl.AUTO
         self.style_menu = view_menu.addMenu("Syntax Colors")
         self.style_menu.setStatusTip("The Pygments color style for the editor and fpm.toml")
@@ -869,6 +894,17 @@ class MainWindow(QMainWindow):
             group.addAction(action)
             action.triggered.connect(lambda _checked=False, a=action: self.set_syntax_style(a.data()))
 
+    def set_theme(self, key: str):
+        """View → Theme: the whole window's colors (and, with Syntax Colors
+        on Automatic, the editor's)."""
+        themes.apply(key)
+        self.settings.setValue("app_theme", themes.current)
+        for k, action in self.theme_actions.items():
+            action.setChecked(k == themes.current)
+        self._apply_highlight_style()  # (the automatic syntax style may change with it)
+        for editor in self.editors():
+            editor.refresh_style()
+
     def set_syntax_style(self, name: str):
         hl.chosen_style = name
         self.settings.setValue("syntax_style", name)
@@ -894,6 +930,8 @@ class MainWindow(QMainWindow):
                 if getattr(editor, "close_button", None) is not None:
                     self._style_close_button(editor.close_button)
             self.build_monitor.set_package_colors(self.graph_view.package_colors())
+            if self.graph:  # (the details are HTML: its links' color is the palette's when it's made)
+                self.show_package(self.graph_view.selected or self.graph.root)
         super().changeEvent(event)
 
     def _build_graph_menu(self) -> QMenu:
@@ -3729,13 +3767,25 @@ def runner_command() -> str:
     return join_args(parts)  # quoted for the platform's shell
 
 
+_APP_NAME = "VibeFPMGUI"
+
+
+def qt_argv(argv: list[str]) -> list[str]:
+    """The command line for QApplication: the app's name in place of the
+    script's ("…/vibefpmgui/__main__.py" when started with python -m)."""
+    return [_APP_NAME, *argv[1:]]
+
+
 def main(argv: list[str] | None = None) -> int:
     import sys
 
     argv = sys.argv if argv is None else argv
     set_windows_app_id()  # Windows: our own taskbar icon, not python.exe's
-    app = QApplication.instance() or QApplication(argv)
-    app.setApplicationName("VibeFPMGUI")
+    set_macos_bundle_name(_APP_NAME)  # macOS: our name in the menu bar, not "Python" (before Qt starts)
+    # (argv[0] is the name Qt uses for macOS's About/Hide/Quit items: "__main__.py" otherwise.)
+    app = QApplication.instance() or QApplication(qt_argv(argv))
+    set_macos_display_name(_APP_NAME)  # and in the Dock, not "python3.14"
+    app.setApplicationName(_APP_NAME)
     app.setWindowIcon(app_icon())  # also the Dock icon on macOS
     app.setApplicationVersion(__version__)
     path = next((a for a in argv[1:] if not a.startswith("-")), None)

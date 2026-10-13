@@ -225,3 +225,32 @@ def test_about_qt_in_the_help_menu(window, monkeypatch):
     assert window.about_qt_action.menuRole() == QAction.AboutQtRole
     window.about_qt_action.trigger()
     assert shown == [(window, "About Qt")]
+
+
+def test_qt_gets_the_app_s_name():
+    from vibefpmgui.main_window import qt_argv
+
+    # (python -m vibefpmgui: argv[0] is .../__main__.py, which macOS's menu would show)
+    assert qt_argv(["/x/vibefpmgui/__main__.py", "proj/fpm.toml", "--new-window"]) == [
+        "VibeFPMGUI", "proj/fpm.toml", "--new-window"]
+
+
+def test_macos_app_name(monkeypatch):
+    import subprocess
+
+    if sys.platform != "darwin":
+        assert not compat.set_macos_bundle_name("X") and not compat.set_macos_display_name("X")
+        return
+    # (In a process of its own: it renames the process it runs in.)
+    script = ("import sys, ctypes\n"
+              "from vibefpmgui import compat\n"
+              "ok = compat.set_macos_bundle_name('VibeFPMGUI')\n"
+              "send, cls, sel = compat._objc()\n"
+              "s = lambda t: send(ctypes.c_void_p, ctypes.c_char_p)(cls('NSString'), sel('stringWithUTF8String:'), t)\n"
+              "info = send(ctypes.c_void_p)(send(ctypes.c_void_p)(cls('NSBundle'), sel('mainBundle')), sel('infoDictionary'))\n"
+              "name = send(ctypes.c_void_p, ctypes.c_void_p)(info, sel('objectForKey:'), s(b'CFBundleName'))\n"
+              "print(ok, send(ctypes.c_char_p)(name, sel('UTF8String')).decode())\n"
+              "print(compat.set_macos_display_name('VibeFPMGUI') in (True, False))\n")
+    out = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=60,
+                         check=True).stdout
+    assert out.split() == ["True", "VibeFPMGUI", "True"]

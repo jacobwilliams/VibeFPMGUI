@@ -136,8 +136,13 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   reloads the project. *View → Open Files in Built-in Editor* switches back
   to your default application. *View → Syntax Colors* picks any installed
   Pygments style (listed as light or dark) for the editor and `fpm.toml`;
-  *Automatic*, the default, uses `default` in light mode and `monokai` in
-  dark mode. *View → Editor Font…* picks the fixed-width font and size for
+  *Automatic*, the default, uses the theme's matching style, else `default`
+  in light mode and `monokai` in dark mode. *View → Theme* sets the colors
+  of the whole window: *System* (following macOS/Windows light or dark
+  mode), *Light* or *Dark* in the platform's own look, or a colorful one
+  (Nord, Dracula, Solarized Dark and Light, Gruvbox Dark and Light, One
+  Dark, Ocean, Mint), which also brings its syntax colors when those are on
+  *Automatic*. *View → Editor Font…* picks the fixed-width font and size for
   the editor and `fpm.toml` (*Bigger/Smaller Text* still scale it; *Reset
   Editor Font* goes back to the system's).
 * Linting: free-form Fortran files (`.f90`, `.F90`, …) open in the editor

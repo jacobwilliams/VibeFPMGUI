@@ -63,13 +63,17 @@ def available_styles() -> tuple[list[str], list[str]]:
 
 
 def style_name(palette: QPalette) -> str:
-    """The style to use: the chosen one, or automatic by light/dark mode."""
-    if chosen_style != AUTO:
-        try:
-            get_style_by_name(chosen_style)
-            return chosen_style
-        except ClassNotFound:
-            pass  # uninstalled since: fall back to automatic
+    """The style to use: the chosen one, or automatic: the one that goes with
+    the app's theme (View → Theme), else by light/dark mode."""
+    from . import themes
+
+    for name in ((chosen_style,) if chosen_style != AUTO else ()) + (themes.syntax_style(),):
+        if name:
+            try:
+                get_style_by_name(name)
+                return name
+            except ClassNotFound:
+                pass  # uninstalled since: fall back to automatic
     return DARK_STYLE if is_dark(palette) else LIGHT_STYLE
 
 
