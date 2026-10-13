@@ -21,14 +21,15 @@ def window_color() -> str:
 
 
 def test_colorful_themes_use_their_palette(window):
-    native = QApplication.style().name()
+    native = themes.style_name(QApplication.style())
     window.set_theme("nord")
-    assert window_color() == "#2e3440" and QApplication.style().name().lower() == "fusion"
+    assert window_color() == "#2e3440" and themes.style_name(QApplication.style()).lower() == "fusion"
     assert QApplication.palette().color(QPalette.Highlight) == QColor("#88c0d0")
     assert window.theme_actions["nord"].isChecked() and not window.theme_actions[themes.SYSTEM].isChecked()
     assert window.settings.value("app_theme") == "nord"
     window.set_theme(themes.SYSTEM)  # (back: the platform's look again)
-    assert QApplication.style().name().lower() == native.lower() and window_color() != "#2e3440"
+    assert themes.style_name(QApplication.style()).lower() == native.lower() and window_color() != "#2e3440"
+    assert isinstance(QApplication.style(), themes.StillStyle)
 
 
 def test_every_theme_applies(window):
@@ -68,3 +69,13 @@ def test_remembered(make_window, project, settings_file):
 def test_an_unknown_theme_is_system():
     themes.apply("no-such-theme")
     assert themes.current == themes.SYSTEM
+
+
+def test_panels_never_animate(window):
+    """(Qt's zero-length panel animations could loop forever on macOS.)"""
+    from qtpy.QtWidgets import QStyle
+
+    for key in (themes.SYSTEM, "nord"):
+        window.set_theme(key)
+        assert QApplication.style().styleHint(QStyle.SH_Widget_Animation_Duration) == 0
+        assert window.style().styleHint(QStyle.SH_Widget_Animation_Duration, None, window) == 0

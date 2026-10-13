@@ -8,13 +8,16 @@ scheme. The colorful themes need a style that draws with the palette's
 colors (macOS's doesn't), so they use Qt's Fusion style with a palette of
 their own; the color scheme is still set to light or dark to match, so the
 window's title bar and native dialogs agree.
+
+Either style is wrapped in `StillStyle`, which turns off the moving of
+panels: Qt's dock layout could otherwise keep "animating" forever on macOS.
 """
 
 from typing import NamedTuple
 
 from qtpy.QtCore import Qt
 from qtpy.QtGui import QColor, QPalette
-from qtpy.QtWidgets import QApplication
+from qtpy.QtWidgets import QApplication, QProxyStyle, QStyle
 
 
 class Theme(NamedTuple):
@@ -62,6 +65,25 @@ THEMES: dict[str, Theme] = {
                   "tango"),
 }
 
+class StillStyle(QProxyStyle):
+    """A style (the platform's, or Fusion) whose widgets don't animate their
+    geometry. Even with the main window's AnimatedDocks off, Qt moves panels
+    with a zero-length animation whenever the style has an animation
+    duration; on macOS each one's end could re-lay out the panels' tab bars,
+    which started another, forever (a frozen window at 100% CPU). With no
+    duration, Qt moves them in one go."""
+
+    def styleHint(self, hint, option=None, widget=None, data=None):
+        if hint == QStyle.SH_Widget_Animation_Duration:
+            return 0
+        return super().styleHint(hint, option, widget, data)
+
+
+def style_name(style: QStyle) -> str:
+    """The name of a style, or of the one a `StillStyle` wraps."""
+    return (style.baseStyle() if isinstance(style, QProxyStyle) else style).name()
+
+
 current = SYSTEM   # the theme in use (see apply)
 _native_style = ""  # the platform's style ("macOS", "Windows", …), to go back to from Fusion
 
@@ -106,20 +128,16 @@ def apply(key: str):
     theme = THEMES.get(key) or THEMES[SYSTEM]
     current = key if key in THEMES else SYSTEM
     if not _native_style:
-        _native_style = app.style().name()
+        _native_style = style_name(app.style())
     hints = app.styleHints()
     if hasattr(hints, "setColorScheme"):  # (Qt 6.8+)
         scheme = Qt.ColorScheme.Unknown if current == SYSTEM else \
             Qt.ColorScheme.Dark if theme.dark else Qt.ColorScheme.Light
         hints.setColorScheme(scheme)
-    if theme.native:
-        if app.style().name().lower() != _native_style.lower():
-            app.setStyle(_native_style)
-        app.setPalette(QPalette())  # (the platform's own, for the color scheme)
-    else:
-        if app.style().name().lower() != "fusion":
-            app.setStyle("Fusion")
-        app.setPalette(palette(theme))
+    wanted = _native_style if theme.native else "Fusion"
+    if not isinstance(app.style(), StillStyle) or style_name(app.style()).lower() != wanted.lower():
+        app.setStyle(StillStyle(wanted))
+    app.setPalette(QPalette() if theme.native else palette(theme))  # (native: the platform's, for the scheme)
 
 
 def syntax_style() -> str:

@@ -725,7 +725,8 @@ class MainWindow(QMainWindow):
         # Not AnimatedDocks: on macOS the panel layout could start animating
         # against itself, each finished animation laying out the panels again
         # and starting the next, at 100% CPU, the window frozen (seen with a
-        # click in the editor). Panels snap into place instead of sliding.)
+        # click in the editor). Panels snap into place instead of sliding; the
+        # style has no animation duration either: see themes.StillStyle.)
         self.setDockOptions(QMainWindow.AllowNestedDocks | QMainWindow.AllowTabbedDocks)
         self.setTabPosition(Qt.AllDockWidgetAreas, QTabWidget.North)  # (stacked panels: tabs on top)
         self.setDocumentMode(True)
