@@ -57,6 +57,7 @@ menu item says "not found" and the feature is off; without fprettify the
 | `vibefpmgui.build_outputs` | The *Build outputs* tab: what fpm keeps in `build/` |
 | `vibefpmgui.dep_updates` | *Check for Dependency Updates* (`git ls-remote`) |
 | `vibefpmgui.about` | The About window |
+| `vibefpmgui.packages` | *About → Packages…*: the environment's installed packages (`pixi list` / `conda list`) |
 
 **Build, test and run panels**
 

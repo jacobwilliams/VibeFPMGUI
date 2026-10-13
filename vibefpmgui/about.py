@@ -153,11 +153,16 @@ class AboutDialog(QDialog):
         plain = "\n".join(f"{k}: {re.sub('<[^>]+>', ' ', v).strip()}" for k, v in rows).replace("\u200b", "")
         plain = f"VibeFPMGUI {__version__}\n" + re.sub(r"[ \t]+", " ", html.unescape(plain))
         copy.clicked.connect(lambda: (self._copy(plain), copy.setText("Copied")))
+        packages = QPushButton("Packages…")
+        packages.setToolTip("The packages installed in the environment the app runs in "
+                            "(pixi list or conda list)")
+        packages.clicked.connect(self.show_packages)
         close = QPushButton("Close")
         close.setDefault(True)
         close.clicked.connect(self.accept)
         buttons = QHBoxLayout()
         buttons.addWidget(copy)
+        buttons.addWidget(packages)
         buttons.addStretch(1)
         buttons.addWidget(close)
 
@@ -166,6 +171,15 @@ class AboutDialog(QDialog):
         layout.addLayout(top)
         layout.addLayout(buttons)
         self.setMinimumWidth(560)
+
+    def show_packages(self):
+        from .packages import PackagesDialog
+
+        dialog = PackagesDialog(self)
+        try:
+            dialog.exec()
+        finally:
+            dialog.deleteLater()
 
     @staticmethod
     def _copy(text: str):

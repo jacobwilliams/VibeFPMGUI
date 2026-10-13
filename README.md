@@ -367,7 +367,10 @@ and the others come from your system or conda.
 | [pdoc](https://pdoc.dev) | development | The API documentation website |
 
 Without an optional tool the app still runs; only the features that use it
-are unavailable.
+are unavailable. *Help → About VibeFPMGUI → Packages…* lists everything
+installed in the environment the app runs in (from `pixi list` or `conda
+list`, or the Python packages otherwise), with versions, builds, channels
+and licenses; *Copy List* copies it for a bug report.
 
 ## Tests
 
