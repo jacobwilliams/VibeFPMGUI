@@ -719,9 +719,12 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.central)
         # (Not GroupedDragging: a stack of panels dragged out together goes in a
         # window of Qt's own, and once that's closed its panels come back stuck
-        # over the editor, outside the layout. One panel at a time is solid.)
-        self.setDockOptions(QMainWindow.AnimatedDocks | QMainWindow.AllowNestedDocks
-                            | QMainWindow.AllowTabbedDocks)
+        # over the editor, outside the layout. One panel at a time is solid.
+        # Not AnimatedDocks: on macOS the panel layout could start animating
+        # against itself, each finished animation laying out the panels again
+        # and starting the next, at 100% CPU, the window frozen (seen with a
+        # click in the editor). Panels snap into place instead of sliding.)
+        self.setDockOptions(QMainWindow.AllowNestedDocks | QMainWindow.AllowTabbedDocks)
         self.setTabPosition(Qt.AllDockWidgetAreas, QTabWidget.North)  # (stacked panels: tabs on top)
         self.setDocumentMode(True)
         self.setCorner(Qt.BottomLeftCorner, Qt.LeftDockWidgetArea)  # (the left panels: full height)

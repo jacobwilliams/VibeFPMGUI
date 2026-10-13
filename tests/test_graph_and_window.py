@@ -309,6 +309,8 @@ def test_panels_are_dragged_one_at_a_time(window):
     # (Qt's windows for a stack dragged out together leave their panels stuck
     # over the editor once closed.)
     assert not window.dockOptions() & QMainWindow.GroupedDragging
+    # (Animated panels could animate against each other forever: 100% CPU.)
+    assert not window.dockOptions() & QMainWindow.AnimatedDocks
 
 
 def test_a_floating_panel_lost_off_screen_comes_back(qtbot, window):
