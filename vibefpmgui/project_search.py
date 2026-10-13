@@ -335,6 +335,7 @@ class SearchPanel(QWidget):
     """The *Search* tab."""
 
     open_requested = Signal(str, int, int, int, int)  # file, line, column, end line, end column
+    keep_requested = Signal(str)  # a file to keep open (a result double-clicked)
     replace_requested = Signal(object, bool)  # {Path: [TextEdit]}, ask first (Replace All)
 
     def __init__(self, settings=None, parent=None):
@@ -406,6 +407,7 @@ class SearchPanel(QWidget):
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._context_menu)
         self.tree.open_requested.connect(self.open_requested)
+        self.tree.keep_requested.connect(self.keep_requested)
 
         find_row = QHBoxLayout()
         find_row.setSpacing(2)

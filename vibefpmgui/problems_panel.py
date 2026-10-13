@@ -34,6 +34,7 @@ EXPLAINABLE = ("build", "fortitude", "fortls")  # (sources Explain with AI is of
 class ProblemsPanel(QWidget):
     open_requested = Signal(str, int, int, int, int)  # file, line, column, end line, end column
     explain_requested = Signal(object)  # a Problem (right-click → Explain with AI)
+    fix_requested = Signal(object, object)  # its file's path and a Problem (right-click → Fix with AI…)
 
     def __init__(self, settings=None, parent=None):
         super().__init__(parent)
@@ -81,13 +82,17 @@ class ProblemsPanel(QWidget):
         """A problem's right-click menu (None: not on a problem)."""
         item = self.tree.itemAt(pos)
         data = item.data(0, RESULT_ROLE) if item is not None else None
-        problem = data[1] if data else None
+        path, problem = data if data else (None, None)
         if not isinstance(problem, Problem):
             return None
         menu = QMenu(self)
         explain = menu.addAction("Explain with AI", lambda: self.explain_requested.emit(problem))
         explain.setEnabled(problem.source in EXPLAINABLE)
         explain.setToolTip("Ask the local AI model what this means here, and how to fix it")
+        fix = menu.addAction("Fix with AI…", lambda: self.fix_requested.emit(path, problem))
+        fix.setEnabled(problem.source in (*EXPLAINABLE, "review"))
+        fix.setToolTip("Ask the local AI model for an edit that addresses this (you accept or reject "
+                       "each change)")
         menu.addAction("Copy Message", lambda: QApplication.clipboard().setText(problem.message))
         menu.setToolTipsVisible(True)
         return menu

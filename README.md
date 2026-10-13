@@ -263,20 +263,46 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   streams into the Output panel. *AI → Model* picks any installed Ollama
   model (default `qwen2.5-coder:7b`, downloaded on first use after asking);
   *AI → Focus* steers the review (bugs, modern Fortran style, performance,
-  documentation). The GUI starts `ollama serve` itself if it isn't running.
+  documentation). With text selected, only the selection is reviewed; a
+  file too long for the model's context is reviewed a procedure at a time
+  (the one at the cursor, which the entry says). *AI → Answer Length* sets
+  how much the model may write
+  (1,500 tokens by default, up to no limit; edits get at least 4,096), and
+  *AI → Think Before Answering* lets a thinking model (qwen3, deepseek-r1…)
+  reason first: slower, with its reasoning kept in the entry (*Show
+  reasoning*) and given room of its own. It's off by default: a thinking
+  model then answers straight away. The GUI starts `ollama serve` itself if it isn't running.
   Small local models are helpful but fallible — treat findings as hints.
   *Explain with AI* (right-click a compiler error, fortitude or fortls
   problem in the Problems panel, or a marked line in the editor) asks the
   same model what the message means, why it applies to that line and how to
-  fix it; the answer streams into the Review panel (with Stop and Copy)
-  while you keep editing.
-  The box at the bottom of the Review panel is a chat with the same model:
-  ask anything (Return to send; Up/Down bring back earlier questions), with
-  the open file sent along unless you
-  untick *Send the open file*. Answers stream in as Markdown, follow-up
-  questions keep the conversation (*New Chat* starts over), and lines of the
-  file an answer points to are listed and marked in the editor, as a
-  review's findings are.
+  fix it, while you keep editing.
+  The *Review* tab is a **timeline of everything the AI does**: each review,
+  explanation, question and edit is an entry, newest at the bottom, and
+  nothing replaces anything. Older entries fold to a one-line header (click
+  to open one); filters show only reviews, explanations, chat or entries
+  with edits still to accept. Everything in an entry stays usable: findings
+  jump to their line or get *Fix with AI…*, *Show in Editor* puts a
+  review's markers back, edits can still be accepted. The model remembers
+  the timeline too, so you can ask about a review's findings or an
+  explanation. *New Chat* draws a line (the model forgets what's above it;
+  it stays in view), *Clear* empties it; it's not saved when you quit.
+  The box at the bottom asks the model anything (Return to send; Up/Down
+  bring back earlier questions), with the open file sent along unless you
+  untick *Send the open file*; lines of the file an answer points to are
+  listed and marked in the editor, as a review's findings are.
+  Switch the box to **Edit** (or use *AI → Edit with AI…*, ⌥⌘E, or
+  *Edit Selection with AI…* in the editor's right-click menu, or *Fix with
+  AI…* on a problem or finding, which sends a request to address it) to ask
+  for a change to the open file: the model proposes edits, each shown as a
+  card with a diff and **Accept** / **Reject** (and *Accept All*). Accepting
+  changes the editor's text, one step to undo; nothing is saved until you
+  save. An edit is found by its text, not line numbers, so it still applies
+  after other changes, and one that no longer matches says so instead of
+  landing in the wrong place. Long conversations stay within the model's
+  context: the file is sent again only when it changed, the oldest entries
+  are left out first, and big files are sent in part (the selection or the
+  procedure at the cursor, plus an outline).
   See [AI code review](#ai-code-review) below for setup and where models
   are stored.
 * *Build outputs* panel: what fpm keeps in `build/`, one card per
@@ -440,7 +466,9 @@ downloaded once it works offline.
 
 You don't need to start Ollama yourself: if no server is running, the GUI
 starts `ollama serve` when you ask for a review and stops it again when you
-quit (a server you started yourself is left alone). On Apple Silicon the
+quit (a server you started yourself is left alone); *AI → Stop Ollama
+Server* stops it sooner, freeing the memory the loaded model holds (it
+starts again when the AI is next used). On Apple Silicon the
 model runs on the GPU (Metal); a review of a typical source file takes
 around 5–15 seconds.
 

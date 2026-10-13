@@ -29,8 +29,13 @@ from dataclasses import dataclass
 
 from qtpy.QtCore import QObject, QThread, Signal, Slot
 
+from .ai_edits import END_RE as EDIT_END_RE
+from .ai_edits import START_RE as EDIT_START_RE
+
 DEFAULT_MODEL = "qwen2.5-coder:7b"
-MAX_ANSWER_TOKENS = 1500  # plenty for a list of findings; stops runaway answers
+MAX_ANSWER_TOKENS = 1500  # the default answer length: plenty for a list of findings; stops runaway answers
+ANSWER_LENGTHS = (1500, 4000, 8000, 16000, 0)  # AI → Answer Length (0: no limit)
+REASONING_TOKENS = 8192  # room for a thinking model's reasoning (AI → Think Before Answering), on top
 DEFAULT_HOST = None  # the ollama library's default: $OLLAMA_HOST or localhost:11434
 CATEGORIES = ("bug", "warning", "performance", "style", "suggestion")
 
@@ -142,6 +147,11 @@ class RepeatGuard:
 
     Text is passed on a line at a time, so a repeated line can be held back:
     `feed` returns the text that's safe to show and whether to stop.
+
+    Lines in code (``` blocks) and in edits (SEARCH/REPLACE blocks) aren't
+    looked at: there, repeating is normal (an edit's new text repeats the
+    unchanged lines of the old one). A loop there still ends at the answer's
+    length limit.
     """
 
     MIN_LENGTH = 12  # short lines ("", "```", "SUMMARY:") may legitimately repeat
@@ -150,6 +160,8 @@ class RepeatGuard:
         self._partial = ""
         self._seen: set[str] = set()
         self.repeated = False
+        self._in_code = False   # in a ``` block
+        self._in_edit = False   # in a SEARCH/REPLACE block
 
     @staticmethod
     def _key(line: str) -> str:
@@ -161,7 +173,13 @@ class RepeatGuard:
         while "\n" in self._partial:
             line, self._partial = self._partial.split("\n", 1)
             key = self._key(line)
-            if len(key) >= self.MIN_LENGTH:
+            if EDIT_START_RE.match(line):
+                self._in_edit = True
+            elif EDIT_END_RE.match(line):
+                self._in_edit = False
+            elif line.lstrip().startswith("```"):
+                self._in_code = not self._in_code
+            elif len(key) >= self.MIN_LENGTH and not (self._in_code or self._in_edit):
                 if key in self._seen:
                     self.repeated = True
                     self._partial = ""
@@ -173,23 +191,32 @@ class RepeatGuard:
     def flush(self) -> str:
         """Whatever is left at the end (a last line without a newline)."""
         rest, self._partial = self._partial, ""
-        if rest and len(self._key(rest)) >= self.MIN_LENGTH and self._key(rest) in self._seen:
+        if rest and len(self._key(rest)) >= self.MIN_LENGTH and self._key(rest) in self._seen \
+                and not (self._in_code or self._in_edit):
             self.repeated = True
             return ""
         return rest
 
 
 def build_prompt(path: str, language: str, code: str, focus: str,
-                 diagnostics: list[tuple[int, str, str]]) -> str:
-    """The user message: instructions, compiler messages and numbered code."""
+                 diagnostics: list[tuple[int, str, str]], first_line: int = 1, total_lines: int = 0) -> str:
+    """The user message: instructions, compiler messages and numbered code.
+    ``code`` can be part of the file: its lines from ``first_line`` (of
+    ``total_lines``), numbered as in the file."""
     # Split only at newlines, like the editor: str.splitlines() would also
     # split at form feeds, U+2028 etc. and shift every later line number.
     lines = code.split("\n")
     if len(lines) > 1 and lines[-1] == "":
         lines.pop()  # a final newline doesn't start another line
-    width = len(str(len(lines)))
-    numbered = "\n".join(f"{i:>{width}}| {line}" for i, line in enumerate(lines, 1))
+    last_line = first_line + len(lines) - 1
+    width = len(str(last_line))
+    numbered = "\n".join(f"{i:>{width}}| {line}" for i, line in enumerate(lines, first_line))
     parts = [f"Review this {language} file: {path}", FOCUS.get(focus, FOCUS["general"])]
+    if total_lines and (first_line > 1 or last_line < total_lines):
+        parts.append(f"Only lines {first_line}–{last_line} of the file's {total_lines} are shown: review "
+                     "only these. Don't report problems that may come from code that isn't shown "
+                     "(declarations elsewhere in the file, other procedures).")
+        diagnostics = [d for d in diagnostics if first_line <= d[0] <= last_line]
     if diagnostics:
         notes = "\n".join(f"line {ln}: {sev}: {msg}" for ln, sev, msg in diagnostics[:40])
         parts.append("The compiler already reported these messages in the last build, and they "
@@ -204,7 +231,8 @@ LFortran, Intel) and linters, helping a programmer understand one message about 
 Answer in Markdown, briefly and concretely, for this code (not in general):
 1. **What it means**: the message in plain words.
 2. **Why here**: what in the marked line (and around it) causes it.
-3. **How to fix it**: the change to make, with the corrected lines in a ```fortran block.
+3. **How to fix it**: the change to make, with the corrected lines in a ```fortran block \
+(code always in fenced blocks labeled with its language, so it can be highlighted).
 If the message is harmless or a style preference, say so. Don't invent code that isn't shown."""
 
 EXPLAIN_CONTEXT_LINES = 15  # lines of code shown before and after the problem
@@ -230,7 +258,9 @@ def build_explain_prompt(path: str, code: str, line: int, kind: str, message: st
 CHAT_SYSTEM_PROMPT = """You are a helpful assistant for a programmer working on a Fortran \
 project built with fpm (the Fortran Package Manager). You are an expert in modern Fortran \
 (2008/2018), its compilers (gfortran, LFortran, Intel), fpm, and numerical methods. \
-Answer in Markdown, concisely, with code in ```fortran blocks. If you are not sure, say so.
+Answer in Markdown, concisely. Put code in fenced blocks labeled with its language \
+(```fortran, ```toml for fpm.toml, ```bash for commands), so it can be highlighted. \
+If you are not sure, say so.
 When the user's file is attached (its lines are numbered on the left) and you point out a \
 problem or a change at specific lines, also write each one on a line of its own, exactly as
   LINE <n>: <category>: <comment>
@@ -238,26 +268,49 @@ problem or a change at specific lines, also write each one on a line of its own,
 suggestion. Those lines are listed for the user and marked in the editor."""
 
 
-def build_chat_prompt(question: str, path: str = "", code: str | None = None) -> str:
-    """The user's question, with their file (numbered lines) when it's sent along."""
-    if code is None:
-        return question
-    lines = code.split("\n")
-    if len(lines) > 1 and lines[-1] == "":
-        lines.pop()
-    width = len(str(len(lines)))
-    numbered = "\n".join(f"{i:>{width}}| {line}" for i, line in enumerate(lines, 1))
-    return f"{question}\n\nMy file, {path} (line numbers on the left):\n\n{numbered}"
+EDIT_SYSTEM_PROMPT = """You change a programmer's Fortran file as they ask. Reply with:
+1. One or two sentences on what you'll change.
+2. One SEARCH/REPLACE block per change, in exactly this form:
+<<<<<<< SEARCH
+(lines copied exactly from the file)
+=======
+(the new lines)
+>>>>>>> REPLACE
+Rules: change only what was asked; keep everything else exactly as it is (names, \
+comments, formatting, free or fixed form). Copy the SEARCH lines exactly, enough of them \
+(usually 2 to 6) to be found in only one place in the file. Never write "..." or \
+"rest unchanged" inside a block. To delete lines, leave REPLACE empty. If the request is \
+unclear or unsafe, ask instead of editing. Earlier edits in the conversation are marked \
+applied, not applied yet, or rejected: answer the latest request, and don't propose a \
+rejected edit again."""
+
+EDIT_ANSWER_TOKENS = 4096  # (several blocks, each with the old and new text)
+MAX_CONTEXT = 32768  # the most asked of Ollama (memory: a 7B model at 32k already needs ~6 GB)
 
 
-def context_size(prompt: str) -> int:
-    """A context window big enough for the prompt plus the answer (Ollama's
-    default is much smaller than the files we send)."""
-    estimate = len(prompt) // 3 + len(SYSTEM_PROMPT) // 3 + 2048
+def context_for(tokens: int, cap: int = MAX_CONTEXT, answer: int = MAX_ANSWER_TOKENS) -> int:
+    """A context window for ``tokens`` of conversation plus the answer: a
+    power of two from 4096, at most ``cap``."""
     size = 4096
-    while size < estimate and size < 32768:
+    while size < tokens + answer and size < cap:
         size *= 2
-    return size
+    return min(size, cap)
+
+
+def model_context_length(model: str, host: str | None = DEFAULT_HOST) -> int | None:
+    """The longest context ``model`` was trained for, as Ollama reports it
+    (None if it can't be asked)."""
+    try:
+        info = make_client(host, timeout=5).show(model)
+        data = getattr(info, "modelinfo", None)
+        if data is None and isinstance(info, dict):
+            data = info.get("model_info") or info.get("modelinfo")
+        for key, value in dict(data or {}).items():
+            if str(key).endswith(".context_length"):
+                return int(value)
+    except Exception:  # noqa: BLE001 - not known, then
+        return None
+    return None
 
 
 def ollama_available() -> bool:
@@ -304,22 +357,37 @@ class ReviewWorker(QObject):
     """Runs a review (or a model download) on a background thread."""
 
     chunk = Signal(str)                 # streamed text of the answer
+    reasoning = Signal(str)             # streamed reasoning of a thinking model
     progress = Signal(str, float)       # download status, fraction (-1 = unknown)
     finished = Signal(str, dict)        # full answer, stats
     failed = Signal(str)
 
     def __init__(self, host: str | None, model: str, prompt: str = "", pull_only: bool = False,
-                 system: str = SYSTEM_PROMPT, history: list[dict] | None = None):
+                 system: str = SYSTEM_PROMPT, history: list[dict] | None = None,
+                 num_ctx: int | None = None, temperature: float = 0.2,
+                 num_predict: int = MAX_ANSWER_TOKENS, think: bool = False):
         """``system``: the model's instructions (a review's, by default;
         EXPLAIN_SYSTEM_PROMPT to explain one problem, CHAT_SYSTEM_PROMPT to
-        chat); ``history``: the conversation so far, as chat messages
-        (``{"role": "user" | "assistant", "content": ...}``)."""
+        chat, EDIT_SYSTEM_PROMPT for edits); ``history``: the conversation so
+        far, as chat messages (``{"role": "user" | "assistant", "content":
+        ...}``); ``num_ctx``: the context window (by default, from the
+        prompt's and answer's lengths); ``num_predict``: the answer's length
+        (0: no limit); ``think``: let a thinking model reason first (it gets
+        REASONING_TOKENS more room for that)."""
         super().__init__()
         self.host, self.model, self.prompt, self.pull_only = host, model, prompt, pull_only
         self.system = system
         self.history = list(history or [])
+        self.num_ctx, self.temperature, self.num_predict, self.think = num_ctx, temperature, num_predict, think
         self._cancel = threading.Event()
         self._client = None
+
+    @property
+    def limit(self) -> int:
+        """The tokens the model may write (reasoning included); 0: no limit."""
+        if self.num_predict <= 0:
+            return 0
+        return self.num_predict + (REASONING_TOKENS if self.think else 0)
 
     def cancel(self):
         """Stop (from the GUI thread). Closing the connection also stops a
@@ -362,31 +430,49 @@ class ReviewWorker(QObject):
         self.finished.emit("", {})
 
     def _review(self, client):
+        asked = self.prompt + self.system + "".join(m["content"] for m in self.history)
         options = {
-            "num_ctx": context_size(self.prompt + "".join(m["content"] for m in self.history)),
-            "temperature": 0.2,
+            "num_ctx": self.num_ctx or context_for(len(asked) // 3, answer=self.limit or REASONING_TOKENS),
+            "temperature": self.temperature,
             # Discourage the repetition loops small models fall into, and
             # cap the answer so a runaway one always ends.
             "repeat_penalty": 1.1,
             "repeat_last_n": 512,
-            "num_predict": MAX_ANSWER_TOKENS,
+            "num_predict": self.limit or -1,  # (-1: no limit)
         }
         started = time.monotonic()
-        stream = client.chat(model=self.model, stream=True, options=options, messages=[
-            {"role": "system", "content": self.system},
-            *self.history,
-            {"role": "user", "content": self.prompt},
-        ])
+        messages = [{"role": "system", "content": self.system}, *self.history,
+                    {"role": "user", "content": self.prompt}]
+        # Thinking models (qwen3, deepseek-r1…) reason at length before they
+        # answer, and that counts against num_predict: unless it's asked for
+        # (with room of its own, see limit), thinking is turned off, which is
+        # also much faster. A model that can't think, or can't stop, says so:
+        # it's asked again as it is.
+        stream = client.chat(model=self.model, stream=True, options=options, messages=messages, think=self.think)
+        parts_iter = iter(stream)
+        try:
+            first = next(parts_iter, None)
+        except Exception as exc:
+            if "think" not in str(exc).lower():
+                raise
+            stream = client.chat(model=self.model, stream=True, options=options, messages=messages)
+            parts_iter = iter(stream)
+            first = next(parts_iter, None)
         guard = RepeatGuard()
         parts: list[str] = []
         stats: dict = {}
+        thought = 0  # characters of reasoning (a model that thinks anyway)
         try:
-            for part in stream:
+            for part in _chain(first, parts_iter):
                 if self._cancel.is_set():
                     self.failed.emit(self._stopped_message())
                     return
                 message = getattr(part, "message", None)
                 text = getattr(message, "content", "") if message is not None else ""
+                thinking = (getattr(message, "thinking", "") or "") if message is not None else ""
+                if thinking:
+                    thought += len(thinking)
+                    self.reasoning.emit(thinking)
                 if text:
                     shown, stop = guard.feed(text)
                     if shown:
@@ -396,9 +482,12 @@ class ReviewWorker(QObject):
                         break  # closing the stream makes Ollama stop generating
                 if getattr(part, "done", False):
                     stats = {"tokens": getattr(part, "eval_count", 0) or 0,
+                             "prompt_tokens": getattr(part, "prompt_eval_count", 0) or 0,
                              "seconds": (getattr(part, "total_duration", 0) or 0) / 1e9}
-                    if (stats["tokens"] or 0) >= MAX_ANSWER_TOKENS:
+                    if self.limit and (stats["tokens"] or 0) >= self.limit:
                         stats["truncated"] = True
+                        if thought and thought > 3 * sum(map(len, parts)):
+                            stats["thinking"] = True  # (the limit went on reasoning, not the answer)
         finally:
             close = getattr(stream, "close", None)
             if close is not None:
@@ -412,6 +501,13 @@ class ReviewWorker(QObject):
             stats = {"seconds": time.monotonic() - started, "repeated": True}
             self.chunk.emit("\n[The model started repeating itself, so the review was stopped here.]\n")
         self.finished.emit("".join(parts), stats)
+
+
+def _chain(first, rest):
+    """``first`` (if any), then the rest of an iterator."""
+    if first is not None:
+        yield first
+    yield from rest
 
 
 def start_worker(worker: ReviewWorker, parent: QObject) -> QThread:

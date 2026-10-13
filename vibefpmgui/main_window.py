@@ -78,6 +78,8 @@ from qtpy.QtWidgets import (
 )
 
 from . import __version__, ansi, dep_updates, formatter, lint, lsp, spelling, themes
+from . import ai_context as ctx
+from . import ai_edits as ed
 from . import ai_review as ai
 from . import build_outputs as bo
 from . import editor as editor_mod
@@ -95,6 +97,7 @@ from .compat import (
     set_windows_app_id,
     split_args,
 )
+from .edit_cards import diff_rows
 from .editor import EditorTab, monospace_font
 from .graph_view import (
     EDGE_STYLES,
@@ -110,8 +113,8 @@ from .project_search import SearchPanel, search_roots
 from .project_tree import ProjectTree, reveal_in_file_manager
 from .references_panel import ReferencesPanel
 from .rename_dialog import RenamePreviewDialog
-from .result_tree import file_labels, root_for
-from .review_monitor import ReviewMonitor
+from .result_tree import Problem, file_labels, root_for
+from .review_monitor import Entry, ReviewMonitor
 from .run_monitor import RunMonitor
 from .symbol_search import SymbolSearchDialog
 from .terminal import TerminalPanel
@@ -692,20 +695,34 @@ class MainWindow(QMainWindow):
             lambda name: self._show_marked_output(self.run_monitor, name))
         self.run_monitor.build_percent = lambda: self.build_monitor._percent
         self.review_monitor = ReviewMonitor()
-        self.review_monitor.finding_selected.connect(self._go_to_finding)
-        self.review_monitor.stop_requested.connect(self.stop_review)
-        self.review_monitor.chat_requested.connect(self.send_chat)
-        self.review_monitor.new_chat_requested.connect(self.new_chat)
+        monitor = self.review_monitor
+        monitor.stop_requested.connect(self.stop_review)
+        monitor.chat_requested.connect(self.send_chat)
+        monitor.new_chat_requested.connect(self.new_chat)
+        monitor.clear_requested.connect(self.clear_ai_history)
+        monitor.selection_cleared.connect(lambda: setattr(self, "_edit_selection", None))
+        monitor.finding_selected.connect(self.go_to_finding)
+        monitor.fix_requested.connect(self.fix_finding)
+        monitor.show_in_editor_requested.connect(self.show_findings_in_editor)
+        monitor.accept_requested.connect(self.accept_edit)
+        monitor.reject_requested.connect(self.reject_edit)
+        monitor.accept_all_requested.connect(self.accept_all_edits)
+        monitor.reject_all_requested.connect(self.reject_all_edits)
+        monitor.edit_clicked.connect(self.show_edit)
         self.references_panel = ReferencesPanel()
-        self.references_panel.open_requested.connect(self._open_search_match)
+        # (A result clicked: its file in the preview tab, unless it's open; double-clicked: kept open.)
+        self.references_panel.open_requested.connect(lambda *match: self._open_search_match(*match, preview=True))
+        self.references_panel.keep_requested.connect(self._keep_open)
         self.search_panel = SearchPanel(self.settings)
         self.search_panel.provider = self._search_sources
-        self.search_panel.open_requested.connect(self._open_search_match)
+        self.search_panel.open_requested.connect(lambda *match: self._open_search_match(*match, preview=True))
+        self.search_panel.keep_requested.connect(self._keep_open)
         self.search_panel.replace_requested.connect(self._replace_in_files)
         self.problems_panel = ProblemsPanel(self.settings)
         self.problems_panel.open_requested.connect(self._open_search_match)
         self.problems_panel.explain_requested.connect(
             lambda problem: self._with_editor(lambda e: self.explain_problem(e, problem)))
+        self.problems_panel.fix_requested.connect(self.fix_with_ai)
         # (A burst of changes, e.g. spelling and fortitude answering together: one update.)
         self._problems_timer = QTimer(self)
         self._problems_timer.setSingleShot(True)
@@ -931,6 +948,7 @@ class MainWindow(QMainWindow):
         self._apply_highlight_style()
         for editor in self.editors():
             editor.refresh_style()
+        self.review_monitor.refresh_palette()  # (code in the AI's answers: the same colors)
 
     def changeEvent(self, event):
         if event.type() == QEvent.PaletteChange and hasattr(self, "terminal_panel"):  # (the window is built)
@@ -1670,6 +1688,7 @@ class MainWindow(QMainWindow):
         self.run_monitor.reset()
         self.stop_review()
         self._ai_editor = None
+        self._forget()
         self.review_monitor.reset()
         self.show_panel(self.build_monitor)
 
@@ -2092,9 +2111,11 @@ class MainWindow(QMainWindow):
         folder, package = file_labels(editor.path, root_for(editor.path, roots), project_dir)
         self.problems_panel.show_problems(editor.path, editor.problems(), folder, package)
 
-    def _open_search_match(self, path: str, line: int, column: int, end_line: int, end_column: int):
-        """Open a search result with the match selected."""
-        self.navigate_to(path, line, column)
+    def _open_search_match(self, path: str, line: int, column: int, end_line: int, end_column: int,
+                           preview: bool = False):
+        """Open a search result with the match selected (``preview``: in the
+        preview tab, if the file isn't open already)."""
+        self.navigate_to(path, line, column, preview=preview)
         editor = self.current_editor()
         if editor is None or editor.path != Path(path).resolve():
             return
@@ -2162,15 +2183,16 @@ class MainWindow(QMainWindow):
         cursor = editor.editor.textCursor()
         return str(editor.path), cursor.blockNumber() + 1, cursor.positionInBlock()
 
-    def navigate_to(self, path: str, line: int, column: int, record: bool = True):
+    def navigate_to(self, path: str, line: int, column: int, record: bool = True, preview: bool = False):
         """Open a file at a line and column (Go to Definition / Symbol);
-        Go Back returns to where this was called from."""
+        Go Back returns to where this was called from. ``preview``: in the
+        preview tab, if it isn't open already (see preview_file)."""
         here = self._location()
         if record and here is not None and here != (path, line, column):
             self._back.append(here)
             del self._back[:-100]
             self._forward.clear()
-        self.open_file(path, force_editor=True)
+        self.open_file(path, force_editor=True, preview=preview)
         editor = self.current_editor()
         if editor is not None and editor.path == Path(path).resolve():
             editor.editor.go_to_position(line, column)
@@ -2287,6 +2309,12 @@ class MainWindow(QMainWindow):
     def _preview_editor(self) -> EditorTab | None:
         return self._preview if self._preview in self.editors() else None
 
+    def _keep_open(self, path: str):
+        """A file opened as a preview, kept open (a result double-clicked)."""
+        editor = next((e for e in self.editors() if e.path == Path(path).resolve()), None)
+        if editor is not None:
+            self._make_permanent(editor)
+
     def _make_permanent(self, editor):
         """A preview tab stays open from now on (its name no longer in italics)."""
         if editor is not None and editor is self._preview:
@@ -2326,6 +2354,7 @@ class MainWindow(QMainWindow):
             editor.rename_ready.connect(self._preview_rename)
             editor.editor.word_added.connect(self.add_spelling_word)
             editor.explain_requested.connect(lambda problem, e=editor: self.explain_problem(e, problem))
+            editor.editor.edit_selection_requested.connect(lambda e=editor: self.edit_with_ai(e))
             editor.problems_changed.connect(lambda e=editor: self._problems_timer.start() if e is self.current_editor()
                                             else None)
             editor.editor.textChanged.connect(lambda e=editor: self.search_panel.file_changed(e.path))
@@ -2671,8 +2700,9 @@ class MainWindow(QMainWindow):
     def _update_review_actions(self):
         """AI review needs an editor tab in front (and no review running)."""
         has_editor = self.current_editor() is not None
-        self.review_action.setEnabled(has_editor and self._ai_thread is None
-                                      and not getattr(self, "_ai_starting", False))
+        busy = self._ai_thread is not None or getattr(self, "_ai_starting", False)
+        self.review_action.setEnabled(has_editor and not busy)
+        self.review_monitor.set_sending(not busy)  # (a question while it's answering: wait for it)
         self.clear_review_action.setEnabled(has_editor)
 
     def _build_edit_menu(self):
@@ -3463,7 +3493,16 @@ class MainWindow(QMainWindow):
         self._ai_starting = False  # a review is getting ready (server, model): AI Review waits
         self._known_models: list[str] | None = None  # installed models, as last heard (None: not yet)
         self._after_model = lambda: None  # what runs once the model is there: a review, an explanation, a chat
-        self._chat_history: list[dict] = []  # the chat so far, as the model's messages
+        self._turns: list[ctx.Turn] = []  # what the model remembers: every entry since New Chat (see ai_context)
+        self._token_ratio = 1.0  # measured tokens over estimated ones (see _chat_finished)
+        self._model_contexts: dict[str, int | None] = {}  # each model's longest context, as Ollama says
+        self._ai_entry: Entry | None = None  # the Review panel's entry for what's running (or last ran)
+        # What the model remembers starts over with New Chat, Clear or another
+        # project: a request started before (stopped, but still ending) mustn't
+        # add to it.
+        self._memory_generation = 0
+        self._request_generation = 0
+        self._edit_selection: tuple[EditorTab, int, int] | None = None  # Edit Selection with AI: the lines
         self._asking_models = False
 
         menu = self.menuBar().addMenu("&AI")
@@ -3487,12 +3526,43 @@ class MainWindow(QMainWindow):
         self.stop_review_action = menu.addAction("Stop")
         self.stop_review_action.setEnabled(False)
         self.stop_review_action.triggered.connect(self.stop_review)
+        self.edit_with_ai_action = menu.addAction("Edit with AI…")
+        self.edit_with_ai_action.setShortcut(QKeySequence("Ctrl+Alt+E"))
+        self.edit_with_ai_action.setStatusTip("Ask the AI to change the file in the editor (the selection, if "
+                                              "there is one); you accept or reject each edit")
+        self.edit_with_ai_action.triggered.connect(self.edit_with_ai)
+        self.stop_ollama_action = menu.addAction("Stop Ollama Server")
+        self.stop_ollama_action.setStatusTip("Stop the Ollama server the app started (and the model it has "
+                                             "loaded, freeing its memory); it starts again when the AI is next used")
+        self.stop_ollama_action.triggered.connect(self.stop_ollama)
+        menu.aboutToShow.connect(self._update_ollama_action)
+        self._update_ollama_action()
         self.clear_review_action = menu.addAction("Clear Review Markers")
         self.clear_review_action.triggered.connect(
             lambda: self._with_editor(lambda e: e.clear_review()))
         menu.addSeparator()
         self.model_menu = menu.addMenu("Model")
         self.model_menu.aboutToShow.connect(self._fill_model_menu)
+        self.ai_think = self.settings.value("ai_think", False, type=bool)
+        self.ai_answer_tokens = self.settings.value("ai_answer_tokens", ai.MAX_ANSWER_TOKENS, type=int)
+        self.think_action = menu.addAction("Think Before Answering")
+        self.think_action.setCheckable(True)
+        self.think_action.setChecked(self.ai_think)
+        self.think_action.setStatusTip(
+            "Let a thinking model (qwen3, deepseek-r1…) reason before it answers: slower, sometimes better. "
+            f"The reasoning gets {ai.REASONING_TOKENS:,} tokens of its own, on top of the answer's length")
+        self.think_action.toggled.connect(self._set_ai_think)
+        length_menu = self.answer_length_menu = menu.addMenu("Answer Length")
+        lengths = QActionGroup(self)
+        for tokens in ai.ANSWER_LENGTHS:
+            action = length_menu.addAction(f"{tokens:,} tokens" + (" (default)" if tokens == ai.MAX_ANSWER_TOKENS
+                                                                     else "") if tokens else "No limit")
+            action.setCheckable(True)
+            action.setChecked(tokens == self.ai_answer_tokens)
+            action.setStatusTip("How much the model may write in an answer (edits get at least "
+                                f"{ai.EDIT_ANSWER_TOKENS:,}); a longer answer needs more of its context")
+            action.triggered.connect(lambda _=False, t=tokens: self._set_ai_answer_tokens(t))
+            lengths.addAction(action)
         focus_menu = menu.addMenu("Focus")
         group = QActionGroup(self)
         for key, label in ai.FOCUS_LABELS.items():
@@ -3502,6 +3572,29 @@ class MainWindow(QMainWindow):
             action.setStatusTip(ai.FOCUS[key])
             action.triggered.connect(lambda _=False, k=key: self._set_ai_focus(k))
             group.addAction(action)
+
+    def _set_ai_think(self, on: bool):
+        self.ai_think = on
+        self.settings.setValue("ai_think", on)
+
+    def _set_ai_answer_tokens(self, tokens: int):
+        self.ai_answer_tokens = tokens
+        self.settings.setValue("ai_answer_tokens", tokens)
+
+    def _answer_options(self, edit: bool = False) -> dict:
+        """The worker's settings from AI → Think Before Answering and Answer
+        Length (an edit's answer, with its old and new text: at least
+        EDIT_ANSWER_TOKENS)."""
+        tokens = self.ai_answer_tokens
+        if edit and tokens:
+            tokens = max(tokens, ai.EDIT_ANSWER_TOKENS)
+        return {"num_predict": tokens, "think": self.ai_think}
+
+    def _start_answer(self, worker) -> None:
+        """Start a worker whose reasoning (if the model thinks) goes to the
+        running entry."""
+        worker.reasoning.connect(self.review_monitor.add_reasoning)
+        self._start_ai_worker(worker)
 
     def _set_ai_focus(self, key: str):
         self.ai_focus = key
@@ -3562,15 +3655,42 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "AI review", "Open a file in the editor first "
                                     "(double-click a file, or File → Open File in Editor).")
             return
-        if self._ai_thread is not None or self._ai_starting:
-            return
-        if not ai.ollama_available():
-            QMessageBox.warning(self, "AI review", "The 'ollama' Python package isn't installed.\n"
-                                "Run 'pixi install' (or 'pip install ollama').")
+        if not self._can_ask("AI review"):
             return
         self._ai_editor = editor
         self._after_model = self._run_review
+        focus = ai.FOCUS_LABELS.get(self.ai_focus, self.ai_focus)
+        self._add_entry(Entry("review", focus, editor.path, editor.path.name, self.ai_model))
         self._ensure_ollama(self._check_model)
+
+    def _can_ask(self, title: str) -> bool:
+        """The AI is free, and Ollama's Python package is there (if not: why)."""
+        if self._ai_thread is not None or self._ai_starting:
+            self.statusBar().showMessage("The AI is busy: try again when it's done", 5000)
+            return False
+        if not ai.ollama_available():
+            QMessageBox.warning(self, title, "The 'ollama' Python package isn't installed.\n"
+                                "Run 'pixi install' (or 'pip install ollama').")
+            return False
+        return True
+
+    def _add_entry(self, entry: Entry) -> Entry:
+        """A new entry in the Review panel's timeline, for what's starting."""
+        self._ai_entry = entry
+        self._request_generation = self._memory_generation
+        self.show_panel(self.review_monitor)
+        if entry.kind not in ("ask", "edit"):
+            self.review_monitor.context_note = ""
+        return self.review_monitor.add_entry(entry)
+
+    def _remember(self, entry: Entry, turn: ctx.Turn):
+        """What the model was asked and answered: it's part of what later
+        questions send (see ai_context)."""
+        if self._request_generation != self._memory_generation:
+            return  # (asked before New Chat, Clear or another project: forgotten)
+        turn.answer, turn.edits = entry.answer, entry.edits
+        entry.turn = turn
+        self._turns.append(turn)
 
     def _set_ai_starting(self, on: bool):
         """A review is getting ready (asking Ollama, starting it): AI Review
@@ -3624,6 +3744,10 @@ class MainWindow(QMainWindow):
         self._set_ai_starting(False)  # (from here a worker thread, or nothing, follows)
         model = self.ai_model if ":" in self.ai_model else self.ai_model + ":latest"
         if model in installed or self.ai_model in installed:
+            if self.ai_model not in self._model_contexts:  # (for the next chat question: asked once)
+                self._model_contexts[self.ai_model] = None
+                call_in_background(lambda m=self.ai_model: ai.model_context_length(m),
+                                   lambda n, m=self.ai_model: self._model_contexts.__setitem__(m, n), self)
             self._after_model()
             return
         answer = QMessageBox.question(
@@ -3643,21 +3767,14 @@ class MainWindow(QMainWindow):
         self._start_ai_worker(worker)
 
     def _ai_status(self, description: str, status: str):
-        """Getting ready (starting Ollama, downloading the model), in the
-        Review panel: a new entry for a review, the status of an explanation
-        or a chat question (which is already there)."""
+        """Getting ready (starting Ollama, downloading the model): the status
+        of the entry that's waiting for it."""
         self.show_panel(self.review_monitor)
-        if self._asking():
+        if self.review_monitor.running:
             self.review_monitor.set_status(status)
-        else:
-            self.review_monitor.begin(description, status)
-
-    def _asking(self) -> bool:
-        """An explanation or a chat question is getting ready in the Review panel."""
-        return self.review_monitor.running and self.review_monitor.mode in ("explain", "chat")
 
     def _end_explain_setup(self, why: str):
-        if self._asking():
+        if self.review_monitor.running:
             self.review_monitor.finish(False, why)
 
     def _pull_finished(self, *_):
@@ -3672,43 +3789,64 @@ class MainWindow(QMainWindow):
     def _run_review(self):
         editor = self._ai_editor
         if editor is None or editor not in self.editors():
+            self.review_monitor.finish(False, "The file was closed")
             return
         code = editor.editor.toPlainText()
         diagnostics = [(line, sev, msg) for line, notes in sorted(editor._compiler_markers.items())
                        for sev, msg in notes]
-        prompt = ai.build_prompt(editor.path.name, editor.highlighter.lexer.name, code,
-                                 self.ai_focus, diagnostics)
-        focus = ai.FOCUS_LABELS.get(self.ai_focus, self.ai_focus)
-        self.show_panel(self.review_monitor)
-        self.review_monitor.begin(f"{editor.path.name} · {self.ai_model} · {focus.lower()}", "Thinking")
+        lines = ctx.file_lines(code)
+        options = self._answer_options()
+        cap = self._chat_context()
+        room = options["num_predict"] + (ai.REASONING_TOKENS if options["think"] else 0) \
+            if options["num_predict"] else ai.REASONING_TOKENS
+
+        def prompt_for(first: int, last: int) -> str:
+            return ai.build_prompt(editor.path.name, editor.highlighter.lexer.name, "\n".join(lines[first - 1:last]),
+                                   self.ai_focus, diagnostics, first, len(lines))
+
+        # The selection (two lines or more), or the whole file if it fits the
+        # model's context with room for the answer; else the procedure at the
+        # cursor. (Sent anyway, a file too long loses its start, instructions
+        # included: Ollama doesn't refuse, it drops what doesn't fit.)
+        first, last, why = 1, len(lines), ""
+        selection = editor.editor.selected_lines()
+        if selection is not None and selection[1] > selection[0]:
+            (first, last), why = selection, "the selection"
+        elif ctx.estimate_tokens(prompt_for(1, len(lines)) + ai.SYSTEM_PROMPT, self._token_ratio) + room \
+                > cap * 0.9:
+            first, last = ctx.window(lines, None, editor.editor.textCursor().blockNumber() + 1)
+            why = "the procedure at the cursor: the file is too long to review at once"
+        prompt = prompt_for(first, last)
+        entry = self._ai_entry
+        if why:
+            entry.where = f"{editor.path.name}:{first}–{last}"
+            entry.question = f"{entry.question} · {why}"
+            self.review_monitor.refresh(entry)
+        num_ctx = ai.context_for(ctx.estimate_tokens(prompt + ai.SYSTEM_PROMPT, self._token_ratio), cap, room)
+        self.review_monitor.set_status("Thinking")
         self._show_single_output(f"AI review of {editor.path.name} ({self.ai_model})", "")
         self._review_text = ""
         self._review_keys = []
+        self._review_code = code
         editor.clear_review()  # markers from an earlier review would be misleading
-        worker = ai.ReviewWorker(ai.DEFAULT_HOST, self.ai_model, prompt)
+        worker = ai.ReviewWorker(ai.DEFAULT_HOST, self.ai_model, prompt, num_ctx=num_ctx, **options)
         worker.chunk.connect(self._review_chunk)
         worker.finished.connect(self._review_finished)
         worker.failed.connect(self._review_failed)
-        self._start_ai_worker(worker)
+        self._start_answer(worker)
 
     # ------------------------------------------------- explain with AI
     EXPLAINABLE = ("build", "fortitude", "fortls")  # (Problems' sources: compiler, linter, language server)
 
     def explain_problem(self, editor: EditorTab, problem):
         """Explain with AI: ask the model what a problem means and how to fix
-        it; the answer appears in a window as it's written."""
-        if self._ai_thread is not None or self._ai_starting:
-            self.statusBar().showMessage("The AI is busy (a review or an explanation): try again when it's done",
-                                         5000)
-            return
-        if not ai.ollama_available():
-            QMessageBox.warning(self, "Explain with AI", "The 'ollama' Python package isn't installed.\n"
-                                "Run 'pixi install' (or 'pip install ollama').")
+        it; the answer appears in the Review panel as it's written."""
+        if not self._can_ask("Explain with AI"):
             return
         self._explaining = (editor, problem)
         self._after_model = self._run_explain
-        self.show_panel(self.review_monitor)
-        self.review_monitor.begin_explain(f"{editor.path.name}:{problem.line} · {self.ai_model}", problem.message)
+        self._add_entry(Entry("explain", problem.message, editor.path, f"{editor.path.name}:{problem.line}",
+                              self.ai_model))
         self._ensure_ollama(self._check_model)
 
     def _run_explain(self):
@@ -3718,15 +3856,19 @@ class MainWindow(QMainWindow):
             return
         prompt = ai.build_explain_prompt(editor.path.name, editor.editor.toPlainText(), problem.line, problem.source,
                                          problem.message, problem.badge, self.effective_compiler()[0])
+        self._explain_prompt = prompt
         self.review_monitor.set_status("Thinking")
-        worker = ai.ReviewWorker(ai.DEFAULT_HOST, self.ai_model, prompt, system=ai.EXPLAIN_SYSTEM_PROMPT)
+        worker = ai.ReviewWorker(ai.DEFAULT_HOST, self.ai_model, prompt, system=ai.EXPLAIN_SYSTEM_PROMPT,
+                                 **self._answer_options())
         # (Methods, not lambdas: a lambda would run in the worker's thread.)
-        worker.chunk.connect(self.review_monitor.add_explanation)
+        worker.chunk.connect(self.review_monitor.add_answer)
         worker.finished.connect(self._explain_finished)
         worker.failed.connect(self._explain_failed)
-        self._start_ai_worker(worker)
+        self._start_answer(worker)
 
     def _explain_finished(self, _text: str, stats: dict):
+        entry = self._ai_entry
+        self._remember(entry, ctx.Turn(entry.question, self._explain_prompt))
         detail = f"{stats.get('seconds', 0):.1f} s · {self.ai_model}" if stats.get("seconds") else self.ai_model
         self.review_monitor.finish(True, detail)
 
@@ -3735,84 +3877,316 @@ class MainWindow(QMainWindow):
         self.review_monitor.finish(False, message + hint)
 
     # ------------------------------------------------------------ chat
-    def send_chat(self, question: str, with_file: bool):
-        """A question from the Review panel's chat box (the next turn of the
-        conversation there); with ``with_file``, the open file goes along."""
-        if self._ai_thread is not None or self._ai_starting:
-            self.statusBar().showMessage("The AI is busy: try again when it's done", 5000)
+    def send_chat(self, question: str, with_file: bool, kind: str = "ask"):
+        """A question from the Review panel's box: "ask" (with ``with_file``,
+        the open file goes along), or "edit" (a change to the open file: its
+        edits are shown as cards to accept or reject). The model sees
+        everything in the timeline since New Chat (see ai_context)."""
+        editing = kind == "edit"
+        editor = self.current_editor() if with_file or editing else None
+        if editing and editor is None:
+            self.statusBar().showMessage("Open the file to change in the editor first", 5000)
             return
-        if not ai.ollama_available():
-            QMessageBox.warning(self, "AI chat", "The 'ollama' Python package isn't installed.\n"
-                                "Run 'pixi install' (or 'pip install ollama').")
+        if not self._can_ask("AI chat"):
             return
-        if self.review_monitor.mode != "chat":
-            self._chat_history = []  # (the panel shows a new conversation)
-        editor = self.current_editor() if with_file else None
+        request, attachment = question, None
         if editor is not None:
             self._ai_editor = editor  # (the findings' lines are this file's)
-            prompt = ai.build_chat_prompt(question, editor.path.name, editor.editor.toPlainText())
-        else:
-            prompt = ai.build_chat_prompt(question)
-        self._chat_question = (prompt, editor)
+            text = editor.editor.toPlainText()
+            selection = None
+            if editing and self._edit_selection is not None and self._edit_selection[0] is editor:
+                selection = self._edit_selection[1:]
+                first, last = selection
+                part = "\n".join(ctx.file_lines(text)[first - 1:last])
+                request += (f"\n\nChange only these lines (lines {first}–{last} of the file), unless the "
+                            f"change needs more:\n```fortran\n{part}\n```")
+            attachment = ctx.file_attachment(
+                editor.path.name, text, numbers=not editing, context=self._chat_context(),
+                ratio=self._token_ratio, selection=selection,
+                cursor_line=editor.editor.textCursor().blockNumber() + 1)
+        self._chat_turn = ctx.Turn(question, request, attachment)
+        self._chat_kind, self._chat_editor = kind, editor
+        self._edit_selection = None
+        monitor = self.review_monitor
+        monitor.set_selection_note("")
+        monitor.chat_edit.clear()
         self._after_model = self._run_chat
-        self.show_panel(self.review_monitor)
-        about = f" · {editor.path.name}" if editor is not None else ""
-        self.review_monitor.begin_chat(f"{self.ai_model}{about}", question)
+        self._add_entry(Entry(kind, question, editor.path if editor is not None else None,
+                              editor.path.name if editor is not None else "", self.ai_model))
         self._ensure_ollama(self._check_model)
 
+    def edit_with_ai(self, editor: EditorTab | None = None):
+        """AI → Edit with AI… (or the editor's Edit Selection with AI…): the
+        box, in Edit mode, for the selection if there is one."""
+        editor = editor or self.current_editor()
+        if editor is None:
+            self.statusBar().showMessage("Open the file to change in the editor first", 5000)
+            return
+        lines = editor.editor.selected_lines()
+        self._edit_selection = (editor, *lines) if lines else None
+        monitor = self.review_monitor
+        self.show_panel(monitor)
+        monitor.set_chat_kind("edit")
+        if lines:
+            monitor.set_selection_note(f"line {lines[0]}" if lines[0] == lines[1] else f"lines {lines[0]}–{lines[1]}")
+        else:
+            monitor.set_selection_note("")
+        monitor.chat_edit.setFocus()
+
+    def fix_with_ai(self, path, problem):
+        """Fix with AI… (a problem, or a finding in the timeline): a request
+        to address it, sent in Edit mode for its lines (shown in the box's
+        history, as if typed)."""
+        self.open_file(str(path), force_editor=True)
+        editor = next((e for e in self.editors() if e.path == Path(path).resolve()), None)
+        if editor is None:
+            return
+        first, last = problem.line, max(problem.line, problem.end_line)
+        self._edit_selection = (editor, first, last)
+        message = problem.message
+        what = {"build": "compiler message", "fortitude": f"fortitude issue {problem.badge}",
+                "fortls": "fortls message"}.get(problem.source, problem.source)
+        if problem.source == "review":  # ("AI (bug): …")
+            found = re.match(r"AI \((\w+)\):\s*(.*)", message, re.DOTALL)
+            what = f"AI review finding ({found.group(1)})" if found else "AI review finding"
+            message = found.group(2) if found else message
+        lines = f"line {first}" if first == last else f"lines {first}–{last}"
+        monitor = self.review_monitor
+        self.show_panel(monitor)
+        monitor.set_chat_kind("edit")
+        monitor.set_selection_note(lines)
+        monitor.chat_edit.setText(f"Address this {what} at {lines}: {message} "
+                                  "Change only what's needed for it.")
+        monitor.chat_edit.setFocus()
+        monitor.send_button.click()  # (if the AI is busy, the request stays in the box)
+
     def new_chat(self):
+        """The model forgets everything so far (it stays in the timeline)."""
         self.stop_review()
-        self._chat_history = []
-        self.review_monitor.clear_chat()
+        self._forget()
+        self.review_monitor.add_divider()
+        self.review_monitor.chat_edit.setFocus()
+
+    def clear_ai_history(self):
+        """Empty the timeline; the model forgets it too."""
+        self.stop_review()
+        self._forget()
+        self.review_monitor.clear()
+
+    def _forget(self):
+        """The model forgets everything so far (what's still running too)."""
+        self._turns = []
+        self._memory_generation += 1
+
+    def _chat_context(self) -> int:
+        """The most context a chat asks for: the model's own limit, at most
+        ai.MAX_CONTEXT."""
+        return min(self._model_contexts.get(self.ai_model) or ai.MAX_CONTEXT, ai.MAX_CONTEXT)
 
     def _run_chat(self):
-        prompt, _editor = self._chat_question
-        self.review_monitor.set_status("Thinking")
+        editing = self._chat_kind == "edit"
+        system = ai.EDIT_SYSTEM_PROMPT if editing else ai.CHAT_SYSTEM_PROMPT
+        cap = self._chat_context()
+        messages, tokens, dropped = ctx.compose(self._turns, self._chat_turn, system, cap, self._token_ratio)
+        options = self._answer_options(edit=editing)
+        room = options["num_predict"] + (ai.REASONING_TOKENS if options["think"] else 0) \
+            if options["num_predict"] else ai.REASONING_TOKENS
+        num_ctx = ai.context_for(tokens, cap, room)
+        self._chat_estimate = (tokens, len(self._turns) - dropped)
+        monitor = self.review_monitor
+        monitor.context_note = (f"context ~{tokens / 1000:.1f}k of {num_ctx // 1024}k"
+                                + (f" ({dropped} earliest left out)" if dropped else ""))
+        if tokens > cap * ctx.BUDGET * 0.9:
+            monitor.context_note += " · nearly full: New Chat starts over"
+        monitor.set_status("Thinking")
         self._chat_keys: list = []
-        worker = ai.ReviewWorker(ai.DEFAULT_HOST, self.ai_model, prompt, system=ai.CHAT_SYSTEM_PROMPT,
-                                 history=self._chat_history)
+        worker = ai.ReviewWorker(ai.DEFAULT_HOST, self.ai_model, messages[-1]["content"], system=system,
+                                 history=messages[1:-1], num_ctx=num_ctx,
+                                 temperature=0.1 if editing else 0.2, **options)
         # (Methods, not lambdas: a lambda would run in the worker's thread.)
         worker.chunk.connect(self._chat_chunk)
         worker.finished.connect(self._chat_finished)
         worker.failed.connect(self._chat_failed)
-        self._start_ai_worker(worker)
+        self._start_answer(worker)
 
-    def _chat_findings(self, final: bool):
-        """Lines of the sent file the answer points to: in the list, and
-        marked in the editor (as a review's)."""
-        _prompt, editor = self._chat_question
-        if editor is None or editor not in self.editors():
+    def _chat_findings(self):
+        """Lines of the sent file the answer points to: listed in its entry,
+        and marked in the editor (as a review's)."""
+        entry, editor = self._ai_entry, self._chat_editor
+        if editor is None or editor not in self.editors() or self._chat_kind == "edit":
             return
-        findings, _summary = ai.parse_findings(self.review_monitor.answer, editor.editor.blockCount())
+        findings, _summary = ai.parse_findings(entry.answer, editor.editor.blockCount())
         keys = [(f.line, f.end_line, f.category, f.comment) for f in findings]
-        if findings and keys != self._chat_keys:  # (an answer without any: the earlier ones stay)
+        if findings and keys != self._chat_keys:
             self._chat_keys = keys
-            self.review_monitor.set_findings(findings, final=final)
+            entry.findings = findings
+            self.review_monitor.refresh(entry)
             editor.show_review(findings)
 
-    def _chat_chunk(self, text: str):
-        self.review_monitor.add_chat(text)
-        self._chat_findings(final=False)
+    def _chat_new_edits(self):
+        """Edit blocks the answer has finished: cards for them."""
+        entry = self._ai_entry
+        if self._chat_kind != "edit" or entry is None or entry.path is None:
+            return
+        found = ed.parse_edits(entry.answer)
+        if len(found) > len(entry.edits):
+            entry.edits += found[len(entry.edits):]
+            self._refresh_edits(entry)
 
-    def _chat_done(self):
-        """Remember the turn (the model sees it next time)."""
-        prompt, _editor = self._chat_question
-        self._chat_history += [{"role": "user", "content": prompt},
-                               {"role": "assistant", "content": self.review_monitor.answer}]
+    def _chat_chunk(self, text: str):
+        self.review_monitor.add_answer(text)
+        self._chat_findings()
+        self._chat_new_edits()
 
     def _chat_finished(self, _text: str, stats: dict):
-        self._chat_findings(final=True)
-        self._chat_done()
+        self._chat_findings()
+        self._chat_new_edits()
+        tokens, earlier = self._chat_estimate
+        measured = stats.get("prompt_tokens") or 0
+        if measured and earlier == 0 and self._chat_turn.attachment is not None:
+            # (Only for a first question: on later ones Ollama reuses what it
+            # read before, and counts only the new part.)
+            raw = tokens / self._token_ratio
+            self._token_ratio = min(2.0, max(0.5, measured / raw))
+        self._remember(self._ai_entry, self._chat_turn)
         detail = f"{stats.get('seconds', 0):.1f} s · {self.ai_model}" if stats.get("seconds") else self.ai_model
-        if stats.get("truncated"):
+        if stats.get("thinking"):
+            detail += " · the model spent its answer's length on reasoning (see AI → Answer Length)"
+        elif stats.get("truncated"):
             detail += " · cut off at the length limit"
         self.review_monitor.finish(True, detail)
 
     def _chat_failed(self, message: str):
-        if self.review_monitor.answer:
-            self._chat_done()  # (what it had written, if anything: part of the conversation)
+        self._chat_new_edits()
+        if self._ai_entry is not None and self._ai_entry.answer:
+            self._remember(self._ai_entry, self._chat_turn)  # (what it had written: part of the conversation)
         hint = f" (is '{self.ai_model}' downloaded? See AI → Model)" if "not found" in message.lower() else ""
         self.review_monitor.finish(False, message + hint)
+
+    # ------------------------------------------- the timeline's entries
+    def _entry_editor(self, entry: Entry, open_it: bool = False) -> EditorTab | None:
+        """The tab of an entry's file (opened, with ``open_it``, if it isn't)."""
+        if entry.path is None:
+            return None
+        file = Path(entry.path).resolve()
+        editor = next((e for e in self.editors() if e.path == file), None)
+        if editor is None and open_it:
+            self.open_file(str(file), force_editor=True)
+            editor = next((e for e in self.editors() if e.path == file), None)
+        return editor
+
+    def _entry_text(self, entry: Entry) -> str | None:
+        """An entry's file as it is now: its tab's text, or the file's."""
+        editor = self._entry_editor(entry)
+        if editor is not None:
+            return editor.editor.toPlainText()
+        try:
+            return Path(entry.path).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError, TypeError):
+            return None
+
+    def go_to_finding(self, entry: Entry, finding):
+        editor = self._entry_editor(entry, open_it=True)
+        if editor is not None:
+            self.tabs.setCurrentWidget(editor)
+            editor.editor.go_to_line(finding.line, select=True)
+
+    def fix_finding(self, entry: Entry, finding):
+        """Fix with AI… on a finding in the timeline."""
+        if entry.path is not None:
+            self.fix_with_ai(entry.path, Problem(finding.line, 0, finding.end_line, 0, "review", "review",
+                                                 f"AI ({finding.category}): {finding.comment}", "", "review"))
+
+    def show_findings_in_editor(self, entry: Entry):
+        """An entry's findings, marked in the editor again."""
+        editor = self._entry_editor(entry, open_it=True)
+        if editor is not None:
+            self.tabs.setCurrentWidget(editor)
+            editor.show_review(entry.findings)
+
+    # ------------------------------------------------- edits from the AI
+    def _relocate(self, edit: ed.Edit, text: str | None):
+        """Find a pending edit again in the file as it is now: one that was
+        there and no longer is turns stale (and back, if the text returns)."""
+        if edit.status in (ed.APPLIED, ed.REJECTED):
+            return
+        was_there = edit.located or edit.status == ed.STALE
+        if text is None:
+            edit.start = edit.end = -1
+            edit.status = ed.STALE
+            return
+        ed.locate(text, edit)
+        if edit.located:
+            edit.status = ed.PENDING
+        elif was_there:
+            edit.status = ed.STALE
+
+    def _refresh_edits(self, entry: Entry):
+        """The edit cards of every entry about this entry's file, found again
+        in the file as it is now."""
+        for other in self.review_monitor.entries:
+            if other.edits and other.path == entry.path:
+                text = self._entry_text(other)
+                for edit in other.edits:
+                    self._relocate(edit, text)
+                self.review_monitor.refresh(other, text or "")
+
+    def accept_edit(self, entry: Entry, index: int):
+        self._make_edits(entry, [entry.edits[index]])
+
+    def accept_all_edits(self, entry: Entry):
+        self._make_edits(entry, [e for e in entry.edits if e.status == ed.PENDING])
+
+    def _make_edits(self, entry: Entry, edits: list[ed.Edit]):
+        """Make edits in the editor (one step to undo; the file is opened if
+        it isn't), each found again in the text as it is now; any no longer
+        there turn stale."""
+        editor = self._entry_editor(entry, open_it=True)
+        text = editor.editor.toPlainText() if editor is not None else None
+        for edit in edits:
+            self._relocate(edit, text)
+        if editor is None:
+            self._refresh_edits(entry)
+            return
+        located = [e for e in edits if e.located]
+        _new, made = ed.apply_all(text, located)
+        for edit in made:
+            edit.diff = diff_rows(text, edit)
+            edit.status = ed.APPLIED
+        for edit in located:
+            if edit not in made:
+                edit.status = ed.STALE  # (overlapped another one made just now)
+        if made:
+            editor.editor.replace_ranges([(e.start, e.end, e.new_text) for e in made])
+            self.statusBar().showMessage(f"Made {len(made)} edit{'s' * (len(made) != 1)} "
+                                         f"(Edit → Undo takes {'them' if len(made) > 1 else 'it'} back)", 5000)
+        self._refresh_edits(entry)
+
+    def reject_edit(self, entry: Entry, index: int):
+        self._reject(entry, [entry.edits[index]])
+
+    def reject_all_edits(self, entry: Entry):
+        self._reject(entry, [e for e in entry.edits if e.status == ed.PENDING])
+
+    def _reject(self, entry: Entry, edits: list[ed.Edit]):
+        text = self._entry_text(entry)
+        for edit in edits:
+            if edit.located and text is not None:
+                edit.diff = diff_rows(text, edit)
+            edit.status = ed.REJECTED
+        self._refresh_edits(entry)
+
+    def show_edit(self, entry: Entry, index: int):
+        """A card was clicked: show (and select) its place in the editor."""
+        edit, editor = entry.edits[index], self._entry_editor(entry, open_it=True)
+        if editor is None:
+            return
+        self._relocate(edit, editor.editor.toPlainText())
+        self.tabs.setCurrentWidget(editor)
+        if edit.located:
+            editor.editor.select_range(edit.start, edit.end)
+        elif edit.line:
+            editor.editor.go_to_line(edit.line)
 
     def _start_ai_worker(self, worker):
         self._ai_worker = worker
@@ -3846,28 +4220,37 @@ class MainWindow(QMainWindow):
         cursor.insertText(text)
         self.test_output.setTextCursor(cursor)
         self.test_output.ensureCursorVisible()
-        self.review_monitor.add_text(text)
+        self.review_monitor.add_answer(text)
         # Text arrives a line at a time: re-read the answer so far and show
-        # the findings found so far (the list and the editor's markers).
+        # the findings found so far (the entry's list and the editor's markers).
         self._review_text += text
-        editor = self._ai_editor
+        editor, entry = self._ai_editor, self._ai_entry
         max_line = editor.editor.blockCount() if editor in self.editors() else None
         findings, _summary = ai.parse_findings(self._review_text, max_line)
         keys = [(f.line, f.end_line, f.category, f.comment) for f in findings]
         if keys != self._review_keys:
             self._review_keys = keys
-            self.review_monitor.set_findings(findings, final=False)
+            entry.findings = findings
+            self.review_monitor.refresh(entry)
             if editor in self.editors():
                 editor.show_review(findings)
 
     def _review_finished(self, text: str, stats: dict):
-        editor = self._ai_editor
+        editor, entry = self._ai_editor, self._ai_entry
         max_line = editor.editor.blockCount() if editor in self.editors() else None
         findings, summary = ai.parse_findings(text, max_line)
-        self.review_monitor.set_findings(findings, summary)
+        entry.findings, entry.summary = findings, summary
+        name = editor.path.name if editor is not None else entry.where.split(":")[0]
+        self._remember(entry, ctx.Turn(
+            f"Review {entry.where}", f"Review my file {entry.where} ({entry.question.lower()}): list the issues "
+            "you find.",
+            ctx.file_attachment(name, self._review_code, numbers=True, context=self._chat_context(),
+                                ratio=self._token_ratio)))
         detail = f"{stats.get('seconds', 0):.1f} s · {self.ai_model}" if stats else self.ai_model
         if stats.get("repeated"):
             detail += " · stopped a repetition loop"
+        elif stats.get("thinking"):
+            detail += " · the model spent its answer's length on reasoning (see AI → Answer Length)"
         elif stats.get("truncated"):
             detail += " · answer cut off at the length limit"
         self.review_monitor.finish(True, detail)
@@ -3880,17 +4263,33 @@ class MainWindow(QMainWindow):
         if "not found" in message.lower():
             hint = f" (is '{self.ai_model}' downloaded? See AI → Model)"
         self.review_monitor.finish(False, message + hint)
-        self.statusBar().showMessage(f"AI review: {message}{hint}", 6000)
+        self.statusBar().showMessage(f"AI: {message}{hint}", 6000)
 
     def stop_review(self):
         if self._ai_worker is not None:
             self._ai_worker.cancel()
 
-    def _go_to_finding(self, line: int):
-        editor = self._ai_editor
-        if editor in self.editors():
-            self.tabs.setCurrentWidget(editor)
-            editor.editor.go_to_line(line, select=True)
+    def _ollama_running(self) -> bool:
+        """A server the app started is running (one started otherwise isn't ours to stop)."""
+        return self._ollama_process is not None and self._ollama_process.state() != QProcess.NotRunning
+
+    def _update_ollama_action(self):
+        self.stop_ollama_action.setEnabled(self._ollama_running())
+
+    def stop_ollama(self, quitting: bool = False):
+        """AI → Stop Ollama Server: the server the app started, with the
+        model runner it started (killing only the server would leave that
+        running, holding the model's memory)."""
+        if not self._ollama_running():
+            return
+        if not quitting:
+            self.stop_review()
+        kill_process_tree(self._ollama_process)
+        self._ollama_process.waitForFinished(3000)
+        self._ollama_process = None
+        self._update_ollama_action()
+        if not quitting:
+            self.statusBar().showMessage("Stopped the Ollama server (it starts again when the AI is next used)", 5000)
 
     def _shutdown_ai(self):
         if self._ai_worker is not None:
@@ -3898,9 +4297,7 @@ class MainWindow(QMainWindow):
         if self._ai_thread is not None:
             self._ai_thread.quit()
             self._ai_thread.wait(3000)
-        if self._ollama_process is not None:  # only a server we started ourselves
-            self._ollama_process.terminate()
-            self._ollama_process.waitForFinished(3000)
+        self.stop_ollama(quitting=True)
 
 
 def repo_web_url(git_url: str) -> str | None:

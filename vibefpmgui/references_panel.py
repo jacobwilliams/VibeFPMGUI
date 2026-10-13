@@ -27,6 +27,7 @@ def short_path(path: Path, project_dir: Path | None) -> str:
 
 class ReferencesPanel(QWidget):
     open_requested = Signal(str, int, int, int, int)  # file, line, column, end line, end column
+    keep_requested = Signal(str)  # a file to keep open (a result double-clicked)
     HINT = "Use Find References (⇧F12) on a name in the editor to list its uses here."
 
     def __init__(self, parent=None):
@@ -36,6 +37,7 @@ class ReferencesPanel(QWidget):
         self.title.setContentsMargins(8, 6, 8, 2)
         self.tree = ResultTree()
         self.tree.open_requested.connect(self.open_requested)
+        self.tree.keep_requested.connect(self.keep_requested)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
