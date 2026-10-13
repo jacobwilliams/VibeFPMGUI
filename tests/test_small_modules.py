@@ -214,3 +214,14 @@ def test_about_logo_changes_color_while_shown(qtbot, monkeypatch):
     assert not logo.grab().isNull()
     logo.hide()
     assert not logo.timer.isActive()  # (no work when it isn't seen)
+
+
+def test_about_qt_in_the_help_menu(window, monkeypatch):
+    from qtpy.QtGui import QAction
+    from qtpy.QtWidgets import QMessageBox
+
+    shown = []
+    monkeypatch.setattr(QMessageBox, "aboutQt", lambda parent, title: shown.append((parent, title)))
+    assert window.about_qt_action.menuRole() == QAction.AboutQtRole
+    window.about_qt_action.trigger()
+    assert shown == [(window, "About Qt")]

@@ -957,6 +957,10 @@ class MainWindow(QMainWindow):
         about = menu.addAction("About VibeFPMGUI")
         about.setMenuRole(QAction.AboutRole)  # macOS: moved to the application menu
         about.triggered.connect(self.show_about)
+        self.about_qt_action = menu.addAction("About Qt")
+        self.about_qt_action.setMenuRole(QAction.AboutQtRole)  # macOS: moved to the application menu
+        self.about_qt_action.setStatusTip("Qt's own About window: the Qt version and license")
+        self.about_qt_action.triggered.connect(lambda: QMessageBox.aboutQt(self, "About Qt"))
 
     def effective_compiler(self) -> tuple[str, str]:
         """(compiler, where the choice comes from), the way fpm picks it:
