@@ -39,6 +39,72 @@ def test_runner_problems(capfd):
     assert "could not run /no/such/program" in capfd.readouterr().out
 
 
+def test_runner_collects_the_command_line(capfd, tmp_path):
+    import json
+
+    assert test_runner.main(["--collect", "build/check_x.exe", "a b", "-v"]) == 0  # (not run)
+    out = capfd.readouterr().out.strip()
+    assert out.startswith("@@vibefpm:exe:check_x@@")
+    from vibefpmgui.test_monitor import EXE_RE
+
+    match = EXE_RE.search(out)
+    assert match.group(1) == "check_x"
+    assert json.loads(match.group(2)) == [shutil.os.path.abspath("build/check_x.exe"), "a b", "-v"]
+
+
+# ------------------------------------------------------ parallel tests
+def run_parallel(qtbot, commands, workers, inner=(), stop_after=None):
+    from qtpy.QtCore import QProcessEnvironment
+
+    from vibefpmgui.main_window import kill_process_tree
+    from vibefpmgui.parallel_tests import ParallelTests
+
+    runner = ParallelTests(commands, workers, str(shutil.os.getcwd()), QProcessEnvironment.systemEnvironment(),
+                           list(inner), kill_process_tree)
+    events, outputs, ended, peak = [], {}, {}, [0]
+    runner.started.connect(lambda n: (events.append(("start", n)), peak.__setitem__(0, max(peak[0], len(runner.running)))))
+    runner.output.connect(lambda n, t: outputs.__setitem__(n, outputs.get(n, "") + t))
+    runner.finished.connect(lambda n, code, secs, stopped: ended.__setitem__(n, (code, stopped)))
+    done = []
+    runner.done.connect(done.append)
+    runner.start()
+    if stop_after is not None:
+        qtbot.waitUntil(lambda: len(runner.running) >= stop_after, timeout=10_000)
+        runner.stop()
+    qtbot.waitUntil(lambda: bool(done), timeout=30_000)
+    return events, outputs, ended, peak[0], done[0]
+
+
+def program(code: str) -> list[str]:
+    return [sys.executable, "-c", code]
+
+
+def test_parallel_tests_run_a_few_at_a_time_each_with_its_own_output(qtbot):
+    commands = [(f"t{i}", program(f"import time\nfor k in range(3):\n print('t{i}', k, flush=True)\n"
+                                 f" time.sleep(0.05)\nraise SystemExit({i % 2})")) for i in range(5)]
+    events, outputs, ended, peak, stopped = run_parallel(qtbot, commands, workers=2)
+    assert peak == 2 and not stopped
+    assert [n for kind, n in events if kind == "start"] == ["t0", "t1", "t2", "t3", "t4"]
+    for i in range(5):
+        assert outputs[f"t{i}"].split() == [f"t{i}", "0", f"t{i}", "1", f"t{i}", "2"]
+        assert ended[f"t{i}"] == (i % 2, False)
+
+
+def test_parallel_tests_inner_runner_and_a_missing_program(qtbot):
+    inner = program("import subprocess, sys; print('via runner', flush=True); sys.exit(subprocess.call(sys.argv[1:]))")
+    _, outputs, ended, _, _ = run_parallel(qtbot, [("ok", program("print('hi')"))], 1, inner=inner)
+    assert outputs["ok"].split("\n")[:2] == ["via runner", "hi"] and ended["ok"] == (0, False)
+    _, outputs, ended, _, _ = run_parallel(qtbot, [("gone", ["/no/such/test"])], 1)
+    assert ended["gone"] == (127, False) and "could not run /no/such/test" in outputs["gone"]
+
+
+def test_parallel_tests_stop(qtbot):
+    commands = [(f"s{i}", program("import time; time.sleep(30)")) for i in range(4)]
+    events, _, ended, _, stopped = run_parallel(qtbot, commands, workers=2, stop_after=2)
+    assert stopped and len(events) == 2  # (the queued ones never start)
+    assert all(was_stopped for _code, was_stopped in ended.values()) and len(ended) == 2
+
+
 # --------------------------------------------------------- go to symbol
 class FakeServer:
     def __init__(self, project, running=True):

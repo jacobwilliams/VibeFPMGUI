@@ -67,6 +67,7 @@ menu item says "not found" and the feature is off; without fprettify the
 | `vibefpmgui.test_monitor` | The *Tests* tab: each test's progress, time and output |
 | `vibefpmgui.run_monitor` | The *Run* tab (the Tests tab with different wording) |
 | `vibefpmgui.test_runner` | The small wrapper given to `fpm test --runner` to mark where each test starts and ends |
+| `vibefpmgui.parallel_tests` | Running tests several at a time, each with its own output |
 | `vibefpmgui.ansi` | Terminal color codes in program output, shown as colors |
 | `vibefpmgui.terminal` | The *Terminal* tab: your shell in the project's folder, with exactly the app's environment (pyte, drawn by our own widget) |
 
@@ -114,7 +115,9 @@ menu item says "not found" and the feature is off; without fprettify the
   its per-file `.o.log` files.
 * **Tests and programs run through `vibefpmgui.test_runner`**, which fpm
   calls for each one (`--runner`). The markers it prints tell the *Tests*
-  and *Run* tabs where each starts and ends and how it exited.
+  and *Run* tabs where each starts and ends and how it exited. For tests
+  run in parallel, it only reports each test's command line
+  (``--collect``), and `vibefpmgui.parallel_tests.ParallelTests` runs them.
 * **The editor's Fortran features use separate programs:** fortls (a
   long-running language server, see `vibefpmgui.lsp.LspClient`), fortitude
   and fprettify (run on the editor's text through stdin), and Ollama (over

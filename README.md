@@ -57,6 +57,14 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   runs weight the bar by expected time and estimate the time left. Click a
   test to see only its output. A `--runner` you put in *Extra args* (e.g.
   `mpirun -np 4`) still wraps each test.
+* Parallel tests (off by default): *Build options → Parallel tests* sets how
+  many tests run at once. fpm runs tests one after another, so then fpm only
+  builds them and reports each test's command line, and the app runs them
+  itself, each in its own process with its own output. The *Tests* tab
+  shows every running test; the *Output* panel gets each test's output in
+  one piece when it finishes (headed by its name, result, time and
+  command), and clicking a test shows its output live while it runs. The
+  longest tests (by their last time) start first.
 * *Project files* panel (below the build options): the project's files and
   those of every dependency (including git downloads in `build/dependencies`),
   with a filter box (files ignored by git and greyed-out files are left out

@@ -53,6 +53,8 @@ from .build_monitor import (
 )
 
 MARKER_RE = re.compile(r"@@vibefpm:(start|end):([^:@]+)(?::(-?\d+):([\d.]+))?@@")
+# A test's command line, from "test_runner.py --collect" (for a parallel run).
+EXE_RE = re.compile(r"@@vibefpm:exe:([^:@]+)@@(.*)$")
 # "fpm test --list" prints " Matched names:" followed by the names.
 MATCHED_RE = re.compile(r"^\s*Matched names:\s*(.*)$")
 NO_TESTS_RE = re.compile(r"No tests to run")
@@ -96,6 +98,7 @@ class TestCase:
     exit_code: int | None = None
     stopped: bool = False  # was running when Stop was pressed
     output: list[str] = field(default_factory=list)
+    partial: str = ""  # (a parallel run: the start of a line still being written)
 
     def elapsed(self) -> float:
         if self.seconds is not None:
@@ -251,6 +254,7 @@ class TestMonitor(SortableTable, QWidget):
         self.filter_status: str | None = None
         self.description = ""
         self.build_percent = None  # callable giving the build's % (set by the main window)
+        self.jobs = 1  # how many run at once (Build options → Parallel tests)
         self._started = 0.0
         self._finished_at: float | None = None
         self._result = ""  # "", "listing", "ok", "failed", "stopped", "none"
@@ -454,7 +458,9 @@ class TestMonitor(SortableTable, QWidget):
 
     def output_for(self, name: str) -> str:
         test = self.by_name.get(name)
-        return "\n".join(test.output) if test else ""
+        if not test:
+            return ""
+        return "\n".join(test.output + ([test.partial] if test.partial else []))
 
     # ------------------------------------------------------------- parsing
     def feed_line(self, line: str) -> str | None:
@@ -469,27 +475,52 @@ class TestMonitor(SortableTable, QWidget):
         if before.strip() and self.current is not None:
             self.current.output.append(before)
         kind, name = match.group(1), match.group(2)
-        test = self.by_name.get(name) or self._add(name, None)
         if kind == "start":
-            test.status = RUNNING
-            test.started = time.monotonic()
-            test.output = []
-            self.current = test
-            if self.filter_status is None:
-                self.table.scrollToItem(self.table.item(test.row, 0))
+            self.current = self.test_started(name)
         else:
-            test.exit_code = int(match.group(3))
-            test.seconds = float(match.group(4))
-            test.finished = time.monotonic()
-            test.status = PASSED if test.exit_code == 0 else FAILED_T
             self.current = None
-            if self.selected == name:  # refresh the filtered output view
-                self.test_selected.emit(name)
+            self.test_finished(name, int(match.group(3)), float(match.group(4)))
+        return before if before.strip() else None
+
+    # ---------------------------------- each test (also for a parallel run)
+    def test_started(self, name: str) -> TestCase:
+        test = self.by_name.get(name) or self._add(name, None)
+        test.status = RUNNING
+        test.started = time.monotonic()
+        test.output, test.partial = [], ""
+        if self.filter_status is None and self.jobs == 1:  # (in parallel the view would jump about)
+            self.table.scrollToItem(self.table.item(test.row, 0))
+        self._changed(test)
+        return test
+
+    def test_output(self, name: str, text: str):
+        """Output of one test, as it comes (parts of lines too)."""
+        test = self.by_name.get(name)
+        if test is not None:
+            lines = (test.partial + text).split("\n")
+            test.partial = lines.pop()
+            test.output.extend(lines)
+
+    def test_finished(self, name: str, exit_code: int, seconds: float, stopped: bool = False):
+        test = self.by_name.get(name) or self._add(name, None)
+        if test.partial:
+            test.output.append(test.partial)
+            test.partial = ""
+        test.finished = time.monotonic()
+        if stopped:
+            test.status, test.stopped = NOT_RUN, True
+        else:
+            test.exit_code, test.seconds = exit_code, seconds
+            test.status = PASSED if exit_code == 0 else FAILED_T
+        if self.selected == name:  # refresh the filtered output view
+            self.test_selected.emit(name)
+        self._changed(test)
+
+    def _changed(self, test: TestCase):
         self._apply_filter(test)
         self._update_header()
         self.table.viewport().update()
         self.schedule_sort()
-        return before if before.strip() else None
 
     # ------------------------------------------------------------- helpers
     def _add(self, name: str, expected: float | None) -> TestCase:
@@ -574,7 +605,7 @@ class TestMonitor(SortableTable, QWidget):
                 left += expected[t.name]
             elif t.status == RUNNING:
                 left += max(expected[t.name] - t.elapsed(), 0.0)
-        return left
+        return left / min(self.jobs, max(1, sum(t.status in (QUEUED, RUNNING) for t in self.tests)))
 
     def time_scale(self) -> float:
         return max([t.elapsed() for t in self.tests] + [t.expected or 0 for t in self.tests] + [0.1])
@@ -635,6 +666,8 @@ class TestMonitor(SortableTable, QWidget):
         elif self._result == "stopped":
             text = f"<b>Stopped</b> {muted}· {finished} of {n} run{failed}</span>"
         elif self._active:
+            running = counts[RUNNING]
+            failed += f" · {running} running at once" if self.jobs > 1 and running > 1 else ""
             left = self.remaining()
             eta = f" · ~{left:.0f} s left" if left is not None and left >= 1 else ""
             text = f"<b>{finished} of {n}</b> {muted}{self.word('items')}{failed} · {seconds}{eta}</span>"

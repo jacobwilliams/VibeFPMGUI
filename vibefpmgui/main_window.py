@@ -62,6 +62,7 @@ from qtpy.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSizePolicy,
+    QSpinBox,
     QSplitter,
     QStackedWidget,
     QStyle,
@@ -103,6 +104,7 @@ from .graph_view import (
     DependencyGraphView,
 )
 from .icons import app_icon, make_icon
+from .parallel_tests import ParallelTests
 from .problems_panel import ProblemsPanel
 from .project_search import SearchPanel, search_roots
 from .project_tree import ProjectTree, reveal_in_file_manager
@@ -113,7 +115,8 @@ from .review_monitor import ReviewMonitor
 from .run_monitor import RunMonitor
 from .symbol_search import SymbolSearchDialog
 from .terminal import TerminalPanel
-from .test_monitor import MARKER_RE, TestMonitor, parse_test_list
+from .test_monitor import EXE_RE, MARKER_RE, TestMonitor, parse_test_list
+from .test_runner import split_runner as split_inner_runner
 
 # A command's output beyond this many characters isn't added to the Output
 # panel (it would freeze the app: an lfortran crash, for one, prints the whole
@@ -226,6 +229,7 @@ class MainWindow(QMainWindow):
         self.manifest_path: Path | None = None
         self.graph: m.DependencyGraph | None = None
         self.process: QProcess | None = None
+        self.parallel_tests: ParallelTests | None = None  # tests run by us, several at once
         self._refresh_after = False
         self._monitoring = False
         self._partial = ""  # output text after the last newline
@@ -493,6 +497,11 @@ class MainWindow(QMainWindow):
         self.runner_args_edit = QLineEdit()
         self.runner_args_edit.setPlaceholderText("arguments passed to the program")
         form.addRow("Program args:", self.runner_args_edit)
+        self.test_jobs_spin = QSpinBox()
+        self.test_jobs_spin.setRange(1, 256)
+        self.test_jobs_spin.setSpecialValueText("off (one at a time)")
+        self.test_jobs_spin.setSuffix(" at a time")
+        form.addRow("Parallel tests:", self.test_jobs_spin)
         self.verbose_check = QCheckBox("Verbose")
         form.addRow(self.verbose_check)
         fpm_row = QHBoxLayout()
@@ -519,6 +528,9 @@ class MainWindow(QMainWindow):
              "Any other fpm options, e.g. --runner \"mpirun -np 4\" or --c-compiler gcc."),
             (self.runner_args_edit, "-- ARGS",
              "Arguments passed to the program or tests by Run and Test."),
+            (self.test_jobs_spin, "(not a flag)",
+             (f"Run this many tests at once (this computer has {os.cpu_count() or 1} cores). fpm builds "
+              "them; the app runs them, each with its own output. Off: fpm runs them one after another.")),
             (self.verbose_check, "--verbose", "Print more detail about what fpm is doing."),
             (self.fpm_edit, "(not a flag)", "The fpm program to run. Leave empty to use the fpm on your PATH."),
         ]:
@@ -1146,8 +1158,12 @@ class MainWindow(QMainWindow):
             QToolBar#CommandsToolbar QToolButton#qt_toolbar_ext_button {{ padding: 0px; }}
         """)
 
+    def busy(self) -> bool:
+        """A command is running (fpm, a program, or tests run in parallel)."""
+        return self.process is not None or self.parallel_tests is not None
+
     def _set_project_enabled(self, enabled: bool):
-        running = self.process is not None
+        running = self.busy()
         for action in self.command_actions:
             action.setEnabled(enabled and not running)
 
@@ -1167,6 +1183,7 @@ class MainWindow(QMainWindow):
         self.extra_edit.setText(s.value("extra", ""))
         self.fpm_edit.setText(s.value("fpm", ""))
         self.verbose_check.setChecked(s.value("verbose", False, type=bool))
+        self.test_jobs_spin.setValue(s.value("test_jobs", 1, type=int))
         self.set_font_delta(s.value("font_delta", 0, type=int), announce=False)
         self._set_graph_layout(s.value("graph_layout", next(iter(LAYOUTS))))
         self._set_graph_theme(s.value("graph_theme", next(iter(THEME_CHOICES))))
@@ -1204,14 +1221,13 @@ class MainWindow(QMainWindow):
             if not editor.maybe_save():
                 event.ignore()
                 return
-        if self.process is not None:
+        if self.busy():
             answer = QMessageBox.question(self, "fpm is running",
                                           "An fpm command is still running. Stop it and quit?")
             if answer != QMessageBox.Yes:
                 event.ignore()
                 return
-            kill_process_tree(self.process)
-            self.process.waitForFinished(2000)
+            self._stop_and_wait(2000)
         for editor in self.editors():
             editor.close_down()
         self.lsp_client.stop()
@@ -1232,6 +1248,7 @@ class MainWindow(QMainWindow):
         s.setValue("extra", self.extra_edit.text())
         s.setValue("fpm", self.fpm_edit.text())
         s.setValue("verbose", self.verbose_check.isChecked())
+        s.setValue("test_jobs", self.test_jobs_spin.value())
         super().closeEvent(event)
 
     # ------------------------------------------------------------- project
@@ -1280,7 +1297,7 @@ class MainWindow(QMainWindow):
         if new_project:
             # Both questions before anything changes: No or Cancel keeps the
             # current project as it is, its files still open.
-            if self.process is not None:
+            if self.busy():
                 answer = QMessageBox.question(
                     self, "fpm is running",
                     "An fpm command is still running for the current project. Stop it and open the new one?")
@@ -1290,9 +1307,8 @@ class MainWindow(QMainWindow):
             # The open files belong to the old project: ask about unsaved changes.
             if not self.close_all_editors():
                 return
-            if self.process is not None:
-                kill_process_tree(self.process)
-                self.process.waitForFinished(3000)
+            if self.busy():
+                self._stop_and_wait(3000)
             self._clear_run_panels()
             self.search_panel.reset()
             self.references_panel.reset()
@@ -1441,7 +1457,7 @@ class MainWindow(QMainWindow):
     def delete_configurations(self, configs: list):
         if not configs:
             return
-        if self.process is not None:
+        if self.busy():
             QMessageBox.information(self, "Build outputs", "Wait for the running command to finish first.")
             return
         size = bo.human_size(sum(c.size for c in configs))
@@ -1475,7 +1491,7 @@ class MainWindow(QMainWindow):
 
     def run_program(self, path: str):
         """Run an already-built program directly (no fpm, no rebuild)."""
-        if self.process is not None or not self.manifest_path:
+        if self.busy() or not self.manifest_path:
             return
         try:
             args = split_args(self.runner_args_edit.text())
@@ -1585,7 +1601,7 @@ class MainWindow(QMainWindow):
 
     def _update_dependency_tag(self, check, dialog):
         """Point one dependency at its newest tag in its fpm.toml."""
-        if self.process is not None:
+        if self.busy():
             QMessageBox.information(dialog, "Update dependency", "Wait for the running command to finish first.")
             return
         # A tag pin moves to the newest tag; a commit pin becomes that tag.
@@ -1805,7 +1821,7 @@ class MainWindow(QMainWindow):
         if pkg.git and not is_root:
             menu.addSeparator()
             add("Check for Updates", lambda: self.check_dependency_updates(only=name))
-            add("Update This Dependency", lambda: self.run_fpm(["update", name], False, True), self.process is None,
+            add("Update This Dependency", lambda: self.run_fpm(["update", name], False, True), not self.busy(),
                 f"fpm update {name}: fetch it again (or download it if it's missing)")
         if not is_root:
             menu.addSeparator()
@@ -2926,7 +2942,7 @@ class MainWindow(QMainWindow):
     def run_fpm(self, sub: list[str], uses_options: bool, refresh: bool,
                 phase: str | None = None, args: list[str] | None = None,
                 env_extra: dict[str, str] | None = None):
-        if not self.manifest_path or self.process is not None:
+        if not self.manifest_path or self.busy():
             return
         if args is None:
             try:
@@ -2955,7 +2971,7 @@ class MainWindow(QMainWindow):
         # doesn't build; "fpm test" builds first, so its output goes to the
         # build grid until the first test starts (see _test_line).
         self._monitoring = sub[0] in ("build", "run", "test") and phase != "list"
-        self._test_building = phase == "marked"  # fpm builds before running
+        self._test_building = phase in ("marked", "collect")  # fpm builds before running
         self._process_label = "fpm"
         self._revs_before = (dep_updates.read_cache_revs(self.manifest_path.parent)
                              if sub[0] == "update" else None)
@@ -2984,6 +3000,16 @@ class MainWindow(QMainWindow):
     def stop(self):
         if self.process is not None:
             kill_process_tree(self.process)
+        if self.parallel_tests is not None:
+            self.parallel_tests.stop()
+
+    def _stop_and_wait(self, msecs: int):
+        if self.process is not None:
+            kill_process_tree(self.process)
+            self.process.waitForFinished(msecs)
+        if self.parallel_tests is not None:
+            self.parallel_tests.stop()
+            self.parallel_tests.wait(msecs)
 
     def _append(self, text: str, bold: bool = False, colored: bool = False):
         """Add text to the Output panel; ``colored``: program output, whose
@@ -3059,11 +3085,12 @@ class MainWindow(QMainWindow):
         # fpm redraws progress lines with \r; keep only the final state of each line.
         data = data.replace("\r\n", "\n")
         data = "\n".join(line.rsplit("\r", 1)[-1] for line in data.split("\n"))
-        if self._phase in ("marked", "direct"):
+        if self._phase in ("marked", "direct", "collect"):
             # Line-buffered so the test markers can be taken out of the output.
             lines = (self._partial + data).split("\n")
             self._partial = lines.pop()
-            self._append("".join(self._test_line(line) for line in lines), colored=True)
+            handle = self._collect_line if self._phase == "collect" else self._test_line
+            self._append("".join(handle(line) for line in lines), colored=True)
             return
         self._append(data, colored=True)
         plain = ansi.strip(data)  # color codes would get in the way of parsing
@@ -3100,6 +3127,24 @@ class MainWindow(QMainWindow):
             shown = raw
         return text + (shown + "\n" if shown is not None else "")
 
+    def _collect_line(self, raw: str) -> str:
+        """A line of "fpm test --runner '… --collect'": the build's output,
+        or a test's command line (taken out, kept for _after_collect)."""
+        line = ansi.strip(raw)
+        match = EXE_RE.search(line)
+        if match is None:
+            if self._test_building:
+                self.build_monitor.feed_line(line)
+            return raw + "\n"
+        if self._test_building:
+            self._build_part_done()
+        try:
+            argv = json.loads(match.group(2))
+        except ValueError:
+            return raw + "\n"
+        self._collected.append((match.group(1), [str(a) for a in argv]))
+        return ""
+
     def _build_part_done(self):
         """The build part of "fpm test" is over: show the tests."""
         self._test_building = False
@@ -3111,9 +3156,10 @@ class MainWindow(QMainWindow):
         self.show_panel(self._marker_monitor())
 
     def _flush_monitor(self, exit_code: int, stopped: bool):
-        if self._phase in ("marked", "direct"):
+        if self._phase in ("marked", "direct", "collect"):
             if self._partial:
-                self._append(self._test_line(self._partial), colored=True)
+                handle = self._collect_line if self._phase == "collect" else self._test_line
+                self._append(handle(self._partial), colored=True)
             if self._held_blank:
                 self._append("\n")
             self._partial = ""
@@ -3145,6 +3191,8 @@ class MainWindow(QMainWindow):
             self._after_listing(code, crashed)
         elif phase in ("marked", "direct"):
             self._after_marked(code, crashed)
+        elif phase == "collect":
+            self._after_collect(code, crashed)
 
     def _process_error(self, error):
         if error == QProcess.FailedToStart:
@@ -3186,7 +3234,7 @@ class MainWindow(QMainWindow):
         "fpm <kind> --runner <our wrapper>", which builds first (shown in the
         Build tab) and then runs each one; the wrapper marks where each starts
         and ends, so the Tests / Run tab can follow them."""
-        if not self.manifest_path or self.process is not None:
+        if not self.manifest_path or self.busy():
             return
         try:
             list_args = self.build_arguments([kind, "--list"], True, program_args=False)
@@ -3198,10 +3246,11 @@ class MainWindow(QMainWindow):
         runner = runner_command()
         # Our runner goes before the target names and any "-- program args".
         cut = run_args.index("--") if "--" in run_args else len(run_args)
+        collect_args = run_args[:cut] + ["--runner", runner_command(collect=True)] + run_args[cut:]
         run_args = run_args[:cut] + ["--runner", runner] + run_args[cut:]
         patterns = split_args(self.target_edit.text())
         self._marker_kind = kind
-        self._test_args = (run_args, inner_runner, patterns)
+        self._test_args = (run_args, inner_runner, patterns, collect_args)
         description = self._build_description()
         if inner_runner:
             description += f" · runner: {inner_runner}"
@@ -3223,15 +3272,93 @@ class MainWindow(QMainWindow):
             self.show_panel(monitor)
             self.statusBar().showMessage(monitor.word("none"))
             return
-        run_args, inner_runner, patterns = self._test_args
+        run_args, inner_runner, patterns, collect_args = self._test_args
         if names and patterns:
             # "--list" lists every name regardless of the names given, so apply
             # the Target names/globs ourselves, as fpm will.
             names = [n for n in names if any(fnmatch.fnmatchcase(n, p) for p in patterns)]
         # fpm builds first (the Build tab shows it), then runs them.
         monitor.start(names or [], self._load_durations(self._marker_kind), building=True)
+        jobs = self.test_jobs_spin.value() if self._marker_kind == "test" else 1
+        monitor.jobs = jobs
+        if jobs > 1:
+            monitor.description += f" · {jobs} at a time"
+            monitor._update_header()  # fpm only builds them and says how to run each; we run them (see _after_collect)
+            self._collected: list[tuple[str, list[str]]] = []
+            self.run_fpm(["test"], True, False, phase="collect", args=collect_args)
+            return
         env = {"VIBEFPM_INNER_RUNNER": inner_runner} if inner_runner else {}
         self.run_fpm([self._marker_kind], True, True, phase="marked", args=run_args, env_extra=env)
+
+    # ------------------------------------------------ tests run in parallel
+    def _after_collect(self, code: int, stopped: bool):
+        """fpm has built the tests and said how to run each: run them, a few
+        at a time (Build options → Parallel tests)."""
+        if stopped or code != 0 or not self._collected:
+            self.reload()  # (first, as after "fpm test": then the message is the tests')
+            self._after_marked(code, stopped)  # (stopped, the build failed, or no tests)
+            return
+        _run_args, inner_runner, _patterns, _collect = self._test_args
+        try:
+            inner = split_inner_runner(inner_runner)
+        except ValueError:
+            inner = []
+        expected = self._load_durations("test")
+        # The longest first (the ones never timed first of all): the run ends sooner.
+        commands = sorted(self._collected, key=lambda c: -expected.get(c[0], float("inf")))
+        env = QProcessEnvironment.systemEnvironment()
+        env.insert("NO_COLOR", "1")
+        workers = min(self.test_jobs_spin.value(), len(commands))
+        tests = ParallelTests(commands, workers, str(self.manifest_path.parent), env, inner, kill_process_tree, self)
+        tests.started.connect(self._parallel_started)
+        tests.output.connect(self._parallel_output)
+        tests.finished.connect(self._parallel_finished)
+        tests.done.connect(self._parallel_done)
+        self.parallel_tests = tests
+        self._parallel_raw: dict[str, list[str]] = {}
+        self._parallel_failed = False
+        self._append(f"\n[Running {len(commands)} tests, {workers} at a time. Each test's output is shown "
+                     "here when it finishes; click a test in the Tests panel to watch it as it runs.]\n", bold=True)
+        self.stop_action.setEnabled(True)
+        self._set_project_enabled(True)
+        self.statusBar().showMessage(f"Running tests, {workers} at a time…")
+        tests.start()
+
+    def _parallel_started(self, name: str):
+        self._parallel_raw[name] = []
+        self.test_monitor.test_started(name)
+
+    def _parallel_output(self, name: str, text: str):
+        self._parallel_raw.setdefault(name, []).append(text)
+        plain = ansi.strip(text)
+        self.test_monitor.test_output(name, plain)
+        if self.test_monitor.selected == name:  # shown on its own: follow it
+            self.single_writer.write(plain)
+
+    def _parallel_finished(self, name: str, code: int, seconds: float, stopped: bool):
+        self.test_monitor.test_finished(name, code, seconds, stopped)
+        self._parallel_failed |= code != 0 and not stopped
+        # Its output, all in one piece: the tests' outputs never mix here.
+        status = "stopped" if stopped else "passed" if code == 0 else f"failed (exit code {code})"
+        command = self.parallel_tests.command(dict(self._collected).get(name, [name])) \
+            if self.parallel_tests is not None else [name]
+        rel = [os.path.relpath(a, self.manifest_path.parent) if os.path.isabs(a) else a for a in command]
+        self._append(f"\n── {name} · {status} · {seconds:.2f} s ── $ {join_args(rel)}\n", bold=True)
+        text = "".join(self._parallel_raw.pop(name, []))
+        if text:
+            self._append(text if text.endswith("\n") else text + "\n", colored=True)
+
+    def _parallel_done(self, stopped: bool):
+        if self.parallel_tests is None:
+            return
+        self.parallel_tests.deleteLater()
+        self.parallel_tests = None
+        self.stop_action.setEnabled(False)
+        self._set_project_enabled(self.graph is not None)
+        code = 1 if self._parallel_failed else 0
+        self._append("\n[tests stopped]\n" if stopped else f"\n[tests finished: exit code {code}]\n", bold=True)
+        self.reload()  # (first, as after "fpm test": then the message is the tests')
+        self._after_marked(code, stopped)
 
     def _after_marked(self, code: int, stopped: bool):
         monitor = self._marker_monitor()
@@ -3826,10 +3953,11 @@ def split_runner(args: list[str]) -> tuple[list[str], str]:
     return rest, runner
 
 
-def runner_command() -> str:
-    """The command fpm should put in front of each test executable."""
+def runner_command(collect: bool = False) -> str:
+    """The command fpm should put in front of each test executable (with
+    ``collect``: one that only prints the test's command line)."""
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_runner.py")
-    parts = [sys.executable, "-I", script]
+    parts = [sys.executable, "-I", script] + (["--collect"] if collect else [])
     return join_args(parts)  # quoted for the platform's shell
 
 

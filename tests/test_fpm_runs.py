@@ -49,7 +49,7 @@ def fpm_window(make_window, fpm_project):
 
 def wait_idle(qtbot, window, timeout=120_000):
     """Until fpm (and a test/run's second step) is done."""
-    qtbot.waitUntil(lambda: window.process is None and getattr(window, "_phase", None) is None, timeout=timeout)
+    qtbot.waitUntil(lambda: not window.busy() and getattr(window, "_phase", None) is None, timeout=timeout)
 
 
 def console(window) -> str:
@@ -128,6 +128,56 @@ def test_stop(qtbot, fpm_window, fpm_project):
     wait_idle(qtbot, fpm_window, timeout=30_000)
     assert monitor.tests[0].status in (NOT_RUN, FAILED_T)
     assert "Stopped" in fpm_window.statusBar().currentMessage() or "stopped" in console(fpm_window)
+
+
+SLOW = """\
+program {name}
+  print '(a)', '{name} starting'
+  call execute_command_line('sleep 1')
+  print '(a)', '{name} done'
+end program {name}
+"""
+
+
+def test_tests_in_parallel(qtbot, fpm_window, fpm_project):
+    for name in ("check_slow1", "check_slow2"):
+        (fpm_project / f"test/{name}.f90").write_text(SLOW.format(name=name))
+    fpm_window.test_jobs_spin.setValue(4)
+    fpm_window.run_tests()
+    monitor = fpm_window.test_monitor
+    qtbot.waitUntil(lambda: sum(t.status == "Running" for t in monitor.tests) >= 2, timeout=120_000)
+    assert fpm_window.busy() and fpm_window.parallel_tests is not None
+    wait_idle(qtbot, fpm_window)
+    statuses = {t.name: t.status for t in monitor.tests}
+    assert statuses == {"check_add": PASSED, "check_fail": FAILED_T, "check_slow1": PASSED, "check_slow2": PASSED}
+    slow1, slow2 = monitor.by_name["check_slow1"], monitor.by_name["check_slow2"]
+    assert slow1.started < slow2.finished and slow2.started < slow1.finished  # (at the same time)
+    assert slow1.output == ["check_slow1 starting", "check_slow1 done"]  # (only its own)
+    assert monitor.by_name["check_fail"].exit_code != 0
+    text = console(fpm_window)
+    for name in ("check_slow1", "check_slow2"):  # (each test's output in one piece)
+        block = text[text.index(f"── {name} · passed"):]
+        assert block.split("\n")[1:3] == [f"{name} starting", f"{name} done"]
+    assert "── check_fail · failed" in text and "@@vibefpm" not in text
+    assert "2 of 4 failed" not in fpm_window.statusBar().currentMessage()
+    assert "1 of 4 failed" in fpm_window.statusBar().currentMessage()
+    fpm_window.show_test_output("check_slow2")
+    assert fpm_window.test_output.toPlainText().strip() == "check_slow2 starting\ncheck_slow2 done"
+    assert monitor.durations()["check_slow1"] >= 1
+
+
+def test_stop_tests_in_parallel(qtbot, fpm_window, fpm_project):
+    (fpm_project / "test/check_slow.f90").write_text(
+        "program check_slow\n  call execute_command_line('sleep 30')\nend program check_slow\n")
+    fpm_window.test_jobs_spin.setValue(2)
+    fpm_window.target_edit.setText("check_slow")
+    fpm_window.run_tests()
+    monitor = fpm_window.test_monitor
+    qtbot.waitUntil(lambda: any(t.status == "Running" for t in monitor.tests), timeout=120_000)
+    fpm_window.stop()
+    wait_idle(qtbot, fpm_window, timeout=30_000)
+    assert monitor.tests[0].status == NOT_RUN
+    assert "stopped" in fpm_window.statusBar().currentMessage()
 
 
 def test_clean(qtbot, fpm_window, fpm_project, monkeypatch):
