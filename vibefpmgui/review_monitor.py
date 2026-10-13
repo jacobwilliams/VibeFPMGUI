@@ -24,6 +24,7 @@ from qtpy.QtGui import (
 from qtpy.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QButtonGroup,
     QCheckBox,
     QHBoxLayout,
     QHeaderView,
@@ -38,6 +39,8 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from .ai_edits import END_RE as EDIT_END_RE
+from .ai_edits import START_RE as EDIT_START_RE
 from .ai_review import CATEGORIES, Finding
 from .build_monitor import (
     PALETTES,
@@ -51,6 +54,7 @@ from .build_monitor import (
     panel_stylesheet,
     scaled,
 )
+from .edit_cards import EditList
 from .editor import monospace_font
 
 FINDING_LINE_RE = re.compile(r"\s*\**\s*LINES?\s*\d", re.IGNORECASE)  # (a finding in a chat answer)
@@ -135,13 +139,16 @@ class ReviewMonitor(SortableTable, QWidget):
     `stop_requested`. In the "explain" mode the table gives way to the
     explanation of one problem; in the "chat" mode, to the conversation
     (with the findings above it, if an answer has any). The box at the
-    bottom emits `chat_requested` with the question and whether to send the
-    open file along; New Chat emits `new_chat_requested`."""
+    bottom emits `chat_requested` with the question, whether to send the
+    open file along and the kind ("ask", or "edit": change the file, the
+    proposed edits shown as cards in `edit_list`); New Chat emits
+    `new_chat_requested`."""
 
     COLUMNS: ClassVar[list[str]] = ["LINE", "CATEGORY", "COMMENT"]
     finding_selected = Signal(int)
     stop_requested = Signal()
-    chat_requested = Signal(str, bool)  # question, send the open file along
+    chat_requested = Signal(str, bool, str)  # question, send the open file along, "ask" or "edit"
+    selection_cleared = Signal()
     new_chat_requested = Signal()
 
     def __init__(self, parent=None):
@@ -154,6 +161,7 @@ class ReviewMonitor(SortableTable, QWidget):
         self.mode = "review"  # or "explain", "chat"
         self.answer = ""     # the explanation (or the chat's latest answer) so far (Markdown)
         self.turns: list[tuple[str, str]] = []  # the chat so far: (question, answer)
+        self.context_note = ""  # how full the model's context is ("context 14k of 32k")
         self._started = 0.0
         self.is_light = True
         self.palette_colors = PALETTES["light"]
@@ -248,6 +256,22 @@ class ReviewMonitor(SortableTable, QWidget):
         self.asked: list[str] = []  # questions asked, oldest first (this run of the app only)
         self._recall = 0            # where Up/Down are in them (len(asked): the text being typed)
         self._draft = ""            # what was being typed before Up
+        self.chat_kind = "ask"
+        self.ask_button = QPushButton("Ask")
+        self.edit_button = QPushButton("Edit")
+        self.ask_button.setToolTip("Ask about Fortran, fpm or the open file")
+        self.edit_button.setToolTip("Ask for a change to the open file: you accept or reject each edit")
+        kinds = QButtonGroup(self)
+        for button, kind in ((self.ask_button, "ask"), (self.edit_button, "edit")):
+            button.setCheckable(True)
+            button.setObjectName("ChatKind")
+            kinds.addButton(button)
+            button.clicked.connect(lambda _=False, k=kind: self.set_chat_kind(k))
+        self.ask_button.setChecked(True)
+        self.selection_note = QPushButton()  # (Edit Selection with AI: which lines; click to drop)
+        self.selection_note.setToolTip("Only these lines are to change (click to drop the selection)")
+        self.selection_note.clicked.connect(lambda: (self.set_selection_note(""), self.selection_cleared.emit()))
+        self.selection_note.hide()
         self.chat_file_check = QCheckBox("Send the open file")
         self.chat_file_check.setChecked(True)
         self.chat_file_check.setToolTip("Send the file open in the editor along with the question, so the "
@@ -261,6 +285,10 @@ class ReviewMonitor(SortableTable, QWidget):
         self.new_chat_button.hide()
         chat_row = QHBoxLayout()
         chat_row.setSpacing(8)
+        chat_row.addWidget(self.ask_button)
+        chat_row.addWidget(self.edit_button)
+        chat_row.addSpacing(4)
+        chat_row.addWidget(self.selection_note)
         chat_row.addWidget(self.chat_edit, 1)
         chat_row.addWidget(self.chat_file_check)
         chat_row.addWidget(self.send_button)
@@ -276,6 +304,10 @@ class ReviewMonitor(SortableTable, QWidget):
         layout.addWidget(self.summary)
         layout.addWidget(self.question)
         layout.addWidget(self.explanation, 2)
+        self.edit_list = EditList()
+        self.edit_list.hide()
+        layout.addWidget(self.edit_list, 3)
+        self._layout = layout
         layout.addLayout(chat_row)
         self.question.hide()
         self.explanation.hide()
@@ -298,6 +330,11 @@ class ReviewMonitor(SortableTable, QWidget):
             chip.setStyleSheet(chip_stylesheet(pal, CATEGORY_COLORS[category]))
         self.empty.setStyleSheet(f"color: {pal['muted']};")
         self.subtitle.setStyleSheet(f"color: {pal['muted']};")
+        self.edit_list.set_palette(pal, self.is_light)
+        accent = "#1f6feb" if self.is_light else "#388bfd"
+        for button in (self.ask_button, self.edit_button):  # (which one is on)
+            button.setStyleSheet(f"QPushButton:checked {{ background: {accent}; color: white; "
+                                 f"border: 1px solid {accent}; border-radius: 5px; padding: 3px 12px; }}")
         self.table.viewport().update()
         self.progress.update()
 
@@ -325,6 +362,8 @@ class ReviewMonitor(SortableTable, QWidget):
         for widget in (self.explanation, self.copy_button):
             widget.setVisible(not review)
         self.new_chat_button.setVisible(chat)
+        if not chat:
+            self.edit_list.hide()
         if explain:
             for chip in self.chips.values():
                 chip.hide()
@@ -336,7 +375,35 @@ class ReviewMonitor(SortableTable, QWidget):
             if not self.asked or self.asked[-1] != question:
                 self.asked.append(question)
             self._recall, self._draft = len(self.asked), ""
-            self.chat_requested.emit(question, self.chat_file_check.isChecked())
+            self.chat_requested.emit(question, self.chat_file_check.isChecked(), self.chat_kind)
+
+    def set_chat_kind(self, kind: str):
+        """"ask" or "edit" (which always sends the open file)."""
+        self.chat_kind = kind
+        editing = kind == "edit"
+        (self.edit_button if editing else self.ask_button).setChecked(True)
+        if editing:
+            self._file_wanted = self.chat_file_check.isChecked()
+            self.chat_file_check.setChecked(True)
+        elif not self.chat_file_check.isEnabled():
+            self.chat_file_check.setChecked(getattr(self, "_file_wanted", True))
+        self.chat_file_check.setEnabled(not editing)
+        self.chat_edit.setPlaceholderText(
+            "Describe a change to the open file… (Return to send)" if editing
+            else "Ask the AI about Fortran, fpm or the open file… (Return to send)")
+        if not editing:
+            self.set_selection_note("")
+
+    def set_selection_note(self, text: str):
+        self.selection_note.setText(f"{text}  ✕" if text else "")
+        self.selection_note.setVisible(bool(text))
+
+    def show_edits(self, edits, file_text: str, name: str):
+        """The edits proposed in the latest answer, as cards."""
+        self.edit_list.show_edits(edits, file_text, name, monospace_font(editor=True).family())
+        self.edit_list.setVisible(self.mode == "chat" and bool(edits))
+        # (The cards are what's to act on: more room for them than for the talk.)
+        self._layout.setStretchFactor(self.explanation, 1 if edits else 2)
 
     def _recall_question(self, step: int) -> bool:
         """Up (-1) / Down (+1): the previous / next question asked, as in a
@@ -397,10 +464,36 @@ class ReviewMonitor(SortableTable, QWidget):
 
     def _chat_display(self) -> str:
         """The conversation as shown: the answers' "LINE n: …" lines each
-        on their own (Markdown would run them together), as a list."""
-        shown, fenced = [], False
-        for line in self.chat_markdown().split("\n"):
-            if line.lstrip().startswith("```"):
+        on their own (Markdown would run them together), as a list; and their
+        edit blocks as a pointer to their card (shown below)."""
+        return "\n\n---\n\n".join(f"**You:** {question}\n\n{self._answer_display(answer)}"
+                                    for question, answer in self.turns)
+
+    @staticmethod
+    def _answer_display(answer: str) -> str:
+        shown: list[str] = []
+        fenced = in_block = drop_fence = False
+        n = 0
+        for line in answer.split("\n"):
+            fence = line.lstrip().startswith("```")
+            if in_block:
+                if EDIT_END_RE.match(line):
+                    in_block = False
+                    shown[-1] = f"*✎ Edit {n}: see its card below.*"
+                continue
+            if EDIT_START_RE.match(line):
+                in_block, n = True, n + 1
+                if fenced and shown and shown[-1].lstrip().startswith("```"):  # (a fence just around it)
+                    shown.pop()
+                    fenced, drop_fence = False, True
+                shown.append(f"*✎ Writing edit {n}…*")
+                continue
+            if drop_fence and fence:  # (that fence's end)
+                drop_fence = False
+                continue
+            if line.strip():
+                drop_fence = False
+            if fence:
                 fenced = not fenced
             elif not fenced and FINDING_LINE_RE.match(line):
                 line = "- " + line.strip()
@@ -612,7 +705,8 @@ class ReviewMonitor(SortableTable, QWidget):
         elif self.mode == "chat":
             n = len(self.findings)
             found = f" · {n} finding{'s' * (n != 1)}" if n else ""
-            text = f"<b>Answer</b> {muted}{found} · {self._status}</span>" if self._status else ""
+            context = f" · {self.context_note}" if self.context_note else ""
+            text = f"<b>Answer</b> {muted}{found} · {self._status}{context}</span>" if self._status else ""
         elif self.findings or self._status:
             n = len(self.findings)
             text = f"<b>{n} finding{'s' * (n != 1)}</b> {muted}· {self._status}</span>"

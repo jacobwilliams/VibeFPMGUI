@@ -414,6 +414,7 @@ class CodeEditor(QPlainTextEdit):
     lint_fix_requested = Signal(object)  # a lint.LintIssue whose fix to apply (hover link or menu)
     word_added = Signal(str)  # "Add to Dictionary" (hover link or menu)
     explain_requested = Signal(int)  # right-click → Explain Error with AI, on this line (1-based)
+    edit_selection_requested = Signal()  # right-click → Edit Selection with AI
     typed = Signal(str)                # a key that changed the text (after it did; "\b" = Backspace)
     completion_chosen = Signal(object)  # Enter/Tab in the completion list
     cursors_changed = Signal()          # extra cursors added or removed (multiple cursors)
@@ -818,6 +819,13 @@ class CodeEditor(QPlainTextEdit):
             add = QAction(f"Add “{misspelled.word}” to Dictionary", menu)
             add.triggered.connect(lambda _=False, w=misspelled.word: self.word_added.emit(w))
             menu.insertAction(first, add)
+            menu.insertSeparator(first)
+        if self.textCursor().hasSelection():
+            first = menu.actions()[0] if menu.actions() else None
+            edit = QAction("Edit Selection with AI…", menu)
+            edit.setToolTip("Ask the local AI model to change the selected lines; you accept or reject each edit")
+            edit.triggered.connect(self.edit_selection_requested.emit)
+            menu.insertAction(first, edit)
             menu.insertSeparator(first)
         line = self.document().findBlock(spot).blockNumber() + 1
         if any(severity not in ("review", "remark") for severity, _ in self.markers.get(line, [])):
@@ -1345,6 +1353,44 @@ class CodeEditor(QPlainTextEdit):
                 break
             block = block.next()
         cursor.endEditBlock()
+
+    def _qt_position(self, text: str, offset: int) -> int:
+        """A position in the document for an offset in toPlainText() (Qt
+        counts characters beyond U+FFFF twice)."""
+        return len(text[:offset].encode("utf-16-le")) // 2
+
+    def replace_ranges(self, ranges: list[tuple[int, int, str]]):
+        """Replace (start, end, new text) ranges, given as offsets in
+        toPlainText(), as one step to undo."""
+        text = self.toPlainText()
+        cursor = QTextCursor(self.document())
+        cursor.beginEditBlock()
+        for start, end, new in sorted(ranges, key=lambda r: r[0], reverse=True):  # (from the end: offsets stay right)
+            cursor.setPosition(self._qt_position(text, start))
+            cursor.setPosition(self._qt_position(text, end), QTextCursor.KeepAnchor)
+            cursor.insertText(new)
+        cursor.endEditBlock()
+
+    def select_range(self, start: int, end: int):
+        """Select (and show) a range given as offsets in toPlainText()."""
+        text = self.toPlainText()
+        cursor = QTextCursor(self.document())
+        cursor.setPosition(self._qt_position(text, end))
+        cursor.setPosition(self._qt_position(text, start), QTextCursor.KeepAnchor)
+        self.setTextCursor(cursor)
+        self.centerCursor()
+
+    def selected_lines(self) -> tuple[int, int] | None:
+        """The first and last lines of the selection (1-based), if any; a
+        selection ending at the start of a line doesn't include that line."""
+        cursor = self.textCursor()
+        if not cursor.hasSelection():
+            return None
+        doc = self.document()
+        first = doc.findBlock(cursor.selectionStart()).blockNumber() + 1
+        end_block = doc.findBlock(cursor.selectionEnd())
+        last = end_block.blockNumber() + (0 if cursor.selectionEnd() == end_block.position() else 1)
+        return first, max(first, last)
 
     def go_to_line(self, line: int, select: bool = False):
         block = self.document().findBlockByNumber(max(0, line - 1))

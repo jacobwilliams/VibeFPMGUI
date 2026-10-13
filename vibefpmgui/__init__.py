@@ -98,6 +98,9 @@ menu item says "not found" and the feature is off; without fprettify the
 |---|---|
 | `vibefpmgui.ai_review` | Prompting a local model through Ollama and parsing its findings |
 | `vibefpmgui.review_monitor` | The *Review* tab (findings, an *Explain with AI* answer, or a chat) |
+| `vibefpmgui.ai_edits` | The AI's proposed edits (search/replace blocks): finding and applying them |
+| `vibefpmgui.ai_context` | What a chat sends the model, so it fits its context window |
+| `vibefpmgui.edit_cards` | The proposed edits as cards to accept or reject |
 
 **Shared helpers**
 

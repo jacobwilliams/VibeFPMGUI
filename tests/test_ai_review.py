@@ -25,7 +25,7 @@ SUMMARY: Mostly fine; one real problem with the counter.
 def part(text="", done=False, tokens=0):
     """A streamed piece of an Ollama chat answer."""
     return SimpleNamespace(message=SimpleNamespace(content=text), done=done, eval_count=tokens,
-                           total_duration=1_500_000_000 if done else 0)
+                           prompt_eval_count=900 if done else 0, total_duration=1_500_000_000 if done else 0)
 
 
 class FakeOllama:
@@ -100,6 +100,17 @@ def test_repeat_guard():
     assert guard.flush() == "the last line, no newline"
 
 
+def test_repeat_guard_lets_edits_and_code_repeat_lines():
+    guard = ai.RepeatGuard()
+    edit = ("<<<<<<< SEARCH\n    do i = 1, n\n      a(i) = 0.0\n=======\n    do i = 1, n\n"
+            "      a(i) = 1.0\n>>>>>>> REPLACE\n")
+    code = "```fortran\n    do i = 1, n\n```\n"
+    shown, stop = guard.feed(edit + edit + code + code)  # (the new text repeats the old's lines)
+    assert not stop and shown.count("do i = 1, n") == 6
+    _shown, stop = guard.feed("Some explanation of the change.\nSome explanation of the change.\n")
+    assert stop  # (a loop in the prose: still caught)
+
+
 def test_build_prompt_and_context():
     prompt = ai.build_prompt("a.f90", "Fortran", "line one\nline two\n", "bugs", [(2, "warning", "unused")])
     assert "Review this Fortran file: a.f90" in prompt and ai.FOCUS["bugs"] in prompt
@@ -132,7 +143,7 @@ def test_worker_streams_a_review(ollama):
     out = run_worker(ai.ReviewWorker(None, "m", "the prompt"))
     text, stats = out["finished"]
     assert text == ANSWER and "".join(out["chunks"]) == ANSWER
-    assert stats == {"tokens": 42, "seconds": 1.5}
+    assert stats == {"tokens": 42, "prompt_tokens": 900, "seconds": 1.5}
     chat = ollama.chats[0]
     assert chat["messages"][1]["content"] == "the prompt" and chat["options"]["num_ctx"] == 4096
 
@@ -500,7 +511,7 @@ def test_stop_a_chat_answer(qtbot, window, ollama):
     monitor.stop_button.click()
     qtbot.waitUntil(lambda: not monitor.running and window._ai_thread is None, timeout=10_000)
     assert "Stopped" in monitor.progress_label.text()
-    assert window._chat_history[-1]["role"] == "assistant"  # (what it wrote is kept)
+    assert window._turns[-1].answer  # (what it wrote is kept)
 
 
 def test_chat_while_busy_waits(qtbot, window, ollama):

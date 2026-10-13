@@ -277,6 +277,17 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   questions keep the conversation (*New Chat* starts over), and lines of the
   file an answer points to are listed and marked in the editor, as a
   review's findings are.
+  Switch the box to **Edit** (or use *AI → Edit with AI…*, ⌥⌘E, or
+  *Edit Selection with AI…* in the editor's right-click menu) to ask for a
+  change to the open file: the model proposes edits, each shown as a card
+  with a diff and **Accept** / **Reject** (and *Accept All*). Accepting
+  changes the editor's text, one step to undo; nothing is saved until you
+  save. An edit is found by its text, not line numbers, so it still applies
+  after other changes, and one that no longer matches says so instead of
+  landing in the wrong place. Long conversations stay within the model's
+  context: the file is sent again only when it changed, the oldest turns
+  are left out first, and big files are sent in part (the selection or the
+  procedure at the cursor, plus an outline).
   See [AI code review](#ai-code-review) below for setup and where models
   are stored.
 * *Build outputs* panel: what fpm keeps in `build/`, one card per
