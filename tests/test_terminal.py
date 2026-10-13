@@ -517,3 +517,26 @@ def test_input_the_shell_isnt_reading_doesnt_freeze_the_app(qtbot):
     assert not shell._write_notifier.isEnabled()
     shell._finish()
     os.close(read_end)
+
+
+def test_typing_repaints_only_the_rows_it_changes(qtbot, view):
+    """Output that doesn't scroll repaints only its rows and the cursor's (the
+    whole screen was repainted for every character)."""
+    view.resize(800, 400)
+    view.feed(b"$ ")
+    qtbot.wait(50)
+    updates = []
+    real = view.update
+    view.update = lambda *a: updates.append(a) or real(*a)
+    view.feed(b"l")  # (typed at the prompt, echoed)
+    qtbot.wait(50)
+    assert updates and all(len(a) == 4 for a in updates)  # (rectangles: rows, not everything)
+    assert len(updates) <= 2 and all(a[3] < 2 * view.cell_height + 4 for a in updates)
+    updates.clear()
+    view.feed(b"".join(b"line %d\r\n" % i for i in range(100)))  # (scrolls: every row moved)
+    qtbot.wait(50)
+    assert () in updates  # (the whole view)
+    updates.clear()
+    view._selection = ((0, 0), (1, 3))  # (a selection: drawn per row, with its columns)
+    assert view._row_selection(0, 80) == (0, 80) and view._row_selection(1, 80) == (0, 4)
+    assert view._row_selection(2, 80) is None

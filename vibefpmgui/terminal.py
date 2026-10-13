@@ -552,6 +552,8 @@ class TerminalView(QWidget):
         self._colors: dict[str, QColor] = {}
         self.set_colors(QColor("#1e1e1e"), QColor("#d4d4d4"), DARK)
         self.set_terminal_font(QFont("Menlo" if MAC else "Monospace"))
+        self._redraw_all = True     # (else only the rows the output changed: see _after_output)
+        self._cursor_drawn_at = 0   # the screen row the cursor was last drawn on
         self._repaint_timer = QTimer(self)  # (output in bursts: draw at most every few ms)
         self._repaint_timer.setSingleShot(True)
         self._repaint_timer.setInterval(10)
@@ -611,17 +613,35 @@ class TerminalView(QWidget):
         """Output from the shell."""
         before = len(self.screen.history)
         self.stream.feed(data)
+        added = len(self.screen.history) - before
+        if added:  # (lines scrolled into the scrollback: everything in view moved)
+            self._redraw_all = True
         if self._scroll:  # (reading the scrollback: keep the same lines in view)
-            added = len(self.screen.history) - before
             self._scroll = min(self._scroll + max(0, added), len(self.screen.history))
         if not self._repaint_timer.isActive():
             self._repaint_timer.start()
 
     def _after_output(self):
+        hscroll = self._hscroll
         self._update_scroll_bar()
         self.ensure_cursor_visible()
         self._update_hscroll_bar()
-        self.update()
+        if self._redraw_all or self._scroll or self._hscroll != hscroll:
+            self.update()  # (scrolled: every row in view is another)
+        else:
+            self._update_rows(set(self.screen.dirty))
+        self._redraw_all = False
+        self.screen.dirty.clear()
+
+    def _update_rows(self, rows: set[int]):
+        """Repaint only these screen rows (what the output changed), and the
+        cursor's old and new rows."""
+        cursor = self.screen.cursor.y
+        rows |= {cursor, self._cursor_drawn_at}
+        for row in rows:
+            if 0 <= row < self.screen.lines:
+                top = int(PADDING + row * self.cell_height)
+                self.update(0, top, self.width(), int(self.cell_height) + 2)
 
     # ------------------------------------------------- sideways (no wrap)
     def _used_columns(self) -> int:
@@ -751,11 +771,14 @@ class TerminalView(QWidget):
         parts = [self._line_text(l1, c1)] + [self._line_text(n) for n in range(l1 + 1, l2)]
         return "\n".join(parts + [self._line_text(l2, 0, c2 + 1)])
 
-    def _selected(self, n: int, x: int) -> bool:
+    def _row_selection(self, n: int, width: int) -> tuple[int, int] | None:
+        """The columns of line ``n`` that are selected, [start, end), or None."""
         if not self._selection:
-            return False
+            return None
         (l1, c1), (l2, c2) = sorted(self._selection)
-        return (l1, c1) <= (n, x) <= (l2, c2)
+        if not l1 <= n <= l2:
+            return None
+        return (c1 if n == l1 else 0), (c2 + 1 if n == l2 else width)
 
     # ---------------------------------------------------- Edit menu, clipboard
     def copy(self):
@@ -1014,19 +1037,20 @@ class TerminalView(QWidget):
             n = first + row
             line = self.line(n)
             width = min(len(line), screen.columns) if isinstance(line, list) else screen.columns
+            span = self._row_selection(n, width)  # (once per row: not per cell)
             y = PADDING + row * ch
             x = 0
             while x < width:
                 cell = line[x]
-                selected = self._selected(n, x)
+                selected = span is not None and span[0] <= x < span[1]
                 style = (cell.fg, cell.bg, cell.bold, cell.italics, cell.underscore,
                          cell.strikethrough, cell.reverse, selected)
                 start, chars = x, [cell.data]
                 x += 1
                 while x < width:  # (a run of cells drawn alike)
                     other = line[x]
-                    if (other.fg, other.bg, other.bold, other.italics, other.underscore,
-                            other.strikethrough, other.reverse, self._selected(n, x)) != style:
+                    if (other.fg, other.bg, other.bold, other.italics, other.underscore, other.strikethrough,
+                            other.reverse, span is not None and span[0] <= x < span[1]) != style:
                         break
                     chars.append(other.data)
                     x += 1
@@ -1065,6 +1089,7 @@ class TerminalView(QWidget):
 
     def _draw_cursor(self, painter, first):
         screen = self.screen
+        self._cursor_drawn_at = screen.cursor.y
         row = len(screen.history) + screen.cursor.y - first
         if screen.cursor.hidden or not 0 <= row < screen.lines:
             return

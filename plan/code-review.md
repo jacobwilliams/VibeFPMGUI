@@ -382,7 +382,15 @@ splitter sends dozens of resize events per second.
 *Fix:* debounce `_fit` with a ~50 ms single-shot timer during resizes, and
 consider a lower `SCROLLBACK`, or reflowing the scrollback lazily.
 
-### 2.9 Low — the terminal repaints every cell of every visible row
+### ~~2.9 Low — the terminal repaints every cell of every visible row~~
+
+> ✅ **Done.** Output that doesn't scroll repaints only the rows pyte marks
+> changed (`screen.dirty`) and the cursor's old and new rows; scrolling, the
+> scrollback view and sideways scrolling still repaint everything. The
+> selection is worked out once per row, not per cell. Typing 300 characters:
+> ≈750,000 cells drawn before, ≈49,000 now (CPU 1.2 s → 0.2 s); a scrolling
+> burst of output costs the same as before (every row moves).
+
 `TerminalView.paintEvent` (`terminal.py:977–1011`) walks every cell of
 every row in the dirty rectangle, calling `_selected()`, which sorts the
 selection, per cell. Output triggers a whole-widget `update()` at most every
