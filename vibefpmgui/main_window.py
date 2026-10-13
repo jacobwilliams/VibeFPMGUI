@@ -1685,7 +1685,7 @@ class MainWindow(QMainWindow):
         self.run_monitor.reset()
         self.stop_review()
         self._ai_editor = None
-        self._turns = []
+        self._forget()
         self.review_monitor.reset()
         self.show_panel(self.build_monitor)
 
@@ -3485,6 +3485,11 @@ class MainWindow(QMainWindow):
         self._token_ratio = 1.0  # measured tokens over estimated ones (see _chat_finished)
         self._model_contexts: dict[str, int | None] = {}  # each model's longest context, as Ollama says
         self._ai_entry: Entry | None = None  # the Review panel's entry for what's running (or last ran)
+        # What the model remembers starts over with New Chat, Clear or another
+        # project: a request started before (stopped, but still ending) mustn't
+        # add to it.
+        self._memory_generation = 0
+        self._request_generation = 0
         self._edit_selection: tuple[EditorTab, int, int] | None = None  # Edit Selection with AI: the lines
         self._asking_models = False
 
@@ -3660,6 +3665,7 @@ class MainWindow(QMainWindow):
     def _add_entry(self, entry: Entry) -> Entry:
         """A new entry in the Review panel's timeline, for what's starting."""
         self._ai_entry = entry
+        self._request_generation = self._memory_generation
         self.show_panel(self.review_monitor)
         if entry.kind not in ("ask", "edit"):
             self.review_monitor.context_note = ""
@@ -3668,6 +3674,8 @@ class MainWindow(QMainWindow):
     def _remember(self, entry: Entry, turn: ctx.Turn):
         """What the model was asked and answered: it's part of what later
         questions send (see ai_context)."""
+        if self._request_generation != self._memory_generation:
+            return  # (asked before New Chat, Clear or another project: forgotten)
         turn.answer, turn.edits = entry.answer, entry.edits
         entry.turn = turn
         self._turns.append(turn)
@@ -3774,15 +3782,42 @@ class MainWindow(QMainWindow):
         code = editor.editor.toPlainText()
         diagnostics = [(line, sev, msg) for line, notes in sorted(editor._compiler_markers.items())
                        for sev, msg in notes]
-        prompt = ai.build_prompt(editor.path.name, editor.highlighter.lexer.name, code,
-                                 self.ai_focus, diagnostics)
+        lines = ctx.file_lines(code)
+        options = self._answer_options()
+        cap = self._chat_context()
+        room = options["num_predict"] + (ai.REASONING_TOKENS if options["think"] else 0) \
+            if options["num_predict"] else ai.REASONING_TOKENS
+
+        def prompt_for(first: int, last: int) -> str:
+            return ai.build_prompt(editor.path.name, editor.highlighter.lexer.name, "\n".join(lines[first - 1:last]),
+                                   self.ai_focus, diagnostics, first, len(lines))
+
+        # The selection (two lines or more), or the whole file if it fits the
+        # model's context with room for the answer; else the procedure at the
+        # cursor. (Sent anyway, a file too long loses its start, instructions
+        # included: Ollama doesn't refuse, it drops what doesn't fit.)
+        first, last, why = 1, len(lines), ""
+        selection = editor.editor.selected_lines()
+        if selection is not None and selection[1] > selection[0]:
+            (first, last), why = selection, "the selection"
+        elif ctx.estimate_tokens(prompt_for(1, len(lines)) + ai.SYSTEM_PROMPT, self._token_ratio) + room \
+                > cap * 0.9:
+            first, last = ctx.window(lines, None, editor.editor.textCursor().blockNumber() + 1)
+            why = "the procedure at the cursor: the file is too long to review at once"
+        prompt = prompt_for(first, last)
+        entry = self._ai_entry
+        if why:
+            entry.where = f"{editor.path.name}:{first}–{last}"
+            entry.question = f"{entry.question} · {why}"
+            self.review_monitor.refresh(entry)
+        num_ctx = ai.context_for(ctx.estimate_tokens(prompt + ai.SYSTEM_PROMPT, self._token_ratio), cap, room)
         self.review_monitor.set_status("Thinking")
         self._show_single_output(f"AI review of {editor.path.name} ({self.ai_model})", "")
         self._review_text = ""
         self._review_keys = []
         self._review_code = code
         editor.clear_review()  # markers from an earlier review would be misleading
-        worker = ai.ReviewWorker(ai.DEFAULT_HOST, self.ai_model, prompt, **self._answer_options())
+        worker = ai.ReviewWorker(ai.DEFAULT_HOST, self.ai_model, prompt, num_ctx=num_ctx, **options)
         worker.chunk.connect(self._review_chunk)
         worker.finished.connect(self._review_finished)
         worker.failed.connect(self._review_failed)
@@ -3916,15 +3951,20 @@ class MainWindow(QMainWindow):
     def new_chat(self):
         """The model forgets everything so far (it stays in the timeline)."""
         self.stop_review()
-        self._turns = []
+        self._forget()
         self.review_monitor.add_divider()
         self.review_monitor.chat_edit.setFocus()
 
     def clear_ai_history(self):
         """Empty the timeline; the model forgets it too."""
         self.stop_review()
-        self._turns = []
+        self._forget()
         self.review_monitor.clear()
+
+    def _forget(self):
+        """The model forgets everything so far (what's still running too)."""
+        self._turns = []
+        self._memory_generation += 1
 
     def _chat_context(self) -> int:
         """The most context a chat asks for: the model's own limit, at most
@@ -4188,9 +4228,10 @@ class MainWindow(QMainWindow):
         max_line = editor.editor.blockCount() if editor in self.editors() else None
         findings, summary = ai.parse_findings(text, max_line)
         entry.findings, entry.summary = findings, summary
-        name = entry.where
+        name = editor.path.name if editor is not None else entry.where.split(":")[0]
         self._remember(entry, ctx.Turn(
-            f"Review {name}", f"Review my file {name} ({entry.question.lower()}): list the issues you find.",
+            f"Review {entry.where}", f"Review my file {entry.where} ({entry.question.lower()}): list the issues "
+            "you find.",
             ctx.file_attachment(name, self._review_code, numbers=True, context=self._chat_context(),
                                 ratio=self._token_ratio)))
         detail = f"{stats.get('seconds', 0):.1f} s · {self.ai_model}" if stats else self.ai_model

@@ -608,6 +608,13 @@ class ReviewMonitor(QWidget):
         layout.addWidget(self.scroll, 1)
         layout.addLayout(chat_row)
 
+        # While the model writes, the running entry is shown again at most
+        # this often (each time is the whole answer, as Markdown, its code
+        # highlighted: on every piece, a long answer froze the window).
+        self._render_timer = QTimer(self)
+        self._render_timer.setSingleShot(True)
+        self._render_timer.timeout.connect(self._render_current)
+        self._render_cost = 0.0  # seconds the last showing took
         self._timer = QTimer(self)
         self._timer.setInterval(50)
         self._timer.timeout.connect(self._update_label)
@@ -715,7 +722,20 @@ class ReviewMonitor(QWidget):
             self._status = word
             self._update_label()
         entry.answer += text
-        self.refresh(entry)
+        self._render_soon()
+
+    RENDER_INTERVAL = 0.15  # seconds, at least, between showings of the answer being written
+
+    def _render_soon(self):
+        if not self._render_timer.isActive():
+            # (Twice what the last showing took, if more: the window stays responsive.)
+            self._render_timer.start(int(1000 * max(self.RENDER_INTERVAL, 2 * self._render_cost)))
+
+    def _render_current(self):
+        if self.current is not None:
+            started = time.monotonic()
+            self.refresh(self.current)
+            self._render_cost = time.monotonic() - started
 
     def add_reasoning(self, text: str):
         """More of a thinking model's reasoning (before its answer)."""
@@ -727,12 +747,14 @@ class ReviewMonitor(QWidget):
             self._status = "Reasoning"
             self._update_label()
         entry.reasoning += text
-        self.refresh(entry)
+        self._render_soon()
 
     def finish(self, ok: bool, note: str = ""):
         """The running entry is done (or failed: ``note`` says why)."""
         entry = self.current
         self.current = None
+        self._render_timer.stop()  # (shown in full just below)
+        self._render_cost = 0.0
         self._timer.stop()
         self.stop_button.hide()
         self.progress.set(1.0, "ok" if ok else "failed")
@@ -752,6 +774,7 @@ class ReviewMonitor(QWidget):
         for widget in self.widgets:
             widget.deleteLater()
         self.entries, self.widgets, self.current = [], [], None
+        self._render_timer.stop()
         self._timer.stop()
         self.stop_button.hide()
         self.progress.set(0, "running")

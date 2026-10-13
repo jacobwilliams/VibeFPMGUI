@@ -746,3 +746,85 @@ def test_think_before_answering_and_answer_length(qtbot, window, ollama):
     assert window._answer_options(edit=True)["num_predict"] == max(4000, ai.EDIT_ANSWER_TOKENS)
     assert window.settings.value("ai_answer_tokens", type=int) == 4000
     assert window.settings.value("ai_think", type=bool) is False
+
+
+def test_a_long_answer_is_shown_in_steps_not_on_every_piece(qtbot):
+    from vibefpmgui.review_monitor import Entry, ReviewMonitor
+
+    monitor = ReviewMonitor()
+    qtbot.addWidget(monitor)
+    entry = monitor.add_entry(Entry("ask", "q"))
+    view = monitor.widget_for(entry).answer
+    renders = []
+    real = view.set_markdown
+    view.set_markdown = lambda text: (renders.append(len(text)), real(text))
+    for _ in range(200):
+        monitor.add_answer("word ")
+    assert len(renders) <= 1  # (not once a piece: the timer shows it)
+    qtbot.waitUntil(lambda: bool(renders) and renders[-1] >= len("word " * 200) - 1, timeout=2_000)
+    monitor.add_answer("the end")
+    monitor.finish(True, "done")
+    assert "the end" in view.toPlainText()  # (all of it, at the end)
+
+
+def big_module(procedures: int) -> str:
+    parts = ["module big", "  implicit none", "contains"]
+    for k in range(procedures):
+        parts += [f"  subroutine s{k}(x)", "    real, intent(inout) :: x"]
+        parts += [f"    x = x + {i}.0" for i in range(12)]
+        parts += [f"  end subroutine s{k}"]
+    return "\n".join(parts + ["end module big"]) + "\n"
+
+
+def test_a_file_too_long_is_reviewed_in_part(qtbot, window, project, ollama, monkeypatch):
+    path = project / "src/big.f90"
+    path.write_text(big_module(80))
+    editor = open_editor(window, path)
+    monkeypatch.setattr(window, "_chat_context", lambda: 4096)  # (a small model's context)
+    editor.editor.go_to_line(ctx_line(editor, "  subroutine s40(x)") + 3)
+    window.start_review()
+    wait_for_review(qtbot, window)
+    prompt = ollama.chats[-1]["messages"][1]["content"]
+    assert "Only lines" in prompt and "subroutine s40(x)" in prompt and "subroutine s5(x)" not in prompt
+    first = ctx_line(editor, "  subroutine s40(x)")
+    assert f"{first}|   subroutine s40(x)" in prompt  # (numbered as in the file)
+    entry = window._ai_entry
+    assert entry.where.startswith("big.f90:") and "too long" in entry.question
+    assert ollama.chats[-1]["options"]["num_ctx"] <= 4096
+
+
+def ctx_line(editor, text: str) -> int:
+    return editor.editor.toPlainText().split("\n").index(text) + 1
+
+
+def test_a_selection_is_reviewed_on_its_own(qtbot, window, project, ollama):
+    from qtpy.QtGui import QTextCursor
+
+    editor = open_editor(window, project / "src/foo.f90")
+    code = editor.editor
+    code.go_to_line(5)
+    cursor = code.textCursor()
+    cursor.movePosition(QTextCursor.Down, QTextCursor.KeepAnchor, 2)
+    cursor.movePosition(QTextCursor.EndOfBlock, QTextCursor.KeepAnchor)  # (lines 5–7)
+    code.setTextCursor(cursor)
+    window.start_review()
+    wait_for_review(qtbot, window)
+    prompt = ollama.chats[-1]["messages"][1]["content"]
+    assert "Only lines 5–7 of the file's 8" in prompt and "5|   subroutine bump()" in prompt
+    assert "module foo" not in prompt.split("Source")[1]
+    assert window._ai_entry.where == "foo.f90:5–7" and "selection" in window._ai_entry.question
+
+
+@pytest.mark.parametrize("reset", ["new_chat", "clear"])
+def test_an_answer_stopped_by_a_reset_is_forgotten(qtbot, window, ollama, reset):
+    ollama.endless = True
+    monitor = window.review_monitor
+    monitor.chat_edit.setText("Tell me everything")
+    monitor.send_button.click()
+    qtbot.waitUntil(lambda: bool(window._ai_entry and window._ai_entry.answer), timeout=10_000)
+    (monitor.new_chat_button if reset == "new_chat" else monitor.clear_button).click()
+    qtbot.waitUntil(lambda: window._ai_thread is None, timeout=10_000)
+    assert window._turns == []  # (the partial answer came in after: not remembered)
+    ollama.endless = False
+    ask(qtbot, window, "Hello", with_file=False)
+    assert [m["role"] for m in ollama.chats[-1]["messages"]] == ["system", "user"]

@@ -263,7 +263,10 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   streams into the Output panel. *AI → Model* picks any installed Ollama
   model (default `qwen2.5-coder:7b`, downloaded on first use after asking);
   *AI → Focus* steers the review (bugs, modern Fortran style, performance,
-  documentation). *AI → Answer Length* sets how much the model may write
+  documentation). With text selected, only the selection is reviewed; a
+  file too long for the model's context is reviewed a procedure at a time
+  (the one at the cursor, which the entry says). *AI → Answer Length* sets
+  how much the model may write
   (1,500 tokens by default, up to no limit; edits get at least 4,096), and
   *AI → Think Before Answering* lets a thinking model (qwen3, deepseek-r1…)
   reason first: slower, with its reasoning kept in the entry (*Show

@@ -199,16 +199,24 @@ class RepeatGuard:
 
 
 def build_prompt(path: str, language: str, code: str, focus: str,
-                 diagnostics: list[tuple[int, str, str]]) -> str:
-    """The user message: instructions, compiler messages and numbered code."""
+                 diagnostics: list[tuple[int, str, str]], first_line: int = 1, total_lines: int = 0) -> str:
+    """The user message: instructions, compiler messages and numbered code.
+    ``code`` can be part of the file: its lines from ``first_line`` (of
+    ``total_lines``), numbered as in the file."""
     # Split only at newlines, like the editor: str.splitlines() would also
     # split at form feeds, U+2028 etc. and shift every later line number.
     lines = code.split("\n")
     if len(lines) > 1 and lines[-1] == "":
         lines.pop()  # a final newline doesn't start another line
-    width = len(str(len(lines)))
-    numbered = "\n".join(f"{i:>{width}}| {line}" for i, line in enumerate(lines, 1))
+    last_line = first_line + len(lines) - 1
+    width = len(str(last_line))
+    numbered = "\n".join(f"{i:>{width}}| {line}" for i, line in enumerate(lines, first_line))
     parts = [f"Review this {language} file: {path}", FOCUS.get(focus, FOCUS["general"])]
+    if total_lines and (first_line > 1 or last_line < total_lines):
+        parts.append(f"Only lines {first_line}–{last_line} of the file's {total_lines} are shown: review "
+                     "only these. Don't report problems that may come from code that isn't shown "
+                     "(declarations elsewhere in the file, other procedures).")
+        diagnostics = [d for d in diagnostics if first_line <= d[0] <= last_line]
     if diagnostics:
         notes = "\n".join(f"line {ln}: {sev}: {msg}" for ln, sev, msg in diagnostics[:40])
         parts.append("The compiler already reported these messages in the last build, and they "
