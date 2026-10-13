@@ -303,6 +303,7 @@ class ResultTree(QTreeWidget):
     """Results grouped by file (see the module's description)."""
 
     open_requested = Signal(str, int, int, int, int)  # file, line, column, end line, end column
+    keep_requested = Signal(str)  # a result double-clicked: its file, to keep open (not a preview)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -321,6 +322,8 @@ class ResultTree(QTreeWidget):
         self.setItemDelegate(_ResultDelegate(self))
         self.itemClicked.connect(self.open_item)
         self.itemActivated.connect(self.open_item)
+        self.itemDoubleClicked.connect(
+            lambda item, _c: (data := item.data(0, RESULT_ROLE)) and self.keep_requested.emit(str(data[0])))
 
     # ------------------------------------------------------------ rows
     def set_file(self, path: Path, matches: list[Match], folder: str = "", package: str = "",

@@ -110,3 +110,33 @@ def test_arrow_keys_preview_once_the_selection_rests(qtbot, window, project):
     QTest.keyClick(tree.view, Qt.Key_Up)
     qtbot.waitUntil(lambda: window.current_editor().path.name == "zz_b.f90", timeout=2_000)
     assert len(window.editors()) == 1  # (b's preview took c's place)
+
+
+def test_search_and_references_results_preview(window, project):
+    from pathlib import Path
+
+    from vibefpmgui.result_tree import make_match
+
+    foo, check, main = (str(project / p) for p in ("src/foo.f90", "test/check.f90", "app/main.f90"))
+    window.open_file(main, force_editor=True)  # (open for real)
+    window.search_panel.open_requested.emit(foo, 2, 2, 2, 9)  # (a result clicked)
+    editor = window.current_editor()
+    assert editor.path.name == "foo.f90" and editor is window._preview and italic(window, editor) == "foo.f90"
+    assert editor.editor.textCursor().selectedText() == "integer"  # (the match, selected)
+    window.references_panel.open_requested.emit(check, 1, 0, 1, 7)  # (the next one: in its place)
+    assert editor not in window.editors() and window.current_editor().path.name == "check.f90"
+    window.search_panel.open_requested.emit(main, 1, 0, 1, 7)  # (open already: shown as it is)
+    assert window.current_editor().path.name == "main.f90" and italic(window, window.current_editor()) is None
+
+    tree = window.search_panel.tree  # (double-clicked: kept open)
+    row = tree.set_file(Path(check).resolve(), [make_match("program check", 1, 0, 1, 7)])
+    tree.itemClicked.emit(row.child(0), 0)
+    assert window.current_editor() is window._preview
+    tree.itemDoubleClicked.emit(row.child(0), 0)
+    kept = window.current_editor()
+    assert kept.path.name == "check.f90" and window._preview is not kept and italic(window, kept) is None
+
+
+def test_problems_still_open_files_for_real(window, project):
+    window.problems_panel.open_requested.emit(str(project / "src/foo.f90"), 2, 0, 2, 3)
+    assert window.current_editor().path.name == "foo.f90" and window._preview is None

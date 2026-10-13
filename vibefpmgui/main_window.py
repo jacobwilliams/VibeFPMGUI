@@ -710,10 +710,13 @@ class MainWindow(QMainWindow):
         monitor.reject_all_requested.connect(self.reject_all_edits)
         monitor.edit_clicked.connect(self.show_edit)
         self.references_panel = ReferencesPanel()
-        self.references_panel.open_requested.connect(self._open_search_match)
+        # (A result clicked: its file in the preview tab, unless it's open; double-clicked: kept open.)
+        self.references_panel.open_requested.connect(lambda *match: self._open_search_match(*match, preview=True))
+        self.references_panel.keep_requested.connect(self._keep_open)
         self.search_panel = SearchPanel(self.settings)
         self.search_panel.provider = self._search_sources
-        self.search_panel.open_requested.connect(self._open_search_match)
+        self.search_panel.open_requested.connect(lambda *match: self._open_search_match(*match, preview=True))
+        self.search_panel.keep_requested.connect(self._keep_open)
         self.search_panel.replace_requested.connect(self._replace_in_files)
         self.problems_panel = ProblemsPanel(self.settings)
         self.problems_panel.open_requested.connect(self._open_search_match)
@@ -2108,9 +2111,11 @@ class MainWindow(QMainWindow):
         folder, package = file_labels(editor.path, root_for(editor.path, roots), project_dir)
         self.problems_panel.show_problems(editor.path, editor.problems(), folder, package)
 
-    def _open_search_match(self, path: str, line: int, column: int, end_line: int, end_column: int):
-        """Open a search result with the match selected."""
-        self.navigate_to(path, line, column)
+    def _open_search_match(self, path: str, line: int, column: int, end_line: int, end_column: int,
+                           preview: bool = False):
+        """Open a search result with the match selected (``preview``: in the
+        preview tab, if the file isn't open already)."""
+        self.navigate_to(path, line, column, preview=preview)
         editor = self.current_editor()
         if editor is None or editor.path != Path(path).resolve():
             return
@@ -2178,15 +2183,16 @@ class MainWindow(QMainWindow):
         cursor = editor.editor.textCursor()
         return str(editor.path), cursor.blockNumber() + 1, cursor.positionInBlock()
 
-    def navigate_to(self, path: str, line: int, column: int, record: bool = True):
+    def navigate_to(self, path: str, line: int, column: int, record: bool = True, preview: bool = False):
         """Open a file at a line and column (Go to Definition / Symbol);
-        Go Back returns to where this was called from."""
+        Go Back returns to where this was called from. ``preview``: in the
+        preview tab, if it isn't open already (see preview_file)."""
         here = self._location()
         if record and here is not None and here != (path, line, column):
             self._back.append(here)
             del self._back[:-100]
             self._forward.clear()
-        self.open_file(path, force_editor=True)
+        self.open_file(path, force_editor=True, preview=preview)
         editor = self.current_editor()
         if editor is not None and editor.path == Path(path).resolve():
             editor.editor.go_to_position(line, column)
@@ -2302,6 +2308,12 @@ class MainWindow(QMainWindow):
 
     def _preview_editor(self) -> EditorTab | None:
         return self._preview if self._preview in self.editors() else None
+
+    def _keep_open(self, path: str):
+        """A file opened as a preview, kept open (a result double-clicked)."""
+        editor = next((e for e in self.editors() if e.path == Path(path).resolve()), None)
+        if editor is not None:
+            self._make_permanent(editor)
 
     def _make_permanent(self, editor):
         """A preview tab stays open from now on (its name no longer in italics)."""
