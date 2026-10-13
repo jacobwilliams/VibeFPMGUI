@@ -2603,7 +2603,7 @@ class MainWindow(QMainWindow):
         """Tick the current file's line ending in the menu."""
         editor = self.current_editor()
         for newline, action in self.line_ending_actions.items():
-            action.setChecked(editor is not None and editor.newline == newline)
+            action.setChecked(editor is not None and editor.newline == newline and not editor.mixed_newlines)
 
     def fix_lint_issues(self, editor: EditorTab, unsafe: bool):
         """Edit → Fix All … Issues: fortitude --fix on the editor's text (one

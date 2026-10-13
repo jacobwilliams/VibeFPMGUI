@@ -124,7 +124,8 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   *View → Indentation* chooses spaces or tab characters and the width
   (2, 3, 4 or 8; tabs in a file are shown that wide); the status line shows
   the setting. Files keep their line endings (LF or CRLF, shown in the
-  status line); *Edit → Convert Line Endings* changes the whole file to Unix
+  status line; a file with both says "mixed" and is saved with its most
+  common one); *Edit → Convert Line Endings* changes the whole file to Unix
   (LF) or Windows (CRLF) ones, saved with the next Save. Multiple cursors: ⌥/Alt-click adds a
   cursor (again to remove it); ⌘⇧/Ctrl+Shift-click adds one on every line
   from the cursor to the clicked line: in the same column, or, clicked in

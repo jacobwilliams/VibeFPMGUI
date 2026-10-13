@@ -89,6 +89,7 @@ def close_window(window):
     for editor in window.editors():
         editor.editor.document().setModified(False)
         editor._disk_newline = editor.newline  # (converted line endings are unsaved too)
+        editor._disk_mixed = editor.mixed_newlines
     window.close()
 
 

@@ -200,7 +200,14 @@ of hard-to-reproduce bugs.
 (`QApplication.activeModalWidget() is None`), or show a non-modal bar in the
 tab ("Changed on disk — Reload / Keep mine"), as VS Code does.
 
-### 1.11 Low — files with mixed line endings are normalised on save
+### ~~1.11 Low — files with mixed line endings are normalised on save~~
+
+> ✅ **Done.** The most common line ending wins (`editor.line_endings`): a
+> mostly-LF file with one stray CRLF stays LF, so saving changes that one line,
+> not all of them. A mixed file says so: "LF (mixed)" in the status line, with a
+> tooltip on what saving does, and *Convert Line Endings* ticks neither until
+> one is chosen. Choosing one (even the common one) counts as an unsaved change.
+
 `EditorTab._read` (`editor.py:2059–2068`) sets `newline = "\r\n"` if the
 file contains *any* `\r\n`, and saving then writes `\r\n` everywhere. A file
 with mixed endings gets every line changed in git.

@@ -199,6 +199,17 @@ def line_changes(opened: str, saved: str, current: str) -> tuple[dict[int, str],
     return marks, deletions
 
 
+def line_endings(text: str) -> tuple[str, bool]:
+    """(the line end most lines of a file's text have: "\\n" or "\\r\\n",
+    whether it has more than one kind). Old Mac line ends (a lone "\\r") count
+    as another kind: Qt reads them as line breaks, saved as the common one."""
+    crlf = text.count("\r\n")
+    lone_cr = text.count("\r") - crlf
+    lf = text.count("\n") - crlf
+    kinds = sum(1 for n in (crlf, lone_cr, lf) if n)
+    return ("\r\n" if crlf > lf else "\n"), kinds > 1
+
+
 class HoverPopup(QFrame):
     """A tooltip-like popup for hover information that can scroll: fortls's
     answer for a long declaration or doc comment can be taller than the
@@ -1593,6 +1604,8 @@ class EditorTab(QWidget):
         self.encoding = "utf-8"
         self.newline = "\n"
         self._disk_newline = "\n"  # the line end of the file as saved (see is_dirty)
+        self.mixed_newlines = False  # the file has both LF and CRLF (or old Mac CR) line ends (see line_endings)
+        self._disk_mixed = False
         self._disk_text = ""
         self._compiler_markers: dict[int, list[tuple[str, str]]] = {}
         self._review_markers: dict[int, list[tuple[str, str]]] = {}
@@ -2230,19 +2243,21 @@ class EditorTab(QWidget):
         except OSError:
             return False
 
-    def _read(self) -> tuple[str, str, str]:
-        """(text with "\\n" line ends, encoding, line end) of the file on disk."""
+    def _read(self) -> tuple[str, str, str, bool]:
+        """(text with "\\n" line ends, encoding, line end, whether the line
+        ends are mixed) of the file on disk (see line_endings)."""
         raw = self.path.read_bytes()
         try:
             text, encoding = raw.decode("utf-8"), "utf-8"
         except UnicodeDecodeError:
             text, encoding = raw.decode("latin-1"), "latin-1"
-        newline = "\r\n" if "\r\n" in text else "\n"
-        return text.replace("\r\n", "\n"), encoding, newline
+        newline, mixed = line_endings(text)
+        return text.replace("\r\n", "\n"), encoding, newline, mixed
 
     def load(self):
-        text, self.encoding, self.newline = self._read()
+        text, self.encoding, self.newline, self.mixed_newlines = self._read()
         self._disk_newline = self.newline  # (a converted file is unsaved: see is_dirty)
+        self._disk_mixed = self.mixed_newlines
         self._disk_text = text
         self._opened_text = text  # (the change bars compare with this and the saved text)
         self.editor.setPlainText(text)
@@ -2258,16 +2273,18 @@ class EditorTab(QWidget):
 
     def is_dirty(self) -> bool:
         """Unsaved changes: to the text, or to its line endings (Convert Line Endings)."""
-        return self.editor.document().isModified() or self.newline != self._disk_newline
+        return (self.editor.document().isModified() or self.newline != self._disk_newline
+                or self._disk_mixed != self.mixed_newlines)
 
     def convert_line_endings(self, newline: str) -> bool:
         """Edit → Convert Line Endings: the file is saved with ``newline``
         ("\\n" Unix, "\\r\\n" Windows) at every line end (a file with mixed
         ones, or old Mac ones, which Qt reads as line breaks, gets the same
         everywhere). False if it already has them."""
-        if newline == self.newline:
+        if newline == self.newline and not self.mixed_newlines:
             return False
         self.newline = newline
+        self.mixed_newlines = False  # (all the same from the next save)
         self.dirty_changed.emit(self.is_dirty())
         self._update_status()
         return True
@@ -2286,6 +2303,7 @@ class EditorTab(QWidget):
             return False
         self._disk_text = text
         self._disk_newline = self.newline
+        self.mixed_newlines = self._disk_mixed = False  # (saved: every line ends the same way now)
         self._disk_change = None  # (the save replaced any other version on disk)
         self.disk_bar.hide()
         self.editor.document().setModified(False)
@@ -2350,19 +2368,19 @@ class EditorTab(QWidget):
             self._update_status("deleted on disk")
             return
         try:
-            text, encoding, newline = self._read()
+            text, encoding, newline, mixed = self._read()
         except OSError:
             return
         if text == self._disk_text:
             return  # e.g. our own save
         if self.is_dirty():
             # Unsaved edits: ask in the tab (see disk_bar), not with a dialog.
-            self._disk_change = (text, encoding, newline)
+            self._disk_change = (text, encoding, newline, mixed)
             self.disk_label.setText(f"<b>{html.escape(self.path.name)}</b> was changed by another program, "
                                     "and you have unsaved edits.")
             self.disk_bar.show()
             return
-        self._load_from_disk(text, encoding, newline)
+        self._load_from_disk(text, encoding, newline, mixed)
 
     def reload_from_disk(self):
         """The disk bar's Reload: the file as it is on disk, in place of the
@@ -2378,13 +2396,14 @@ class EditorTab(QWidget):
         change, self._disk_change = self._disk_change, None
         self.disk_bar.hide()
         if change is not None:
-            self._disk_text, _encoding, self._disk_newline = change
+            self._disk_text, _encoding, self._disk_newline, self._disk_mixed = change
 
-    def _load_from_disk(self, text: str, encoding: str, newline: str, undoable: bool = False):
+    def _load_from_disk(self, text: str, encoding: str, newline: str, mixed: bool, undoable: bool = False):
         cursor = self.editor.textCursor().position()
         scroll = self.editor.verticalScrollBar().value()
         self._disk_text = text
         self.encoding, self.newline, self._disk_newline = encoding, newline, newline
+        self.mixed_newlines = self._disk_mixed = mixed
         if undoable:  # (replacing the edits: one Undo step, so they can come back)
             whole = QTextCursor(self.editor.document())
             whole.select(QTextCursor.Document)
@@ -2417,7 +2436,7 @@ class EditorTab(QWidget):
         indent = f"Tabs: {self.editor.indent_width}" if self.editor.use_tabs else f"Spaces: {self.editor.indent_width}"
         parts = [f"Ln {cursor.blockNumber() + 1}, Col {cursor.positionInBlock() + 1}",
                  indent, self.highlighter.lexer.name, self.encoding.upper(),
-                 "CRLF" if self.newline == "\r\n" else "LF"]
+                 ("CRLF" if self.newline == "\r\n" else "LF") + (" (mixed)" if self.mixed_newlines else "")]
         if self._compiler_markers:
             notes = [s for ns in self._compiler_markers.values() for s, _ in ns]
             errors = sum(1 for s in notes if s in ("error", "fatal error"))
@@ -2443,6 +2462,10 @@ class EditorTab(QWidget):
         if note:
             parts.append(note)
         self.status.setText("<span style='color:gray'>" + " · ".join(parts) + "</span>")
+        kind = "CRLF" if self.newline == "\r\n" else "LF"
+        self.status.setToolTip(
+            f"This file has more than one kind of line ending: saving makes them all {kind}, the most "
+            "common one (Edit → Convert Line Endings to choose)" if self.mixed_newlines else "")
 
     def show_diagnostics(self, diagnostics):
         """Mark compiler messages (objects with .line, .severity, .message)."""
