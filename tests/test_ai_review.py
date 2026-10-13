@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 from conftest import open_editor
+from qtpy.QtCore import Qt
 from qtpy.QtWidgets import QMessageBox
 
 from vibefpmgui import ai_review as ai
@@ -180,24 +181,33 @@ def test_worker_cancel(ollama):
 
 # ----------------------------------------------------- in the main window
 def wait_for_review(qtbot, window):
-    qtbot.waitUntil(lambda: window._ai_thread is None and bool(window.review_monitor.rows()), timeout=10_000)
+    qtbot.waitUntil(lambda: window._ai_thread is None and window._ai_entry is not None
+                    and window._ai_entry.status != "running", timeout=10_000)
+
+
+def entries(window, kind=None):
+    return [e for e in window.review_monitor.entries if kind is None or e.kind == kind]
 
 
 def test_review_in_the_window(qtbot, window, project, ollama):
     editor = open_editor(window, project / "src/foo.f90")
     window.review_action.trigger()
     wait_for_review(qtbot, window)
-    rows = window.review_monitor.rows()
-    assert sorted((f.line, f.category) for f in rows) == [(2, "style"), (5, "performance"), (6, "bug")]
+    (entry,) = entries(window)
+    assert entry.kind == "review" and entry.status == "done" and entry.where == "foo.f90"
+    assert sorted((f.line, f.category) for f in entry.findings) == [(2, "style"), (5, "performance"), (6, "bug")]
+    assert entry.summary and window.review_monitor.widget_for(entry).findings.isVisibleTo(window.review_monitor)
     assert set(editor._review_markers) == {2, 5, 6}  # (a range is marked on its first line)
     assert editor._review_markers[6][0][1].startswith("AI (bug): count is incremented")
     assert window.panel_in_front(window.review_monitor)
     prompt = ollama.chats[0]["messages"][1]["content"]
     assert "foo.f90" in prompt and "module foo" in prompt
-    window._go_to_finding(6)
+    window.go_to_finding(entry, next(f for f in entry.findings if f.line == 6))
     assert editor.editor.textCursor().blockNumber() == 5
     window.clear_review_action.trigger()
     assert not editor._review_markers
+    window.show_findings_in_editor(entry)  # (the entry puts them back)
+    assert set(editor._review_markers) == {2, 5, 6}
 
 
 def test_review_downloads_a_missing_model(qtbot, window, project, ollama, monkeypatch):
@@ -346,19 +356,21 @@ def test_explain_a_compiler_error(qtbot, window, project, ollama):
     editor.show_diagnostics([SimpleNamespace(line=2, severity="error", message="Symbol 'count' has no type")])
     explain_from_the_problems(qtbot, window, editor)
     monitor = window.review_monitor
-    assert monitor.mode == "explain" and monitor.running and monitor.stop_button.isVisibleTo(monitor)
+    (entry,) = entries(window)
+    assert entry.kind == "explain" and monitor.running and monitor.stop_button.isVisibleTo(monitor)
     wait_for_explanation(qtbot, window)
     messages = ollama.chats[-1]["messages"]
     assert messages[0]["content"] == ai.EXPLAIN_SYSTEM_PROMPT  # (not the review's instructions)
     assert "Symbol 'count' has no type" in messages[1]["content"] and ">> 2|" in messages[1]["content"]
-    assert monitor.answer == ollama.answer and "Symbol 'count'" in monitor.question.text()
-    assert monitor.explanation.isVisibleTo(monitor) and not monitor.table.isVisibleTo(monitor)
-    assert not monitor.stop_button.isVisibleTo(monitor) and "Explanation" in monitor.progress_label.text()
+    widget = monitor.widget_for(entry)
+    assert entry.answer == ollama.answer and "Symbol 'count'" in widget.question.text()
+    assert "count is incremented" in widget.answer.toPlainText()
+    assert not monitor.stop_button.isVisibleTo(monitor) and entry.status == "done"
     assert not editor._review_markers  # (an explanation doesn't touch the review's markers)
-    window.start_review()  # (a review afterwards: the findings again)
-    qtbot.waitUntil(lambda: len(ollama.chats) == 2 and window._ai_thread is None and not monitor.running,
-                    timeout=10_000)
-    assert monitor.mode == "review" and monitor.table.isVisibleTo(monitor) and not monitor.explanation.isVisibleTo(monitor)
+    window.start_review()  # (a review afterwards: a new entry; the explanation stays)
+    wait_for_review(qtbot, window)
+    assert [e.kind for e in entries(window)] == ["explain", "review"]
+    assert not widget.expanded and widget.isVisibleTo(monitor) and entry.answer == ollama.answer
 
 
 def test_explain_from_the_editor_menu(qtbot, window, project, ollama):
@@ -390,7 +402,7 @@ def test_explain_only_what_can_be_explained_and_one_at_a_time(qtbot, window, pro
     window._ai_starting = True  # (a review getting ready)
     window.explain_problem(window.current_editor(), spelling._replace(source="build"))
     assert "busy" in window.statusBar().currentMessage() and not ollama.chats
-    assert window.review_monitor.mode == "review"  # (the panel is left alone)
+    assert not entries(window)  # (nothing added)
     window._ai_starting = False
 
 
@@ -405,12 +417,14 @@ def test_stop_an_explanation(qtbot, window, project, ollama):
     qtbot.waitUntil(lambda: bool(ollama.chats) and monitor.stop_button.isEnabled(), timeout=10_000)
     monitor.stop_button.click()
     wait_for_explanation(qtbot, window)
-    assert "Stopped" in monitor.progress_label.text() and not monitor.stop_button.isVisibleTo(monitor)
+    (entry,) = entries(window)
+    assert entry.status == "failed" and "Stopped" in entry.note and not monitor.stop_button.isVisibleTo(monitor)
+    assert "stopped" in monitor.widget_for(entry).title.text()
 
 
 def test_explaining_with_ollama_starting_and_a_download(qtbot, window, project, ollama, monkeypatch):
-    """Getting ready (starting Ollama, downloading the model) shows in the
-    explanation's status, and the panel ends with the explanation."""
+    """Getting ready (starting Ollama, downloading the model) shows as the
+    entry's status, and the entry ends with the explanation."""
     from types import SimpleNamespace
 
     calls = []
@@ -424,10 +438,9 @@ def test_explaining_with_ollama_starting_and_a_download(qtbot, window, project, 
     explain_from_the_problems(qtbot, window, editor)
     monitor = window.review_monitor
     qtbot.waitUntil(lambda: "Starting Ollama" in monitor.progress_label.text(), timeout=5_000)
-    assert monitor.mode == "explain"
     wait_for_explanation(qtbot, window)
-    assert ollama.pulled and monitor.mode == "explain" and monitor.answer == ollama.answer
-    assert "Explanation" in monitor.progress_label.text()
+    (entry,) = entries(window)  # (no entries of their own for getting ready)
+    assert ollama.pulled and entry.kind == "explain" and entry.answer == ollama.answer and entry.status == "done"
 
 
 def test_explain_declined_download_ends(qtbot, window, project, ollama, monkeypatch):
@@ -439,7 +452,8 @@ def test_explain_declined_download_ends(qtbot, window, project, ollama, monkeypa
     editor.show_diagnostics([SimpleNamespace(line=2, severity="error", message="Oops")])
     explain_from_the_problems(qtbot, window, editor)
     qtbot.waitUntil(lambda: not window.review_monitor.running, timeout=5_000)
-    assert "isn't downloaded" in window.review_monitor.progress_label.text()
+    (entry,) = entries(window)
+    assert entry.status == "failed" and "isn't downloaded" in entry.note
 
 
 # ------------------------------------------------------------------ chat
@@ -460,46 +474,71 @@ def test_chat_about_the_open_file(qtbot, window, project, ollama):
     assert messages[0]["content"] == ai.CHAT_SYSTEM_PROMPT
     assert messages[-1]["content"].startswith("Is this file OK?") and "foo.f90" in messages[-1]["content"]
     assert "\n1| module foo\n" in messages[-1]["content"]  # (the file, with numbered lines)
-    assert monitor.mode == "chat" and monitor.title.text() == "AI chat"
-    assert monitor.turns == [("Is this file OK?", ollama.answer)] and not monitor.chat_edit.text()
-    assert [(f.line, f.category) for f in monitor.findings] == [(2, "bug")]  # (in the list…)
-    assert monitor.table.isVisibleTo(monitor) and 2 in editor._review_markers  # (…and the editor)
-    assert "1 finding" in monitor.progress_label.text() and monitor.new_chat_button.isVisibleTo(monitor)
-    assert "**You:** Is this file OK?" in monitor.copy_text()
+    (first,) = entries(window)
+    assert first.kind == "ask" and first.question == "Is this file OK?" and first.answer == ollama.answer
+    assert not monitor.chat_edit.text()
+    assert [(f.line, f.category) for f in first.findings] == [(2, "bug")]  # (in the entry…)
+    assert 2 in editor._review_markers  # (…and the editor)
+    assert "1 finding" in monitor.widget_for(first).title.text()
+    assert "**You:** Is this file OK?" in first.markdown()
 
     ollama.answer = "Yes: `implicit none` is there.\n"
     ask(qtbot, window, "And implicit none?", with_file=False)
     messages = ollama.chats[-1]["messages"]
     assert [m["role"] for m in messages] == ["system", "user", "assistant", "user"]  # (the conversation)
     assert messages[-1]["content"] == "And implicit none?" and messages[2]["content"].startswith("Mostly fine")
-    assert len(monitor.turns) == 2 and "And implicit none?" in monitor.explanation.toPlainText()
-    assert "Mostly fine" in monitor.explanation.toPlainText()  # (the earlier turn still shown)
-    assert [f.line for f in monitor.findings] == [2]  # (an answer without findings: the earlier ones stay)
+    assert len(entries(window)) == 2 and first.findings  # (the earlier one, as it was)
 
-    monitor.new_chat_button.click()
-    assert monitor.turns == [] and not monitor.findings and not monitor.table.isVisibleTo(monitor)
+    monitor.new_chat_button.click()  # (a line in the timeline: forgotten, but still there)
+    assert [e.kind for e in monitor.entries] == ["ask", "ask", "divider"]
     ask(qtbot, window, "Hello", with_file=False)
     assert [m["role"] for m in ollama.chats[-1]["messages"]] == ["system", "user"]  # (forgotten)
+    monitor.clear_button.click()
+    assert not monitor.entries and not window._turns
 
 
 def test_chat_without_a_file_has_no_findings(qtbot, window, ollama):
     ollama.answer = "LINE 3: bug: no file was sent, so this isn't about any line.\n"
     ask(qtbot, window, "What is fpm?")
-    monitor = window.review_monitor
     assert ollama.chats[-1]["messages"][-1]["content"] == "What is fpm?"  # (no editor open: nothing sent)
-    assert not monitor.findings and not monitor.table.isVisibleTo(monitor)
+    (entry,) = entries(window)
+    assert not entry.findings and entry.path is None
 
 
-def test_a_review_or_explanation_starts_a_new_chat(qtbot, window, project, ollama):
+def test_reviews_and_explanations_are_part_of_the_conversation(qtbot, window, project, ollama):
     open_editor(window, project / "src/foo.f90")
-    ask(qtbot, window, "First question", with_file=False)
     window.start_review()
-    qtbot.waitUntil(lambda: len(ollama.chats) == 2 and window._ai_thread is None
-                    and not window.review_monitor.running, timeout=10_000)
-    assert window.review_monitor.mode == "review"
-    ask(qtbot, window, "Second question", with_file=False)
-    assert [m["role"] for m in ollama.chats[-1]["messages"]] == ["system", "user"]
-    assert window.review_monitor.turns == [("Second question", ollama.answer)]
+    wait_for_review(qtbot, window)
+    review_answer = ollama.answer
+    ollama.answer = "Because it's incremented twice.\n"
+    ask(qtbot, window, "Why is the line 6 finding a bug?")
+    messages = ollama.chats[-1]["messages"]
+    assert [m["role"] for m in messages] == ["system", "user", "assistant", "user"]
+    assert messages[1]["content"].startswith("Review my file foo.f90")
+    assert "1| module foo" in messages[1]["content"]  # (the file came with the review…)
+    assert messages[2]["content"] == review_answer
+    assert "is as I sent it above" in messages[-1]["content"]  # (…so it isn't sent again)
+    assert [e.kind for e in entries(window)] == ["review", "ask"]
+    assert entries(window)[0].findings  # (the review's findings: still there)
+
+
+def test_filters(qtbot, window, project, ollama):
+    open_editor(window, project / "src/foo.f90")
+    window.start_review()
+    wait_for_review(qtbot, window)
+    ask(qtbot, window, "Something?", with_file=False)
+    monitor = window.review_monitor
+    review, question = monitor.widgets
+    monitor.filter_buttons["review"].click()
+    assert review.isVisibleTo(monitor) and not question.isVisibleTo(monitor)
+    monitor.filter_buttons["chat"].click()
+    assert not review.isVisibleTo(monitor) and question.isVisibleTo(monitor)
+    monitor.filter_buttons["pending"].click()
+    assert not review.isVisibleTo(monitor) and not question.isVisibleTo(monitor)
+    monitor.filter_buttons["all"].click()
+    assert review.isVisibleTo(monitor) and question.isVisibleTo(monitor)
+    review.header.mousePressEvent(SimpleNamespace(button=lambda: Qt.LeftButton))  # (opened again)
+    assert review.expanded and review.body.isVisibleTo(monitor)
 
 
 def test_stop_a_chat_answer(qtbot, window, ollama):
@@ -507,10 +546,11 @@ def test_stop_a_chat_answer(qtbot, window, ollama):
     monitor = window.review_monitor
     monitor.chat_edit.setText("Tell me everything")
     monitor.send_button.click()
-    qtbot.waitUntil(lambda: bool(monitor.answer) and monitor.stop_button.isEnabled(), timeout=10_000)
+    qtbot.waitUntil(lambda: bool(window._ai_entry and window._ai_entry.answer)
+                    and monitor.stop_button.isEnabled(), timeout=10_000)
     monitor.stop_button.click()
     qtbot.waitUntil(lambda: not monitor.running and window._ai_thread is None, timeout=10_000)
-    assert "Stopped" in monitor.progress_label.text()
+    assert "Stopped" in monitor.progress_label.text() and window._ai_entry.status == "failed"
     assert window._turns[-1].answer  # (what it wrote is kept)
 
 
@@ -562,7 +602,7 @@ def test_no_sending_while_the_ai_is_busy(qtbot, window, ollama):
     assert not monitor.send_button.isEnabled()
     monitor.chat_edit.setText("Second, too soon")
     monitor.chat_edit.returnPressed.emit()
-    assert monitor.chat_edit.text() == "Second, too soon" and len(monitor.turns) == 1  # (kept, not lost)
+    assert monitor.chat_edit.text() == "Second, too soon" and len(monitor.entries) == 1  # (kept, not lost)
     monitor.stop_button.click()
     qtbot.waitUntil(lambda: window._ai_thread is None, timeout=10_000)
     assert monitor.send_button.isEnabled()

@@ -31,6 +31,11 @@ def ollama(monkeypatch):
     return fake
 
 
+def cards_of(window):
+    """The newest entry's edit cards."""
+    return window.review_monitor.widget_for(window._ai_entry).edit_list
+
+
 def ask_edit(qtbot, window, request):
     window.review_monitor.set_chat_kind("edit")
     ask(qtbot, window, request)
@@ -45,17 +50,18 @@ def test_edits_become_cards_to_accept_or_reject(qtbot, window, project, ollama):
     assert sent["messages"][0]["content"] == ai.EDIT_SYSTEM_PROMPT and sent["options"]["temperature"] == 0.1
     assert "  integer :: count_all\n" in sent["messages"][-1]["content"]  # (the file as it is: no numbers)
     assert sent["options"]["num_predict"] == ai.EDIT_ANSWER_TOKENS
-    cards = monitor.edit_list.cards
-    assert len(cards) == 2 and monitor.edit_list.isVisibleTo(monitor)
-    assert [(e.line, e.status) for e in window._edits] == [(3, ed.PENDING), (6, ed.PENDING)]
-    assert "✎ Edit 1" in monitor.explanation.toPlainText() and "SEARCH" not in monitor.explanation.toPlainText()
+    cards = cards_of(window).cards
+    assert len(cards) == 2 and cards_of(window).isVisibleTo(monitor)
+    assert [(e.line, e.status) for e in window._ai_entry.edits] == [(3, ed.PENDING), (6, ed.PENDING)]
+    shown = monitor.widget_for(window._ai_entry).answer.toPlainText()
+    assert "✎ Edit 1" in shown and "SEARCH" not in shown
     assert "- " in cards[0].diff.text() or "count_all" in cards[0].diff.text()
 
     cards[0].accept_button.click()
-    assert "count_total" in editor.editor.toPlainText() and window._edits[0].status == ed.APPLIED
+    assert "count_total" in editor.editor.toPlainText() and window._ai_entry.edits[0].status == ed.APPLIED
     assert editor.is_dirty() and not cards[0].accept_button.isVisibleTo(cards[0])
     cards[1].reject_button.click()
-    assert window._edits[1].status == ed.REJECTED and "count + 2" not in editor.editor.toPlainText()
+    assert window._ai_entry.edits[1].status == ed.REJECTED and "count + 2" not in editor.editor.toPlainText()
     editor.editor.undo()
     assert editor.editor.toPlainText() == original
 
@@ -64,11 +70,11 @@ def test_accept_all_is_one_undo_step(qtbot, window, project, ollama):
     editor = open_editor(window, project / "src/foo.f90")
     original = editor.editor.toPlainText()
     ask_edit(qtbot, window, "both")
-    window.review_monitor.edit_list.accept_all.click()
+    cards_of(window).accept_all.click()
     text = editor.editor.toPlainText()
     assert "count_total" in text and "count + 2" in text
-    assert all(e.status == ed.APPLIED for e in window._edits)
-    assert not window.review_monitor.edit_list.accept_all.isEnabled()
+    assert all(e.status == ed.APPLIED for e in window._ai_entry.edits)
+    assert not cards_of(window).accept_all.isEnabled()
     editor.editor.undo()
     assert editor.editor.toPlainText() == original
 
@@ -79,21 +85,21 @@ def test_an_edit_whose_code_changed_turns_stale(qtbot, window, project, ollama):
     code = editor.editor
     code.selectAll()
     code.insertPlainText(code.toPlainText().replace("count_all", "count_every"))  # (the user, meanwhile)
-    window.accept_edit(0)
-    assert window._edits[0].status == ed.STALE and "count_total" not in code.toPlainText()
-    assert "changed since" in window.review_monitor.edit_list.cards[0].state.text()
-    window.accept_edit(1)  # (its lines are as they were: still fine)
-    assert window._edits[1].status == ed.APPLIED
+    window.accept_edit(window._ai_entry, 0)
+    assert window._ai_entry.edits[0].status == ed.STALE and "count_total" not in code.toPlainText()
+    assert "changed since" in cards_of(window).cards[0].state.text()
+    window.accept_edit(window._ai_entry, 1)  # (its lines are as they were: still fine)
+    assert window._ai_entry.edits[1].status == ed.APPLIED
 
 
 def test_an_edit_that_does_not_match_says_why(qtbot, window, project, ollama):
     ollama.answer = block("  real :: nowhere", "  real :: here") + block("integer", "logical")
     open_editor(window, project / "src/foo.f90")
     ask_edit(qtbot, window, "something")
-    first, second = window._edits
+    first, second = window._ai_entry.edits
     assert first.status == ed.FAILED and first.problem.startswith("not found")
     assert second.status == ed.FAILED and "matches 2 places" in second.problem
-    card = window.review_monitor.edit_list.cards[0]
+    card = cards_of(window).cards[0]
     assert card.show_button.isVisibleTo(card) and not card.diff.isVisibleTo(card)
     card.show_button.click()
     assert card.diff.isVisibleTo(card) and "nowhere" in card.diff.text()
@@ -102,7 +108,7 @@ def test_an_edit_that_does_not_match_says_why(qtbot, window, project, ollama):
 def test_clicking_a_card_selects_its_lines(qtbot, window, project, ollama):
     editor = open_editor(window, project / "src/foo.f90")
     ask_edit(qtbot, window, "both")
-    window.review_monitor.edit_list.cards[1].clicked.emit()
+    cards_of(window).cards[1].clicked.emit()
     assert editor.editor.textCursor().selectedText() == "    count = count + 1 ! count"
 
 
@@ -135,7 +141,7 @@ def test_edit_selection_with_ai(qtbot, window, project, ollama):
 def test_follow_ups_send_the_file_once_per_version(qtbot, window, project, ollama):
     editor = open_editor(window, project / "src/foo.f90")
     ask_edit(qtbot, window, "first")
-    window.accept_edit(0)  # (a new version of the file)
+    window.accept_edit(window._ai_entry, 0)  # (a new version of the file)
     ollama.answer = "Sure.\n"
     ask(qtbot, window, "anything else?")
     messages = ollama.chats[-1]["messages"]
@@ -221,9 +227,38 @@ def test_fix_a_review_finding_with_ai(qtbot, window, project, ollama):
     monitor = window.review_monitor
     assert monitor.chat_kind == "edit"
     qtbot.waitUntil(lambda: not monitor.running and window._ai_thread is None, timeout=10_000)  # (sent at once)
-    assert monitor.turns[0][0] == ("Address this AI review finding (bug) at line 6: count is never reset. "
+    assert window._ai_entry.question == ("Address this AI review finding (bug) at line 6: count is never reset. "
                                    "Change only what's needed for it.")
-    assert monitor.asked[-1] == monitor.turns[0][0]  # (Up brings it back, as if typed)
+    assert monitor.asked[-1] == window._ai_entry.question  # (Up brings it back, as if typed)
     request = ollama.chats[-1]["messages"][-1]["content"]
     assert request.startswith("Address this AI review finding") and "Change only these lines (lines 6–6" in request
-    assert len(window._edits) == 2  # (the answer's edits, as cards)
+    assert len(window._ai_entry.edits) == 2  # (the answer's edits, as cards)
+
+
+def test_older_entries_keep_their_edits(qtbot, window, project, ollama):
+    """A newer question doesn't take an earlier answer's edits away: they
+    can still be accepted (found again in the file as it is then)."""
+    editor = open_editor(window, project / "src/foo.f90")
+    ask_edit(qtbot, window, "both")
+    first = window._ai_entry
+    ollama.answer = "Nothing else to change.\n"
+    ask(qtbot, window, "anything else?")
+    assert window._ai_entry is not first and len(window.review_monitor.entries) == 2
+    first_widget = window.review_monitor.widget_for(first)
+    assert not first_widget.expanded and "2 pending" in first_widget.title.text()
+    window.accept_all_edits(first)
+    assert "count_total" in editor.editor.toPlainText() and all(e.status == ed.APPLIED for e in first.edits)
+    assert "2 of 2 applied" in first_widget.title.text()
+
+
+def test_edits_of_a_closed_file_open_it(qtbot, window, project, ollama):
+    editor = open_editor(window, project / "src/foo.f90")
+    ask_edit(qtbot, window, "both")
+    entry = window._ai_entry
+    window.tabs.removeTab(window.tabs.indexOf(editor))  # (closed)
+    editor.deleteLater()
+    window._refresh_edits(entry)
+    assert all(e.status == ed.PENDING for e in entry.edits)  # (found in the file on disk)
+    window.accept_edit(entry, 0)
+    reopened = window.current_editor()
+    assert reopened is not None and "count_total" in reopened.editor.toPlainText()

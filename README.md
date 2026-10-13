@@ -268,25 +268,31 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   *Explain with AI* (right-click a compiler error, fortitude or fortls
   problem in the Problems panel, or a marked line in the editor) asks the
   same model what the message means, why it applies to that line and how to
-  fix it; the answer streams into the Review panel (with Stop and Copy)
-  while you keep editing.
-  The box at the bottom of the Review panel is a chat with the same model:
-  ask anything (Return to send; Up/Down bring back earlier questions), with
-  the open file sent along unless you
-  untick *Send the open file*. Answers stream in as Markdown, follow-up
-  questions keep the conversation (*New Chat* starts over), and lines of the
-  file an answer points to are listed and marked in the editor, as a
-  review's findings are.
+  fix it, while you keep editing.
+  The *Review* tab is a **timeline of everything the AI does**: each review,
+  explanation, question and edit is an entry, newest at the bottom, and
+  nothing replaces anything. Older entries fold to a one-line header (click
+  to open one); filters show only reviews, explanations, chat or entries
+  with edits still to accept. Everything in an entry stays usable: findings
+  jump to their line or get *Fix with AI…*, *Show in Editor* puts a
+  review's markers back, edits can still be accepted. The model remembers
+  the timeline too, so you can ask about a review's findings or an
+  explanation. *New Chat* draws a line (the model forgets what's above it;
+  it stays in view), *Clear* empties it; it's not saved when you quit.
+  The box at the bottom asks the model anything (Return to send; Up/Down
+  bring back earlier questions), with the open file sent along unless you
+  untick *Send the open file*; lines of the file an answer points to are
+  listed and marked in the editor, as a review's findings are.
   Switch the box to **Edit** (or use *AI → Edit with AI…*, ⌥⌘E, or
   *Edit Selection with AI…* in the editor's right-click menu, or *Fix with
-  AI…* on a problem in the Problems panel, which sends a request to
-  address it) to ask for a change to the open file: the model proposes edits, each shown as a card
-  with a diff and **Accept** / **Reject** (and *Accept All*). Accepting
+  AI…* on a problem or finding, which sends a request to address it) to ask
+  for a change to the open file: the model proposes edits, each shown as a
+  card with a diff and **Accept** / **Reject** (and *Accept All*). Accepting
   changes the editor's text, one step to undo; nothing is saved until you
   save. An edit is found by its text, not line numbers, so it still applies
   after other changes, and one that no longer matches says so instead of
   landing in the wrong place. Long conversations stay within the model's
-  context: the file is sent again only when it changed, the oldest turns
+  context: the file is sent again only when it changed, the oldest entries
   are left out first, and big files are sent in part (the selection or the
   procedure at the cursor, plus an outline).
   See [AI code review](#ai-code-review) below for setup and where models

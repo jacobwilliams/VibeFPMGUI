@@ -127,7 +127,8 @@ class EditCard(QFrame):
 
 
 class EditList(QWidget):
-    """The cards, and Accept All / Reject All."""
+    """The cards, and Accept All / Reject All (with ``scrolling`` False, as
+    tall as the cards: in something that scrolls itself)."""
 
     accept_requested = Signal(int)
     reject_requested = Signal(int)
@@ -135,7 +136,7 @@ class EditList(QWidget):
     reject_all_requested = Signal()
     edit_clicked = Signal(int)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, scrolling: bool = True):
         super().__init__(parent)
         self.cards: list[EditCard] = []
         self.is_light = True
@@ -146,11 +147,12 @@ class EditList(QWidget):
         self.cards_layout = QVBoxLayout(self.container)
         self.cards_layout.setContentsMargins(0, 0, 0, 0)
         self.cards_layout.setSpacing(6)
-        self.cards_layout.addStretch(1)
-        self.scroll = QScrollArea()
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setFrameShape(QFrame.NoFrame)
-        self.scroll.setWidget(self.container)
+        if scrolling:
+            self.cards_layout.addStretch(1)
+            self.scroll = QScrollArea()
+            self.scroll.setWidgetResizable(True)
+            self.scroll.setFrameShape(QFrame.NoFrame)
+            self.scroll.setWidget(self.container)
         self.summary = QLabel()
         self.accept_all = QPushButton("Accept All")
         self.accept_all.setToolTip("Make every pending edit (one step to undo)")
@@ -164,7 +166,7 @@ class EditList(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
-        layout.addWidget(self.scroll, 1)
+        layout.addWidget(self.scroll if scrolling else self.container, 1)
         layout.addLayout(footer)
 
     def set_palette(self, pal: dict, is_light: bool):
@@ -183,7 +185,7 @@ class EditList(QWidget):
             card.accept.connect(lambda i=i: self.accept_requested.emit(i))
             card.reject.connect(lambda i=i: self.reject_requested.emit(i))
             card.clicked.connect(lambda i=i: self.edit_clicked.emit(i))
-            self.cards_layout.insertWidget(self.cards_layout.count() - 1, card)
+            self.cards_layout.insertWidget(len(self.cards), card)
             self.cards.append(card)
         while len(self.cards) > len(edits):
             self.cards.pop().deleteLater()
