@@ -142,8 +142,9 @@ def test_follow_ups_send_the_file_once_per_version(qtbot, window, project, ollam
     assert [m["role"] for m in messages] == ["system", "user", "assistant", "user"]
     assert ctx.placeholder(ctx.Attachment("foo.f90", "", "")) in messages[1]["content"]  # (the old copy)
     assert "count_total" in messages[-1]["content"]  # (the new version, sent again)
-    assert "[edit at line 3: applied]" in messages[2]["content"] and "SEARCH" not in messages[2]["content"]
-    assert "[edit at line 6: pending]" in messages[2]["content"]
+    assert messages[2]["content"] == TWO_EDITS  # (the answer as the model wrote it)
+    assert messages[3]["content"].startswith("(About your previous answer's edits: edit 1, at line 3, was "
+                                             "applied; edit 2, at line 6, is not applied yet.)")
     ask(qtbot, window, "and now?")  # (unchanged since: not sent again)
     last = ollama.chats[-1]["messages"][-1]["content"]
     assert "count_total" not in last and "is as I sent it above" in last
@@ -199,3 +200,30 @@ def test_enclosing_procedure():
     start = lines.index("  subroutine s2(x)") + 1
     assert ctx.enclosing_procedure(lines, start + 4) == (start, start + 12)
     assert ctx.enclosing_procedure(lines, 2) == (2, 2)  # (not in one)
+
+
+def test_fix_a_review_finding_with_ai(qtbot, window, project, ollama):
+    from vibefpmgui.ai_review import Finding
+    from vibefpmgui.result_tree import RESULT_ROLE
+
+    editor = open_editor(window, project / "src/foo.f90")
+    editor.show_review([Finding(6, 6, "bug", "count is never reset.")])
+    window.show_panel(window.problems_panel)
+    tree = window.problems_panel.tree
+    qtbot.waitUntil(lambda: tree.topLevelItemCount() > 0, timeout=5_000)
+    file_item = tree.topLevelItem(0)
+    row = next(file_item.child(i) for i in range(file_item.childCount())
+               if file_item.child(i).data(0, RESULT_ROLE)[1].source == "review")
+    menu = window.problems_panel.context_menu(tree.visualItemRect(row).center())
+    action = next(a for a in menu.actions() if a.text() == "Fix with AI…")
+    assert action.isEnabled()
+    action.trigger()
+    monitor = window.review_monitor
+    assert monitor.chat_kind == "edit"
+    qtbot.waitUntil(lambda: not monitor.running and window._ai_thread is None, timeout=10_000)  # (sent at once)
+    assert monitor.turns[0][0] == ("Address this AI review finding (bug) at line 6: count is never reset. "
+                                   "Change only what's needed for it.")
+    assert monitor.asked[-1] == monitor.turns[0][0]  # (Up brings it back, as if typed)
+    request = ollama.chats[-1]["messages"][-1]["content"]
+    assert request.startswith("Address this AI review finding") and "Change only these lines (lines 6–6" in request
+    assert len(window._edits) == 2  # (the answer's edits, as cards)

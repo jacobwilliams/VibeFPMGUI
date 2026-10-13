@@ -5,8 +5,9 @@ the start, system prompt included).
 - **The file once per version.** A question carries the open file only if
   it changed since it was last sent; earlier copies in the history are
   replaced by a placeholder.
-- **Old answers shortened.** Edit blocks in earlier answers become
-  "[edit at line 30: applied]" (see `vibefpmgui.ai_edits.summarize`).
+- **What became of the edits** proposed in an answer is said at the start
+  of the next question (see `vibefpmgui.ai_edits.report`); answers are sent
+  back as the model wrote them.
 - **The oldest turns go first** when the estimate is over the budget (75%
   of the context, the rest left for the answer); the system prompt, the
   current file and the new question always stay.
@@ -21,7 +22,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from .ai_edits import Edit, summarize
+from .ai_edits import Edit, report
 
 BUDGET = 0.75           # of the context window, for what's sent (the rest: the answer)
 BIG_FILE_LINES = 600    # bigger files are sent in part
@@ -85,19 +86,26 @@ def _render(kept: list[Turn], turn: Turn, system: str) -> list[dict]:
     send = turn.attachment is not None and turn.attachment != last
     full = None if send else next((i for i in range(len(kept) - 1, -1, -1) if kept[i].attachment), None)
     messages = [{"role": "system", "content": system}]
+    previous: Turn | None = None
     for i, t in enumerate(kept):
-        user = t.request
+        user = _with_report(previous, t.request)
         if t.attachment is not None:
             user += "\n\n" + (t.attachment.shown if i == full else placeholder(t.attachment))
         messages.append({"role": "user", "content": user})
-        messages.append({"role": "assistant", "content": summarize(t.answer, t.edits)})
-    request = turn.request
+        messages.append({"role": "assistant", "content": t.answer})
+        previous = t
+    request = _with_report(previous, turn.request)
     if send:
         request += "\n\n" + turn.attachment.shown
     elif turn.attachment is not None:
         request += f"\n\n(My file, {turn.attachment.name}, is as I sent it above.)"
     messages.append({"role": "user", "content": request})
     return messages
+
+
+def _with_report(previous: Turn | None, request: str) -> str:
+    note = report(previous.edits) if previous is not None else ""
+    return f"{note}\n\n{request}" if note else request
 
 
 # ------------------------------------------------------------- the file

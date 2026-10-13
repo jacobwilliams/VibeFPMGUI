@@ -19,6 +19,13 @@ Accept) not yet.*
 > - Measured token counts correct the estimate only after a first question
 >   (on follow-ups Ollama reuses what it read and counts only the new part).
 > - Cards of an earlier answer stay when a newer answer has no edits.
+> - Old answers are **not** shortened (rule 2 of "Context window" below):
+>   with edits shortened to "[edit at line 30: applied]", qwen2.5-coder 7B
+>   copied the placeholder into its next answer instead of writing an edit
+>   (and copied notes put after its edits). Answers are sent back as
+>   written, and what became of their edits is said at the start of the next
+>   question ("About your previous answer's edits: edit 1, at line 5, was
+>   applied…"). Edit blocks are small; the file is what fills the context.
 
 ## Goal
 

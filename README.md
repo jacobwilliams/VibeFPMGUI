@@ -278,8 +278,9 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   file an answer points to are listed and marked in the editor, as a
   review's findings are.
   Switch the box to **Edit** (or use *AI → Edit with AI…*, ⌥⌘E, or
-  *Edit Selection with AI…* in the editor's right-click menu) to ask for a
-  change to the open file: the model proposes edits, each shown as a card
+  *Edit Selection with AI…* in the editor's right-click menu, or *Fix with
+  AI…* on a problem in the Problems panel, which sends a request to
+  address it) to ask for a change to the open file: the model proposes edits, each shown as a card
   with a diff and **Accept** / **Reject** (and *Accept All*). Accepting
   changes the editor's text, one step to undo; nothing is saved until you
   save. An edit is found by its text, not line numbers, so it still applies

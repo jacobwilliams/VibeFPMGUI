@@ -716,6 +716,7 @@ class MainWindow(QMainWindow):
         self.problems_panel.open_requested.connect(self._open_search_match)
         self.problems_panel.explain_requested.connect(
             lambda problem: self._with_editor(lambda e: self.explain_problem(e, problem)))
+        self.problems_panel.fix_requested.connect(self.fix_with_ai)
         # (A burst of changes, e.g. spelling and fortitude answering together: one update.)
         self._problems_timer = QTimer(self)
         self._problems_timer.setSingleShot(True)
@@ -2682,8 +2683,9 @@ class MainWindow(QMainWindow):
     def _update_review_actions(self):
         """AI review needs an editor tab in front (and no review running)."""
         has_editor = self.current_editor() is not None
-        self.review_action.setEnabled(has_editor and self._ai_thread is None
-                                      and not getattr(self, "_ai_starting", False))
+        busy = self._ai_thread is not None or getattr(self, "_ai_starting", False)
+        self.review_action.setEnabled(has_editor and not busy)
+        self.review_monitor.set_sending(not busy)  # (a question while it's answering: wait for it)
         self.clear_review_action.setEnabled(has_editor)
 
     def _build_edit_menu(self):
@@ -3816,8 +3818,38 @@ class MainWindow(QMainWindow):
         monitor = self.review_monitor
         self.show_panel(monitor)
         monitor.set_chat_kind("edit")
-        monitor.set_selection_note(f"lines {lines[0]}–{lines[1]}" if lines else "")
+        if lines:
+            monitor.set_selection_note(f"line {lines[0]}" if lines[0] == lines[1] else f"lines {lines[0]}–{lines[1]}")
+        else:
+            monitor.set_selection_note("")
         monitor.chat_edit.setFocus()
+
+    def fix_with_ai(self, path, problem):
+        """Problems → Fix with AI…: a request to address the problem, sent in
+        Edit mode for the problem's lines (shown in the chat box, as if
+        typed)."""
+        self.open_file(str(path), force_editor=True)
+        editor = next((e for e in self.editors() if e.path == Path(path).resolve()), None)
+        if editor is None:
+            return
+        first, last = problem.line, max(problem.line, problem.end_line)
+        self._edit_selection = (editor, first, last)
+        message = problem.message
+        what = {"build": "compiler message", "fortitude": f"fortitude issue {problem.badge}",
+                "fortls": "fortls message"}.get(problem.source, problem.source)
+        if problem.source == "review":  # ("AI (bug): …")
+            found = re.match(r"AI \((\w+)\):\s*(.*)", message, re.DOTALL)
+            what = f"AI review finding ({found.group(1)})" if found else "AI review finding"
+            message = found.group(2) if found else message
+        lines = f"line {first}" if first == last else f"lines {first}–{last}"
+        monitor = self.review_monitor
+        self.show_panel(monitor)
+        monitor.set_chat_kind("edit")
+        monitor.set_selection_note(lines)
+        monitor.chat_edit.setText(f"Address this {what} at {lines}: {message} "
+                                  "Change only what's needed for it.")
+        monitor.chat_edit.setFocus()
+        monitor.send_button.click()  # (if the AI is busy, the request stays in the box)
 
     def new_chat(self):
         self.stop_review()

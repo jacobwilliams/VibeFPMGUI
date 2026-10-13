@@ -550,3 +550,19 @@ def test_up_and_down_recall_earlier_questions(qtbot, window, ollama):
     assert monitor.asked == ["first", "second", "third"] and not edit.text()
     QTest.keyClick(edit, Qt.Key_Up)
     assert edit.text() == "third"
+
+
+def test_no_sending_while_the_ai_is_busy(qtbot, window, ollama):
+    ollama.endless = True
+    monitor = window.review_monitor
+    ask_text = "First"
+    monitor.chat_edit.setText(ask_text)
+    monitor.send_button.click()
+    qtbot.waitUntil(lambda: window._ai_thread is not None, timeout=10_000)
+    assert not monitor.send_button.isEnabled()
+    monitor.chat_edit.setText("Second, too soon")
+    monitor.chat_edit.returnPressed.emit()
+    assert monitor.chat_edit.text() == "Second, too soon" and len(monitor.turns) == 1  # (kept, not lost)
+    monitor.stop_button.click()
+    qtbot.waitUntil(lambda: window._ai_thread is None, timeout=10_000)
+    assert monitor.send_button.isEnabled()

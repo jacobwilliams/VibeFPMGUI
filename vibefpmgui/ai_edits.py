@@ -218,22 +218,13 @@ def apply_all(text: str, edits: list[Edit]) -> tuple[str, list[Edit]]:
     return text, made[::-1]
 
 
-def summarize(answer: str, edits: list[Edit]) -> str:
-    """An answer with its blocks shortened to what became of them, for the
-    conversation sent next time ("[edit at line 30: applied]"): the model
-    doesn't need the old text again."""
-    out, state, n = [], "", 0
-    for line in answer.replace("\r\n", "\n").split("\n"):
-        if state == "" and START_RE.match(line):
-            state = "in"
-            continue
-        if state == "in":
-            if END_RE.match(line):
-                edit = edits[n] if n < len(edits) else None
-                where = f" at line {edit.line}" if edit is not None and edit.line else ""
-                out.append(f"[edit{where}: {edit.status if edit is not None else 'not used'}]")
-                n += 1
-                state = ""
-            continue
-        out.append(line)
-    return "\n".join(out)
+def report(edits: list[Edit]) -> str:
+    """What became of an answer's edits, said in the next question ("edit 1,
+    at line 30, was applied; edit 2 was rejected"), so the model knows. (In
+    the user's words, not in the model's answer: small models copied notes
+    put there, or a placeholder for the edit, instead of writing an edit.)"""
+    words = {APPLIED: "was applied", PENDING: "is not applied yet", REJECTED: "was rejected by the user",
+             FAILED: "wasn't found in the file", STALE: "no longer matches the file"}
+    parts = [f"edit {i}{f', at line {e.line},' if e.line else ''} {words.get(e.status, 'was not used')}"
+             for i, e in enumerate(edits, 1)]
+    return f"(About your previous answer's edits: {'; '.join(parts)}.)" if parts else ""

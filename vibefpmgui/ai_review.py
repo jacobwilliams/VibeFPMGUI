@@ -267,7 +267,9 @@ Rules: change only what was asked; keep everything else exactly as it is (names,
 comments, formatting, free or fixed form). Copy the SEARCH lines exactly, enough of them \
 (usually 2 to 6) to be found in only one place in the file. Never write "..." or \
 "rest unchanged" inside a block. To delete lines, leave REPLACE empty. If the request is \
-unclear or unsafe, ask instead of editing."""
+unclear or unsafe, ask instead of editing. Earlier edits in the conversation are marked \
+applied, not applied yet, or rejected: answer the latest request, and don't propose a \
+rejected edit again."""
 
 EDIT_ANSWER_TOKENS = 4096  # (several blocks, each with the old and new text)
 MAX_CONTEXT = 32768  # the most asked of Ollama (memory: a 7B model at 32k already needs ~6 GB)

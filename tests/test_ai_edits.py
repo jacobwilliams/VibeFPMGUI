@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from vibefpmgui import ai_edits as ed
-from vibefpmgui.ai_edits import Edit, apply, apply_all, locate, parse_edits, summarize
+from vibefpmgui.ai_edits import Edit, apply, apply_all, locate, parse_edits, report
 
 CODE = """\
 module m
@@ -147,8 +147,9 @@ def test_apply_needs_a_located_edit():
         apply(CODE, edit("nowhere", "x"))
 
 
-def test_summarize_shortens_blocks():
-    answer = "Changing two things.\n" + block("a", "b") + "\nand\n" + block("c", "d") + "\nThat's all."
-    first, second = Edit("a", "b", line=4, status=ed.APPLIED), Edit("c", "d", line=9, status=ed.REJECTED)
-    assert summarize(answer, [first, second]) == (
-        "Changing two things.\n[edit at line 4: applied]\nand\n[edit at line 9: rejected]\nThat's all.")
+def test_report_says_what_became_of_the_edits():
+    edits = [Edit("a", "b", line=4, status=ed.APPLIED), Edit("c", "d", line=9, status=ed.REJECTED),
+             Edit("e", "f", status=ed.FAILED)]
+    assert report(edits) == ("(About your previous answer's edits: edit 1, at line 4, was applied; "
+                             "edit 2, at line 9, was rejected by the user; edit 3 wasn't found in the file.)")
+    assert report([]) == ""

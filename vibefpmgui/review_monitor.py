@@ -369,9 +369,15 @@ class ReviewMonitor(SortableTable, QWidget):
                 chip.hide()
 
     # ------------------------------------------------------------- chat
+    def set_sending(self, on: bool):
+        """Questions can be sent (not while the model is busy: the question
+        stays in the box until it's done)."""
+        self.send_button.setEnabled(on)
+        self.send_button.setToolTip("" if on else "The AI is busy: wait for its answer, or Stop it")
+
     def _send_chat(self):
         question = self.chat_edit.text().strip()
-        if question:
+        if question and self.send_button.isEnabled():
             if not self.asked or self.asked[-1] != question:
                 self.asked.append(question)
             self._recall, self._draft = len(self.asked), ""
