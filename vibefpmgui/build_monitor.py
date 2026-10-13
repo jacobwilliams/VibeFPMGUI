@@ -1130,11 +1130,6 @@ class BuildMonitor(SortableTable, QWidget):
             counts[t.status] += 1
         return counts
 
-    def summary_text(self) -> str:
-        """Plain-text summary (also used by tests)."""
-        counts = self.counts()
-        return " · ".join(f"{n} {s.lower()}" for s, n in counts.items() if n)
-
     def _update_header(self):
         pal = self.palette_colors
         parts = [self.description] if self.description else []

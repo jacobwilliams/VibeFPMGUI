@@ -585,9 +585,6 @@ class TestMonitor(SortableTable, QWidget):
             counts[t.status] += 1
         return counts
 
-    def summary_text(self) -> str:
-        return " · ".join(f"{n} {s.lower()}" for s, n in self.counts().items() if n)
-
     def set_filter(self, status: str | None):
         self.filter_status = status
         for s, chip in self.chips.items():

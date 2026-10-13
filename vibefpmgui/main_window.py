@@ -39,7 +39,6 @@ from qtpy.QtGui import (
     QFont,
     QFontDatabase,
     QFontMetrics,
-    QIcon,
     QKeySequence,
     QPalette,
     QTextCursor,
@@ -1573,7 +1572,7 @@ class MainWindow(QMainWindow):
         checks = dep_updates.git_dependencies(self.graph)
         if only:
             checks = [c for c in checks if c.name == only]
-        dialog = dep_updates.UpdatesDialog(checks, repo_web_url, commit_web_url, compare_web_url, self)
+        dialog = dep_updates.UpdatesDialog(checks, compare_web_url, self)
         dialog.update_tag_requested.connect(lambda c: self._update_dependency_tag(c, dialog))
         dialog.update_deps_requested.connect(lambda: (dialog.accept(), self.run_fpm(["update"], False, True)))
         if checks:
@@ -2378,17 +2377,13 @@ class MainWindow(QMainWindow):
         """The tab-list menu: every open tab (the current one ticked)."""
         menu.clear()
         current = self.tabs.currentIndex()
-        for index in range(self.tabs.count()):
-            widget = self.tabs.widget(index)
-            icon = self.project_tree.icon_for(widget.path) if isinstance(widget, EditorTab) else QIcon()
+        for index in range(self.tabs.count()):  # (every tab is a file open in the editor)
+            icon = self.project_tree.icon_for(self.tabs.widget(index).path)
             action = menu.addAction(icon, self.tabs.tabBar().tab_name(index))
             action.setCheckable(True)
             action.setChecked(index == current)
             action.setToolTip(self.tabs.tabToolTip(index))
             action.triggered.connect(lambda _checked=False, i=index: self.tabs.setCurrentIndex(i))
-            following = self.tabs.widget(index + 1)
-            if not isinstance(self.tabs.widget(index), EditorTab) and isinstance(following, EditorTab):
-                menu.addSeparator()  # the fixed tabs, then the open files
         menu.addSeparator()
         close_all = menu.addAction("Close All Editor Tabs")
         close_all.setToolTip("Close every file open in the editor (unsaved changes are asked about)")
@@ -2808,7 +2803,7 @@ class MainWindow(QMainWindow):
                 args += split_args(self.target_edit.text())
             extra = split_args(self.extra_edit.text())
             if sub[0] in ("test", "run"):
-                extra, _ = split_runner(extra)  # our runner wraps the user's  # the test runner is handled by run_tests
+                extra, _ = split_runner(extra)  # (the user's --runner: run inside ours, see _start_marked)
             args += extra
             if program_args and sub[0] in ("run", "test") and self.runner_args_edit.text().strip():
                 args += ["--"] + split_args(self.runner_args_edit.text())

@@ -194,12 +194,6 @@ def diagnostic_issues(diagnostics) -> list[LspIssue]:
 INTRINSIC_RE = re.compile(r"^\s*-{3,}[ \t]*\n\s*##[ \t]+(\w+)[ \t]*\n(?:\s*###[ \t]*\**Name\**[ \t]*\n)?")
 
 
-def intrinsic_name(text: str) -> str | None:
-    """The intrinsic's name if ``text`` is fortls's documentation of one."""
-    match = INTRINSIC_RE.match(text or "")
-    return match.group(1) if match else None
-
-
 def hover_text(contents) -> str:
     """The markdown text of a hover answer (MarkupContent, string or list)."""
     if isinstance(contents, dict):
@@ -227,7 +221,6 @@ def code_html(code: str, language: str = "fortran", style: str | None = None) ->
     from pygments.formatters import HtmlFormatter
     from pygments.lexers import FortranLexer, TextLexer
     from pygments.styles import get_style_by_name
-
 
     style = style or _current_style()
     lexer = FortranLexer() if language.lower().startswith("fortran") or not language else TextLexer()
@@ -367,7 +360,6 @@ class LspClient(QObject):
         self._ready = False
         self._queue: list[dict] = []        # sent once initialize has answered
         self._versions: dict[str, int] = {}  # open document uri -> version
-        self._stopping = False
 
     # ---------------------------------------------------------- lifecycle
     def is_running(self) -> bool:
@@ -389,7 +381,6 @@ class LspClient(QObject):
         process.finished.connect(self._process_finished)
         process.errorOccurred.connect(self._process_error)
         self.process = process
-        self._stopping = False
         process.start(program, self.args)
         self._send({"jsonrpc": "2.0", "id": self._new_id(self._initialized), "method": "initialize",
                     "params": {"processId": None, "rootUri": to_uri(root), "capabilities": {}}})
@@ -399,7 +390,6 @@ class LspClient(QObject):
         process, self.process = self.process, None
         self._reset()
         if process is not None:
-            self._stopping = True
             process.kill()
             process.waitForFinished(1000)
             process.deleteLater()

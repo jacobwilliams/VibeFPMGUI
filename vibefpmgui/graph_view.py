@@ -946,9 +946,6 @@ class DependencyGraphView(QWidget):
                 factor = 1 / (1.3 * px)
                 self.vb.scaleBy((factor, factor), center=rect.center())
 
-    def zoom(self, factor: float):
-        self.vb.scaleBy((1 / factor, 1 / factor))
-
     def export_image(self, filename: str) -> bool:
         """Save the whole diagram as PNG/JPG, or SVG if the name ends in .svg."""
         from pyqtgraph import exporters

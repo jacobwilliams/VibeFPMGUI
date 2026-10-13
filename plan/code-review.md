@@ -527,14 +527,28 @@ Many attributes first appear deep inside methods and are read with
 This makes the state of each object hard to see and hides typos. Declare
 them all in `__init__`; type checkers and readers both benefit.
 
-### 3.6 Dead code and leftovers
-- **The fixed-tab separator is dead.** `_fill_tab_list`
+### ~~3.6 Dead code and leftovers~~
+
+> ✅ **Done.** The three below, plus more dead code found with
+> [vulture](https://github.com/jendrikseipp/vulture):
+> - `summary_text` in the Build and Tests monitors (never called);
+> - `DependencyGraphView.zoom`;
+> - `LspClient._stopping` (set, never read);
+> - `UpdatesDialog`'s unused `web_url` and `commit_url` arguments;
+> - `ProjectTree._fill`'s unused `other_packages` argument;
+> - `dep_updates.set_tag` and `lsp.intrinsic_name`, which only the tests used:
+>   the tests now call `set_ref` and `INTRINSIC_RE`, what the app uses.
+>
+> Vulture's other reports are false alarms: names used by the tests, by
+> Pygments or pyte, or kept on purpose so PySide doesn't free a Qt object.
+
+- ~~**The fixed-tab separator is dead.**~~ ✅ Removed (every tab is a file now). `_fill_tab_list`
   (`main_window.py:2168–2170`) still adds a separator after "the fixed
   tabs", which were removed with the `fpm.toml` tab.
-- **A comment has two halves glued together.** `build_arguments`
+- ~~**A comment has two halves glued together.**~~ ✅ Rewritten. `build_arguments`
   (`main_window.py:2544`):
   `# our runner wraps the user's  # the test runner is handled by run_tests`.
-- **`lsp.code_html` has a stray blank line** inside the function
+- ~~**`lsp.code_html` has a stray blank line**~~ ✅ inside the function
   (`lsp.py:230–231`).
 
 ---

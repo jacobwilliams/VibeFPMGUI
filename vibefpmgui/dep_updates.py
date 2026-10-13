@@ -220,11 +220,6 @@ def check_dependency(check: DepCheck) -> DepCheck:
 
 
 # --------------------------------------------------------------- edit tags
-def set_tag(manifest: Path, name: str, old: str, new: str) -> bool:
-    """Change ``tag = "old"`` to ``tag = "new"`` for one dependency."""
-    return set_ref(manifest, name, "tag", old, "tag", new)
-
-
 def set_ref(manifest: Path, name: str, old_key: str, old: str, new_key: str, new: str) -> bool:
     """Change ``old_key = "old"`` to ``new_key = "new"`` (e.g. a ``rev`` pin
     to a ``tag``) for one dependency, leaving everything else in the file
@@ -318,11 +313,12 @@ class UpdatesDialog(QDialog):
 
     COLUMNS: ClassVar[list[str]] = ["Dependency", "Requested", "Current", "Newest", "Status", ""]
 
-    def __init__(self, checks: list[DepCheck], web_url, commit_url, compare_url, parent=None):
+    def __init__(self, checks: list[DepCheck], compare_url, parent=None):
+        """``compare_url(git, old, new)``: a web page comparing two commits (or None)."""
         super().__init__(parent)
         self.setWindowTitle("Dependency updates")
         self.checks = checks
-        self._web_url, self._commit_url, self._compare_url = web_url, commit_url, compare_url
+        self._compare_url = compare_url
         self.summary = QLabel()
         self.summary.setWordWrap(True)
         note = QLabel("<span style='color:gray'>Asks each repository for its tags and branches "

@@ -334,7 +334,7 @@ class ProjectTree(QWidget):
         deps_group = None
         for name, directory, is_root in packages:
             item = self._package_item(name, directory, is_root)
-            self._fill(item, directory, package_dirs - {directory.resolve()})
+            self._fill(item, directory)
             if is_root:
                 self.model.appendRow(item)
                 root_item = item
@@ -390,7 +390,7 @@ class ProjectTree(QWidget):
             item.setText(f"{name}  ({'local path' if kind == m.PATH else 'git'})" if kind else name)
         return item
 
-    def _fill(self, parent: QStandardItem, directory: Path, other_packages: set[Path]):
+    def _fill(self, parent: QStandardItem, directory: Path):
         """List one folder: subfolders first, then files. Subfolders are
         loaded when opened (see `_load`), so big trees stay fast."""
         parent.setData(str(directory), PATH_ROLE)

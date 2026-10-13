@@ -113,12 +113,12 @@ def test_set_ref_inline_and_table(tmp_path):
     manifest.write_text('name = "p"\n# keep this comment\n[dependencies]\n'
                         f'td = {{ git = "{URL}", tag = "v0.4.0" }}\n\n'
                         f'[dev-dependencies.other]\ngit = "{URL}"\nrev = "abcdef1"\n')
-    assert du.set_tag(manifest, "td", "v0.4.0", "v0.5.0")
+    assert du.set_ref(manifest, "td", "tag", "v0.4.0", "tag", "v0.5.0")
     assert du.set_ref(manifest, "other", "rev", "abcdef1", "tag", "v0.5.0")
     text = manifest.read_text()
     assert 'tag = "v0.5.0" }' in text and 'tag = "v0.5.0"\n' in text and "# keep this comment" in text
-    assert not du.set_tag(manifest, "td", "v9.9", "v1.0")  # (not there: nothing changed)
-    assert not du.set_tag(manifest, "nope", "v0.5.0", "v1.0")
+    assert not du.set_ref(manifest, "td", "tag", "v9.9", "tag", "v1.0")  # (not there: nothing changed)
+    assert not du.set_ref(manifest, "nope", "tag", "v0.5.0", "tag", "v1.0")
 
 
 def test_read_cache_revs(tmp_path):

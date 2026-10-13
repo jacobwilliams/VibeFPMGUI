@@ -49,7 +49,7 @@ def test_hover_info_for_code_and_intrinsics():
     assert lsp.hover_info("```fortran\nINTEGER, PARAMETER :: n = 3\n```").kind == "parameter"
     assert lsp.hover_info("```fortran\nMODULE foo\n```").kind == "module"
     manual = "-----\n## sum\n\n### **Name**\n\n**sum** - \\[ARRAY:REDUCTION\\] Sum the elements\n\nMore _text_."
-    assert lsp.intrinsic_name(manual) == "sum"
+    assert lsp.INTRINSIC_RE.match(manual).group(1) == "sum"
     info = lsp.hover_info([{"value": manual}])
     assert (info.kind, info.category, info.summary) == ("intrinsic", "ARRAY · REDUCTION", "Sum the elements")
     assert 'font-style:italic;">text</span>' in info.body_html  # (_text_: italics, not underlined)
