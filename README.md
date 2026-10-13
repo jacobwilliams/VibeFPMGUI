@@ -270,6 +270,12 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   same model what the message means, why it applies to that line and how to
   fix it; the answer streams into the Review panel (with Stop and Copy)
   while you keep editing.
+  The box at the bottom of the Review panel is a chat with the same model:
+  ask anything (Return to send), with the open file sent along unless you
+  untick *Send the open file*. Answers stream in as Markdown, follow-up
+  questions keep the conversation (*New Chat* starts over), and lines of the
+  file an answer points to are listed and marked in the editor, as a
+  review's findings are.
   See [AI code review](#ai-code-review) below for setup and where models
   are stored.
 * *Build outputs* panel: what fpm keeps in `build/`, one card per

@@ -97,7 +97,7 @@ menu item says "not found" and the feature is off; without fprettify the
 | Module | What it does |
 |---|---|
 | `vibefpmgui.ai_review` | Prompting a local model through Ollama and parsing its findings |
-| `vibefpmgui.review_monitor` | The *Review* tab (findings, or an *Explain with AI* answer) |
+| `vibefpmgui.review_monitor` | The *Review* tab (findings, an *Explain with AI* answer, or a chat) |
 
 **Shared helpers**
 

@@ -429,3 +429,82 @@ def test_explain_declined_download_ends(qtbot, window, project, ollama, monkeypa
     explain_from_the_problems(qtbot, window, editor)
     qtbot.waitUntil(lambda: not window.review_monitor.running, timeout=5_000)
     assert "isn't downloaded" in window.review_monitor.progress_label.text()
+
+
+# ------------------------------------------------------------------ chat
+def ask(qtbot, window, question, with_file=True):
+    monitor = window.review_monitor
+    monitor.chat_file_check.setChecked(with_file)
+    monitor.chat_edit.setText(question)
+    monitor.chat_edit.returnPressed.emit()
+    qtbot.waitUntil(lambda: not monitor.running and window._ai_thread is None, timeout=10_000)
+
+
+def test_chat_about_the_open_file(qtbot, window, project, ollama):
+    ollama.answer = "Mostly fine.\n\nLINE 2: bug: `x` is never set.\n\n```fortran\nx = 0\n```\n"
+    editor = open_editor(window, project / "src/foo.f90")
+    monitor = window.review_monitor
+    ask(qtbot, window, "Is this file OK?")
+    messages = ollama.chats[-1]["messages"]
+    assert messages[0]["content"] == ai.CHAT_SYSTEM_PROMPT
+    assert messages[-1]["content"].startswith("Is this file OK?") and "foo.f90" in messages[-1]["content"]
+    assert "\n1| module foo\n" in messages[-1]["content"]  # (the file, with numbered lines)
+    assert monitor.mode == "chat" and monitor.title.text() == "AI chat"
+    assert monitor.turns == [("Is this file OK?", ollama.answer)] and not monitor.chat_edit.text()
+    assert [(f.line, f.category) for f in monitor.findings] == [(2, "bug")]  # (in the list…)
+    assert monitor.table.isVisibleTo(monitor) and 2 in editor._review_markers  # (…and the editor)
+    assert "1 finding" in monitor.progress_label.text() and monitor.new_chat_button.isVisibleTo(monitor)
+    assert "**You:** Is this file OK?" in monitor.copy_text()
+
+    ollama.answer = "Yes: `implicit none` is there.\n"
+    ask(qtbot, window, "And implicit none?", with_file=False)
+    messages = ollama.chats[-1]["messages"]
+    assert [m["role"] for m in messages] == ["system", "user", "assistant", "user"]  # (the conversation)
+    assert messages[-1]["content"] == "And implicit none?" and messages[2]["content"].startswith("Mostly fine")
+    assert len(monitor.turns) == 2 and "And implicit none?" in monitor.explanation.toPlainText()
+    assert "Mostly fine" in monitor.explanation.toPlainText()  # (the earlier turn still shown)
+    assert [f.line for f in monitor.findings] == [2]  # (an answer without findings: the earlier ones stay)
+
+    monitor.new_chat_button.click()
+    assert monitor.turns == [] and not monitor.findings and not monitor.table.isVisibleTo(monitor)
+    ask(qtbot, window, "Hello", with_file=False)
+    assert [m["role"] for m in ollama.chats[-1]["messages"]] == ["system", "user"]  # (forgotten)
+
+
+def test_chat_without_a_file_has_no_findings(qtbot, window, ollama):
+    ollama.answer = "LINE 3: bug: no file was sent, so this isn't about any line.\n"
+    ask(qtbot, window, "What is fpm?")
+    monitor = window.review_monitor
+    assert ollama.chats[-1]["messages"][-1]["content"] == "What is fpm?"  # (no editor open: nothing sent)
+    assert not monitor.findings and not monitor.table.isVisibleTo(monitor)
+
+
+def test_a_review_or_explanation_starts_a_new_chat(qtbot, window, project, ollama):
+    open_editor(window, project / "src/foo.f90")
+    ask(qtbot, window, "First question", with_file=False)
+    window.start_review()
+    qtbot.waitUntil(lambda: len(ollama.chats) == 2 and window._ai_thread is None
+                    and not window.review_monitor.running, timeout=10_000)
+    assert window.review_monitor.mode == "review"
+    ask(qtbot, window, "Second question", with_file=False)
+    assert [m["role"] for m in ollama.chats[-1]["messages"]] == ["system", "user"]
+    assert window.review_monitor.turns == [("Second question", ollama.answer)]
+
+
+def test_stop_a_chat_answer(qtbot, window, ollama):
+    ollama.endless = True
+    monitor = window.review_monitor
+    monitor.chat_edit.setText("Tell me everything")
+    monitor.send_button.click()
+    qtbot.waitUntil(lambda: bool(monitor.answer) and monitor.stop_button.isEnabled(), timeout=10_000)
+    monitor.stop_button.click()
+    qtbot.waitUntil(lambda: not monitor.running and window._ai_thread is None, timeout=10_000)
+    assert "Stopped" in monitor.progress_label.text()
+    assert window._chat_history[-1]["role"] == "assistant"  # (what it wrote is kept)
+
+
+def test_chat_while_busy_waits(qtbot, window, ollama):
+    window._ai_starting = True
+    window.send_chat("Hi", False)
+    assert "busy" in window.statusBar().currentMessage() and not ollama.chats
+    window._ai_starting = False

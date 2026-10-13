@@ -1,9 +1,11 @@
-"""The "Review" tab: progress and findings of an AI code review, or the
-model's explanation of one problem (*Explain with AI*)."""
+"""The "Review" tab: progress and findings of an AI code review, the
+model's explanation of one problem (*Explain with AI*), or a chat with the
+model (the box at the bottom)."""
 
 from __future__ import annotations
 
 import html
+import re
 import time
 from typing import ClassVar
 
@@ -22,9 +24,11 @@ from qtpy.QtGui import (
 from qtpy.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QCheckBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QPushButton,
     QStyledItemDelegate,
     QTableWidget,
@@ -47,6 +51,8 @@ from .build_monitor import (
     scaled,
 )
 from .editor import monospace_font
+
+FINDING_LINE_RE = re.compile(r"\s*\**\s*LINES?\s*\d", re.IGNORECASE)  # (a finding in a chat answer)
 
 CATEGORY_COLORS = {"bug": "#e03131", "warning": "#f08c00", "performance": "#0c8599",
                    "style": "#7048e8", "suggestion": "#1c7ed6"}
@@ -126,11 +132,16 @@ class ReviewMonitor(SortableTable, QWidget):
     """Findings table with chips, a progress line and the model's summary.
     Clicking a finding emits `finding_selected` with its line; Stop emits
     `stop_requested`. In the "explain" mode the table gives way to the
-    explanation of one problem."""
+    explanation of one problem; in the "chat" mode, to the conversation
+    (with the findings above it, if an answer has any). The box at the
+    bottom emits `chat_requested` with the question and whether to send the
+    open file along; New Chat emits `new_chat_requested`."""
 
     COLUMNS: ClassVar[list[str]] = ["LINE", "CATEGORY", "COMMENT"]
     finding_selected = Signal(int)
     stop_requested = Signal()
+    chat_requested = Signal(str, bool)  # question, send the open file along
+    new_chat_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -139,8 +150,9 @@ class ReviewMonitor(SortableTable, QWidget):
         self.selected_row = -1
         self.filter_category: str | None = None
         self.running = False
-        self.mode = "review"  # or "explain"
-        self.answer = ""     # the explanation so far (Markdown)
+        self.mode = "review"  # or "explain", "chat"
+        self.answer = ""     # the explanation (or the chat's latest answer) so far (Markdown)
+        self.turns: list[tuple[str, str]] = []  # the chat so far: (question, answer)
         self._started = 0.0
         self.is_light = True
         self.palette_colors = PALETTES["light"]
@@ -178,8 +190,8 @@ class ReviewMonitor(SortableTable, QWidget):
         self.stop_button.hide()
         progress_row.addWidget(self.stop_button)
         self.copy_button = QPushButton("Copy")
-        self.copy_button.setToolTip("Copy the explanation (Markdown)")
-        self.copy_button.clicked.connect(lambda: QApplication.clipboard().setText(self.answer))
+        self.copy_button.setToolTip("Copy the answer (Markdown)")
+        self.copy_button.clicked.connect(lambda: QApplication.clipboard().setText(self.copy_text()))
         self.copy_button.hide()
         progress_row.addWidget(self.copy_button)
 
@@ -224,6 +236,29 @@ class ReviewMonitor(SortableTable, QWidget):
         self.explanation.setOpenExternalLinks(True)
         self.explanation.setFrameShape(QTextBrowser.NoFrame)
 
+        # The chat box.
+        self.chat_edit = QLineEdit()
+        self.chat_edit.setPlaceholderText("Ask the AI about Fortran, fpm or the open file… (Return to send)")
+        self.chat_edit.setClearButtonEnabled(True)
+        self.chat_edit.returnPressed.connect(self._send_chat)
+        self.chat_file_check = QCheckBox("Send the open file")
+        self.chat_file_check.setChecked(True)
+        self.chat_file_check.setToolTip("Send the file open in the editor along with the question, so the "
+                                        "answer can be about it (lines it points to are listed here and "
+                                        "marked in the editor)")
+        self.send_button = QPushButton("Send")
+        self.send_button.clicked.connect(self._send_chat)
+        self.new_chat_button = QPushButton("New Chat")
+        self.new_chat_button.setToolTip("Start over: the model forgets this conversation")
+        self.new_chat_button.clicked.connect(self.new_chat_requested)
+        self.new_chat_button.hide()
+        chat_row = QHBoxLayout()
+        chat_row.setSpacing(8)
+        chat_row.addWidget(self.chat_edit, 1)
+        chat_row.addWidget(self.chat_file_check)
+        chat_row.addWidget(self.send_button)
+        chat_row.addWidget(self.new_chat_button)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 10, 14, 6)
         layout.setSpacing(8)
@@ -233,7 +268,8 @@ class ReviewMonitor(SortableTable, QWidget):
         layout.addWidget(self.empty, 1)
         layout.addWidget(self.summary)
         layout.addWidget(self.question)
-        layout.addWidget(self.explanation, 1)
+        layout.addWidget(self.explanation, 2)
+        layout.addLayout(chat_row)
         self.question.hide()
         self.explanation.hide()
 
@@ -243,7 +279,7 @@ class ReviewMonitor(SortableTable, QWidget):
         self._tokens = 0
         self._status = ""
         self.refresh_fonts()
-        self.show_message("Open a file in the editor and choose AI → Review Current File.")
+        self.show_message("Open a file in the editor and choose AI → Review Current File, or ask the AI below.")
 
     # ------------------------------------------------------------- styling
     def refresh_palette(self):
@@ -269,17 +305,101 @@ class ReviewMonitor(SortableTable, QWidget):
 
     # ------------------------------------------------------------- state
     def _set_mode(self, mode: str):
-        """"review" (findings) or "explain" (one problem's explanation)."""
+        """"review" (findings), "explain" (one problem's explanation) or
+        "chat" (the conversation, and findings if an answer has any)."""
         self.mode = mode
-        explaining = mode == "explain"
-        self.title.setText("Explain with AI" if explaining else "AI review")
-        for widget in (self.table, self.empty, self.summary):
-            widget.setVisible(not explaining)
-        for widget in (self.question, self.explanation, self.copy_button):
-            widget.setVisible(explaining)
-        if explaining:
+        review, explain, chat = mode == "review", mode == "explain", mode == "chat"
+        self.title.setText({"explain": "Explain with AI", "chat": "AI chat"}.get(mode, "AI review"))
+        for widget in (self.empty, self.summary):
+            widget.setVisible(review)
+        self.table.setVisible(review or (chat and bool(self.findings)))
+        self.question.setVisible(explain)
+        for widget in (self.explanation, self.copy_button):
+            widget.setVisible(not review)
+        self.new_chat_button.setVisible(chat)
+        if explain:
             for chip in self.chips.values():
                 chip.hide()
+
+    # ------------------------------------------------------------- chat
+    def _send_chat(self):
+        question = self.chat_edit.text().strip()
+        if question:
+            self.chat_requested.emit(question, self.chat_file_check.isChecked())
+
+    def begin_chat(self, description: str, question: str):
+        """A question to the model (a new conversation, or the next turn of
+        this one): it's shown, and its answer will follow."""
+        if self.mode != "chat":
+            self.turns = []
+            self._clear_findings()
+        self._set_mode("chat")
+        self.chat_edit.clear()
+        self.subtitle.setText(description)
+        self.turns.append((question, ""))
+        self.answer = ""
+        self.copy_button.setEnabled(bool(self.turns[:-1]))
+        self.running = True
+        self._status = "Starting"
+        self.progress.set_busy(True)
+        self._render_chat()
+        self._start()
+
+    def clear_chat(self):
+        """New Chat: an empty conversation."""
+        self.turns = []
+        self.answer = ""
+        self._clear_findings()
+        self._render_chat()
+        self.copy_button.setEnabled(False)
+        self._status = ""
+        self.subtitle.clear()
+        self.progress.set(0, "running")
+        self._update_label()
+        self.chat_edit.setFocus()
+
+    def add_chat(self, text: str):
+        """More of the latest answer, as the model writes it."""
+        self._tokens += 1
+        if self._status != "Answering":
+            self._status = "Answering"
+            self._update_label()
+        self.answer += text
+        self.turns[-1] = (self.turns[-1][0], self.answer)
+        self.copy_button.setEnabled(True)
+        self._render_chat()
+
+    def chat_markdown(self) -> str:
+        return "\n\n---\n\n".join(f"**You:** {question}\n\n{answer}" for question, answer in self.turns)
+
+    def _chat_display(self) -> str:
+        """The conversation as shown: the answers' "LINE n: …" lines each
+        on their own (Markdown would run them together), as a list."""
+        shown, fenced = [], False
+        for line in self.chat_markdown().split("\n"):
+            if line.lstrip().startswith("```"):
+                fenced = not fenced
+            elif not fenced and FINDING_LINE_RE.match(line):
+                line = "- " + line.strip()
+            shown.append(line)
+        return "\n".join(shown)
+
+    def _render_chat(self):
+        self._show_markdown(self._chat_display() if self.turns else
+                            "*Ask the model anything: about Fortran, fpm, or the file open in the editor.*")
+
+    def copy_text(self) -> str:
+        return self.chat_markdown() if self.mode == "chat" else self.answer
+
+    def _clear_findings(self):
+        self.findings = []
+        self.table.setRowCount(0)
+        self.selected_row = -1
+        self.summary.clear()
+        self.set_filter(None)
+        self._update_chips()
+        if self.mode == "chat":
+            self.table.hide()
 
     def show_message(self, message: str | None):
         self.empty.setText(message or "")
@@ -303,7 +423,7 @@ class ReviewMonitor(SortableTable, QWidget):
         self._status = ""
         self.progress.set(0, "running")
         self._update_label()
-        self.show_message("Open a file in the editor and choose AI → Review Current File.")
+        self.show_message("Open a file in the editor and choose AI → Review Current File, or ask the AI below.")
 
     def begin(self, description: str, status: str = "Starting…"):
         """A review (or model download) is starting."""
@@ -359,9 +479,12 @@ class ReviewMonitor(SortableTable, QWidget):
             self._update_label()
         self.answer += text
         self.copy_button.setEnabled(True)
+        self._show_markdown(self.answer)
+
+    def _show_markdown(self, text: str):
         bar = self.explanation.verticalScrollBar()
         at_end = bar.value() >= bar.maximum() - 4  # (following the answer, unless scrolled back)
-        self.explanation.setMarkdown(self.answer)
+        self.explanation.setMarkdown(text)
         monospace_code(self.explanation.document(), monospace_font(editor=True).family())
         if at_end:
             bar.setValue(bar.maximum())
@@ -405,6 +528,9 @@ class ReviewMonitor(SortableTable, QWidget):
             self.selected_row = next((i for i, f in enumerate(self.findings)
                                       if self._key(f) == selected_key), -1)
         self._update_chips()
+        if self.mode == "chat":  # (above the conversation, when there are some)
+            self.table.setVisible(bool(self.findings))
+            return
         if not final:
             if self.findings:
                 self.show_message(None)
@@ -420,7 +546,11 @@ class ReviewMonitor(SortableTable, QWidget):
         self.stop_button.hide()
         self.progress.set(1.0, "ok" if ok else "failed")
         self._status = message
-        if self.mode == "explain":
+        if self.mode == "chat":
+            if not ok and not self.answer and self.turns:
+                self.turns[-1] = (self.turns[-1][0], f"*{message}*")
+                self._render_chat()
+        elif self.mode == "explain":
             if not ok and not self.answer:
                 self.explanation.setPlainText(message)
         elif not ok:
@@ -452,10 +582,14 @@ class ReviewMonitor(SortableTable, QWidget):
         muted = f"<span style='color:{pal['muted']}'>"
         seconds = time.monotonic() - self._started if self._started else 0
         if self.running:
-            extra = f" · {self._tokens} tokens" if self._tokens else ""
+            extra = f" · {self._tokens} token{'s' * (self._tokens != 1)}" if self._tokens else ""
             text = f"<b>{self._status or 'Working'}…</b> {muted}{seconds:.0f} s{extra}</span>"
         elif self.mode == "explain":
             text = f"<b>Explanation</b> {muted}· {self._status}</span>" if self._status else ""
+        elif self.mode == "chat":
+            n = len(self.findings)
+            found = f" · {n} finding{'s' * (n != 1)}" if n else ""
+            text = f"<b>Answer</b> {muted}{found} · {self._status}</span>" if self._status else ""
         elif self.findings or self._status:
             n = len(self.findings)
             text = f"<b>{n} finding{'s' * (n != 1)}</b> {muted}· {self._status}</span>"

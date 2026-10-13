@@ -227,6 +227,29 @@ def build_explain_prompt(path: str, code: str, line: int, kind: str, message: st
             "Explain this message for this code, and how to fix it.")
 
 
+CHAT_SYSTEM_PROMPT = """You are a helpful assistant for a programmer working on a Fortran \
+project built with fpm (the Fortran Package Manager). You are an expert in modern Fortran \
+(2008/2018), its compilers (gfortran, LFortran, Intel), fpm, and numerical methods. \
+Answer in Markdown, concisely, with code in ```fortran blocks. If you are not sure, say so.
+When the user's file is attached (its lines are numbered on the left) and you point out a \
+problem or a change at specific lines, also write each one on a line of its own, exactly as
+  LINE <n>: <category>: <comment>
+(or LINE <start>-<end>: ...), where <category> is one of: bug, warning, performance, style, \
+suggestion. Those lines are listed for the user and marked in the editor."""
+
+
+def build_chat_prompt(question: str, path: str = "", code: str | None = None) -> str:
+    """The user's question, with their file (numbered lines) when it's sent along."""
+    if code is None:
+        return question
+    lines = code.split("\n")
+    if len(lines) > 1 and lines[-1] == "":
+        lines.pop()
+    width = len(str(len(lines)))
+    numbered = "\n".join(f"{i:>{width}}| {line}" for i, line in enumerate(lines, 1))
+    return f"{question}\n\nMy file, {path} (line numbers on the left):\n\n{numbered}"
+
+
 def context_size(prompt: str) -> int:
     """A context window big enough for the prompt plus the answer (Ollama's
     default is much smaller than the files we send)."""
@@ -286,12 +309,15 @@ class ReviewWorker(QObject):
     failed = Signal(str)
 
     def __init__(self, host: str | None, model: str, prompt: str = "", pull_only: bool = False,
-                 system: str = SYSTEM_PROMPT):
+                 system: str = SYSTEM_PROMPT, history: list[dict] | None = None):
         """``system``: the model's instructions (a review's, by default;
-        EXPLAIN_SYSTEM_PROMPT to explain one problem)."""
+        EXPLAIN_SYSTEM_PROMPT to explain one problem, CHAT_SYSTEM_PROMPT to
+        chat); ``history``: the conversation so far, as chat messages
+        (``{"role": "user" | "assistant", "content": ...}``)."""
         super().__init__()
         self.host, self.model, self.prompt, self.pull_only = host, model, prompt, pull_only
         self.system = system
+        self.history = list(history or [])
         self._cancel = threading.Event()
         self._client = None
 
@@ -337,7 +363,7 @@ class ReviewWorker(QObject):
 
     def _review(self, client):
         options = {
-            "num_ctx": context_size(self.prompt),
+            "num_ctx": context_size(self.prompt + "".join(m["content"] for m in self.history)),
             "temperature": 0.2,
             # Discourage the repetition loops small models fall into, and
             # cap the answer so a runaway one always ends.
@@ -348,6 +374,7 @@ class ReviewWorker(QObject):
         started = time.monotonic()
         stream = client.chat(model=self.model, stream=True, options=options, messages=[
             {"role": "system", "content": self.system},
+            *self.history,
             {"role": "user", "content": self.prompt},
         ])
         guard = RepeatGuard()

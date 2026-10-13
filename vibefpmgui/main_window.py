@@ -694,6 +694,8 @@ class MainWindow(QMainWindow):
         self.review_monitor = ReviewMonitor()
         self.review_monitor.finding_selected.connect(self._go_to_finding)
         self.review_monitor.stop_requested.connect(self.stop_review)
+        self.review_monitor.chat_requested.connect(self.send_chat)
+        self.review_monitor.new_chat_requested.connect(self.new_chat)
         self.references_panel = ReferencesPanel()
         self.references_panel.open_requested.connect(self._open_search_match)
         self.search_panel = SearchPanel(self.settings)
@@ -3460,7 +3462,8 @@ class MainWindow(QMainWindow):
         # Ollama is asked things on a pool thread (see background.call_in_background):
         self._ai_starting = False  # a review is getting ready (server, model): AI Review waits
         self._known_models: list[str] | None = None  # installed models, as last heard (None: not yet)
-        self._after_model = lambda: None  # what runs once the model is there: a review, or an explanation
+        self._after_model = lambda: None  # what runs once the model is there: a review, an explanation, a chat
+        self._chat_history: list[dict] = []  # the chat so far, as the model's messages
         self._asking_models = False
 
         menu = self.menuBar().addMenu("&AI")
@@ -3642,15 +3645,19 @@ class MainWindow(QMainWindow):
     def _ai_status(self, description: str, status: str):
         """Getting ready (starting Ollama, downloading the model), in the
         Review panel: a new entry for a review, the status of an explanation
-        (which is already there)."""
+        or a chat question (which is already there)."""
         self.show_panel(self.review_monitor)
-        if self.review_monitor.running and self.review_monitor.mode == "explain":
+        if self._asking():
             self.review_monitor.set_status(status)
         else:
             self.review_monitor.begin(description, status)
 
+    def _asking(self) -> bool:
+        """An explanation or a chat question is getting ready in the Review panel."""
+        return self.review_monitor.running and self.review_monitor.mode in ("explain", "chat")
+
     def _end_explain_setup(self, why: str):
-        if self.review_monitor.running and self.review_monitor.mode == "explain":
+        if self._asking():
             self.review_monitor.finish(False, why)
 
     def _pull_finished(self, *_):
@@ -3724,6 +3731,86 @@ class MainWindow(QMainWindow):
         self.review_monitor.finish(True, detail)
 
     def _explain_failed(self, message: str):
+        hint = f" (is '{self.ai_model}' downloaded? See AI → Model)" if "not found" in message.lower() else ""
+        self.review_monitor.finish(False, message + hint)
+
+    # ------------------------------------------------------------ chat
+    def send_chat(self, question: str, with_file: bool):
+        """A question from the Review panel's chat box (the next turn of the
+        conversation there); with ``with_file``, the open file goes along."""
+        if self._ai_thread is not None or self._ai_starting:
+            self.statusBar().showMessage("The AI is busy: try again when it's done", 5000)
+            return
+        if not ai.ollama_available():
+            QMessageBox.warning(self, "AI chat", "The 'ollama' Python package isn't installed.\n"
+                                "Run 'pixi install' (or 'pip install ollama').")
+            return
+        if self.review_monitor.mode != "chat":
+            self._chat_history = []  # (the panel shows a new conversation)
+        editor = self.current_editor() if with_file else None
+        if editor is not None:
+            self._ai_editor = editor  # (the findings' lines are this file's)
+            prompt = ai.build_chat_prompt(question, editor.path.name, editor.editor.toPlainText())
+        else:
+            prompt = ai.build_chat_prompt(question)
+        self._chat_question = (prompt, editor)
+        self._after_model = self._run_chat
+        self.show_panel(self.review_monitor)
+        about = f" · {editor.path.name}" if editor is not None else ""
+        self.review_monitor.begin_chat(f"{self.ai_model}{about}", question)
+        self._ensure_ollama(self._check_model)
+
+    def new_chat(self):
+        self.stop_review()
+        self._chat_history = []
+        self.review_monitor.clear_chat()
+
+    def _run_chat(self):
+        prompt, _editor = self._chat_question
+        self.review_monitor.set_status("Thinking")
+        self._chat_keys: list = []
+        worker = ai.ReviewWorker(ai.DEFAULT_HOST, self.ai_model, prompt, system=ai.CHAT_SYSTEM_PROMPT,
+                                 history=self._chat_history)
+        # (Methods, not lambdas: a lambda would run in the worker's thread.)
+        worker.chunk.connect(self._chat_chunk)
+        worker.finished.connect(self._chat_finished)
+        worker.failed.connect(self._chat_failed)
+        self._start_ai_worker(worker)
+
+    def _chat_findings(self, final: bool):
+        """Lines of the sent file the answer points to: in the list, and
+        marked in the editor (as a review's)."""
+        _prompt, editor = self._chat_question
+        if editor is None or editor not in self.editors():
+            return
+        findings, _summary = ai.parse_findings(self.review_monitor.answer, editor.editor.blockCount())
+        keys = [(f.line, f.end_line, f.category, f.comment) for f in findings]
+        if findings and keys != self._chat_keys:  # (an answer without any: the earlier ones stay)
+            self._chat_keys = keys
+            self.review_monitor.set_findings(findings, final=final)
+            editor.show_review(findings)
+
+    def _chat_chunk(self, text: str):
+        self.review_monitor.add_chat(text)
+        self._chat_findings(final=False)
+
+    def _chat_done(self):
+        """Remember the turn (the model sees it next time)."""
+        prompt, _editor = self._chat_question
+        self._chat_history += [{"role": "user", "content": prompt},
+                               {"role": "assistant", "content": self.review_monitor.answer}]
+
+    def _chat_finished(self, _text: str, stats: dict):
+        self._chat_findings(final=True)
+        self._chat_done()
+        detail = f"{stats.get('seconds', 0):.1f} s · {self.ai_model}" if stats.get("seconds") else self.ai_model
+        if stats.get("truncated"):
+            detail += " · cut off at the length limit"
+        self.review_monitor.finish(True, detail)
+
+    def _chat_failed(self, message: str):
+        if self.review_monitor.answer:
+            self._chat_done()  # (what it had written, if anything: part of the conversation)
         hint = f" (is '{self.ai_model}' downloaded? See AI → Model)" if "not found" in message.lower() else ""
         self.review_monitor.finish(False, message + hint)
 
