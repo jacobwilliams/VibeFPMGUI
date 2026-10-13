@@ -63,6 +63,7 @@ from qtpy.QtWidgets import (
     QMenu,
     QMessageBox,
     QPlainTextEdit,
+    QPushButton,
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
@@ -1630,6 +1631,31 @@ class EditorTab(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self.outline_bar)
+        # Shown when the file changes on disk while it has unsaved edits: the
+        # choice waits here, in the tab (a dialog from a timer could open on
+        # top of another one, e.g. Save As).
+        self._disk_change: tuple[str, str, str] | None = None  # (text, encoding, line end) on disk, waiting
+        self.disk_bar = QFrame()
+        self.disk_bar.setObjectName("DiskBar")
+        self.disk_bar.setStyleSheet("#DiskBar { background: rgba(240, 140, 0, 60); border-bottom: 1px solid "
+                                    "rgba(240, 140, 0, 160); }")
+        self.disk_label = QLabel()
+        self.disk_label.setWordWrap(True)
+        reload_button = QPushButton("Reload")
+        reload_button.setToolTip("Show the file as it is on disk (your unsaved edits are lost; Undo brings them back)")
+        reload_button.clicked.connect(self.reload_from_disk)
+        keep_button = QPushButton("Keep Mine")
+        keep_button.setToolTip("Keep your edits; saving them replaces the file on disk")
+        keep_button.clicked.connect(self.keep_my_edits)
+        for button in (reload_button, keep_button):
+            button.setAttribute(Qt.WA_MacSmallSize)
+        disk_row = QHBoxLayout(self.disk_bar)
+        disk_row.setContentsMargins(8, 4, 8, 4)
+        disk_row.addWidget(self.disk_label, 1)
+        disk_row.addWidget(reload_button)
+        disk_row.addWidget(keep_button)
+        self.disk_bar.hide()
+        layout.addWidget(self.disk_bar)
         # The text, with the minimap at its right.
         self.minimap = Minimap(self.editor)
         self.editor.minimap = self.minimap
@@ -2260,6 +2286,8 @@ class EditorTab(QWidget):
             return False
         self._disk_text = text
         self._disk_newline = self.newline
+        self._disk_change = None  # (the save replaced any other version on disk)
+        self.disk_bar.hide()
         self.editor.document().setModified(False)
         self.dirty_changed.emit(False)  # (also when only the line endings had changed)
         # Line numbers in the compiler/review notes may no longer be right.
@@ -2328,17 +2356,41 @@ class EditorTab(QWidget):
         if text == self._disk_text:
             return  # e.g. our own save
         if self.is_dirty():
-            answer = QMessageBox.question(
-                self, "File changed on disk",
-                f"{self.path.name} was changed by another program. Reload it and lose your edits?")
-            if answer != QMessageBox.Yes:
-                self._disk_text, self._disk_newline = text, newline  # don't ask again for this version
-                return
+            # Unsaved edits: ask in the tab (see disk_bar), not with a dialog.
+            self._disk_change = (text, encoding, newline)
+            self.disk_label.setText(f"<b>{html.escape(self.path.name)}</b> was changed by another program, "
+                                    "and you have unsaved edits.")
+            self.disk_bar.show()
+            return
+        self._load_from_disk(text, encoding, newline)
+
+    def reload_from_disk(self):
+        """The disk bar's Reload: the file as it is on disk, in place of the
+        unsaved edits (one Undo step brings them back)."""
+        change, self._disk_change = self._disk_change, None
+        self.disk_bar.hide()
+        if change is not None:
+            self._load_from_disk(*change, undoable=True)
+
+    def keep_my_edits(self):
+        """The disk bar's Keep Mine: the edits stay (saving replaces the file);
+        this version on disk isn't asked about again."""
+        change, self._disk_change = self._disk_change, None
+        self.disk_bar.hide()
+        if change is not None:
+            self._disk_text, _encoding, self._disk_newline = change
+
+    def _load_from_disk(self, text: str, encoding: str, newline: str, undoable: bool = False):
         cursor = self.editor.textCursor().position()
         scroll = self.editor.verticalScrollBar().value()
         self._disk_text = text
         self.encoding, self.newline, self._disk_newline = encoding, newline, newline
-        self.editor.setPlainText(text)
+        if undoable:  # (replacing the edits: one Undo step, so they can come back)
+            whole = QTextCursor(self.editor.document())
+            whole.select(QTextCursor.Document)
+            whole.insertText(text)
+        else:
+            self.editor.setPlainText(text)
         self.editor.document().setModified(False)
         self.dirty_changed.emit(False)
         c = self.editor.textCursor()

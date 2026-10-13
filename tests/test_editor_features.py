@@ -103,12 +103,20 @@ def test_reloads_a_file_changed_on_disk(qtbot, window, project):
 
 
 def test_asks_before_dropping_edits(window, project, monkeypatch):
+    def no_dialog(*a, **k):
+        raise AssertionError("a dialog: the choice waits in the tab")
+
+    monkeypatch.setattr(QMessageBox, "question", no_dialog)
     editor = open_editor(window, project / "src/foo.f90")
     editor.editor.insertPlainText("! mine\n")
     (project / "src/foo.f90").write_text("! theirs\n")
-    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.No)
     editor._check_disk()
-    assert "! mine" in editor.editor.toPlainText() and editor.is_dirty()
+    assert not editor.disk_bar.isHidden() and "changed by another program" in editor.disk_label.text()
+    assert "! mine" in editor.editor.toPlainText() and editor.is_dirty()  # (nothing lost while it waits)
+    editor.keep_my_edits()
+    assert editor.disk_bar.isHidden() and "! mine" in editor.editor.toPlainText() and editor.is_dirty()
+    editor._check_disk()  # (the same version: not asked again)
+    assert editor.disk_bar.isHidden()
     (project / "src/foo.f90").unlink()
     editor._check_disk()
     assert "deleted on disk" in editor.status_label.text() if hasattr(editor, "status_label") else True
@@ -326,3 +334,31 @@ def test_format_and_fix_dont_make_the_window_wait(qtbot, window, project, monkey
     qtbot.waitUntil(lambda: not editor.rewriting, timeout=5_000)
     assert code.toPlainText() == original + "\n! typed while it was formatting"
     assert "changed while formatting" in window.statusBar().currentMessage()
+
+
+
+def test_reload_from_the_bar(window, project):
+    path = project / "src/foo.f90"
+    editor = open_editor(window, path)
+    mine = "! mine\n" + editor.editor.toPlainText()
+    editor.editor.setPlainText(mine)
+    editor.editor.document().setModified(True)
+    path.write_text("! first\n")
+    editor._check_disk()
+    path.write_text("! theirs\n")  # (changed again while the bar waits: the newest is offered)
+    editor._check_disk()
+    editor.reload_from_disk()
+    assert editor.editor.toPlainText() == "! theirs\n" and not editor.is_dirty() and editor.disk_bar.isHidden()
+    editor.editor.undo()  # (one step: the edits are back)
+    assert editor.editor.toPlainText() == mine
+
+
+def test_saving_dismisses_the_bar(window, project):
+    path = project / "src/foo.f90"
+    editor = open_editor(window, path)
+    editor.editor.insertPlainText("! mine\n")
+    path.write_text("! theirs\n")
+    editor._check_disk()
+    assert not editor.disk_bar.isHidden()
+    assert editor.save() and editor.disk_bar.isHidden()  # (the save replaced their version)
+    assert path.read_text().startswith("! mine")

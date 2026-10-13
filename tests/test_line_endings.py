@@ -49,16 +49,14 @@ def test_mixed_and_old_mac_line_endings(window, project):
     assert editor.save() and path.read_bytes() == b"a\nb\nc\nd\n"  # (the same everywhere)
 
 
-def test_reload_question_declined_keeps_the_conversion(window, project, monkeypatch):
-    from qtpy.QtWidgets import QMessageBox
-
+def test_reload_question_declined_keeps_the_conversion(window, project):
     write_files(project, {"src/le.f90": b"program p\nend program\n"})
     path = project / "src/le.f90"
     editor = open_editor(window, path)
     window.convert_line_endings("\r\n")
     path.write_bytes(b"program q\nend program\n")  # (changed by another program)
-    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.No)
     editor._check_disk()
+    editor.keep_my_edits()  # (the tab's bar: Keep Mine)
     assert editor.newline == "\r\n" and editor.is_dirty()  # (still the user's choice)
 
 

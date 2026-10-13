@@ -183,7 +183,14 @@ QObject, which raises `RuntimeError` in that thread and prints a traceback.
 *Fix:* catch `RuntimeError` around the emit, or check a "closed" flag that
 `close_down()` sets.
 
-### 1.10 Low — a reload from disk asks a modal question from a timer
+### ~~1.10 Low — a reload from disk asks a modal question from a timer~~
+
+> ✅ **Done.** No dialog any more: an orange bar at the top of the tab says the
+> file changed on disk while it has unsaved edits, with **Reload** (one Undo
+> step brings the edits back) and **Keep Mine** (that version isn't asked about
+> again). A newer change while it waits replaces the offer; saving dismisses
+> it. Tests check that no dialog opens.
+
 `_check_disk` (`editor.py:2155–2182`) runs from a `QTimer` and can open
 `QMessageBox.question` while another modal dialog (Save As, Rename, Replace
 in Files…) is already open. That nests event loops, which is a common source
