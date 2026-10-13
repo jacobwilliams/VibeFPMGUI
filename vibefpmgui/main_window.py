@@ -681,6 +681,7 @@ class MainWindow(QMainWindow):
         self.run_monitor.build_percent = lambda: self.build_monitor._percent
         self.review_monitor = ReviewMonitor()
         self.review_monitor.finding_selected.connect(self._go_to_finding)
+        self.review_monitor.stop_requested.connect(self.stop_review)
         self.references_panel = ReferencesPanel()
         self.references_panel.open_requested.connect(self._open_search_match)
         self.search_panel = SearchPanel(self.settings)
@@ -689,6 +690,8 @@ class MainWindow(QMainWindow):
         self.search_panel.replace_requested.connect(self._replace_in_files)
         self.problems_panel = ProblemsPanel(self.settings)
         self.problems_panel.open_requested.connect(self._open_search_match)
+        self.problems_panel.explain_requested.connect(
+            lambda problem: self._with_editor(lambda e: self.explain_problem(e, problem)))
         # (A burst of changes, e.g. spelling and fortitude answering together: one update.)
         self._problems_timer = QTimer(self)
         self._problems_timer.setSingleShot(True)
@@ -2303,6 +2306,7 @@ class MainWindow(QMainWindow):
             editor.references_found.connect(self._show_references)
             editor.rename_ready.connect(self._preview_rename)
             editor.editor.word_added.connect(self.add_spelling_word)
+            editor.explain_requested.connect(lambda problem, e=editor: self.explain_problem(e, problem))
             editor.problems_changed.connect(lambda e=editor: self._problems_timer.start() if e is self.current_editor()
                                             else None)
             editor.editor.textChanged.connect(lambda e=editor: self.search_panel.file_changed(e.path))
@@ -3328,6 +3332,7 @@ class MainWindow(QMainWindow):
         # Ollama is asked things on a pool thread (see background.call_in_background):
         self._ai_starting = False  # a review is getting ready (server, model): AI Review waits
         self._known_models: list[str] | None = None  # installed models, as last heard (None: not yet)
+        self._after_model = lambda: None  # what runs once the model is there: a review, or an explanation
         self._asking_models = False
 
         menu = self.menuBar().addMenu("&AI")
@@ -3348,7 +3353,7 @@ class MainWindow(QMainWindow):
         self.command_toolbar.addAction(self.review_action)
         self.command_icons[self.review_action] = "robot"
         self._update_command_icons()
-        self.stop_review_action = menu.addAction("Stop Review")
+        self.stop_review_action = menu.addAction("Stop")
         self.stop_review_action.setEnabled(False)
         self.stop_review_action.triggered.connect(self.stop_review)
         self.clear_review_action = menu.addAction("Clear Review Markers")
@@ -3433,6 +3438,7 @@ class MainWindow(QMainWindow):
                                 "Run 'pixi install' (or 'pip install ollama').")
             return
         self._ai_editor = editor
+        self._after_model = self._run_review
         self._ensure_ollama(self._check_model)
 
     def _set_ai_starting(self, on: bool):
@@ -3454,11 +3460,11 @@ class MainWindow(QMainWindow):
         exe = ai.ollama_executable()
         if exe is None:
             self._set_ai_starting(False)
+            self._end_explain_setup("Ollama isn't running")
             QMessageBox.warning(self, "AI review", "Ollama isn't running and the 'ollama' program "
                                 "wasn't found. Run 'pixi install', or install Ollama from ollama.com.")
             return
-        self.show_panel(self.review_monitor)
-        self.review_monitor.begin("starting the local Ollama server", "Starting Ollama")
+        self._ai_status("starting the local Ollama server", "Starting Ollama")
         self._ollama_process = QProcess(self)
         self._ollama_process.setProcessChannelMode(QProcess.MergedChannels)
         self._ollama_process.start(exe, ["serve"])
@@ -3487,16 +3493,16 @@ class MainWindow(QMainWindow):
         self._set_ai_starting(False)  # (from here a worker thread, or nothing, follows)
         model = self.ai_model if ":" in self.ai_model else self.ai_model + ":latest"
         if model in installed or self.ai_model in installed:
-            self._run_review()
+            self._after_model()
             return
         answer = QMessageBox.question(
             self, "Download AI model",
             f"The model '{self.ai_model}' isn't downloaded yet. Download it now?\n\n"
             "Models are a few GB; this happens once, and everything runs locally afterwards.")
         if answer != QMessageBox.Yes:
+            self._end_explain_setup(f"{self.ai_model} isn't downloaded")
             return
-        self.show_panel(self.review_monitor)
-        self.review_monitor.begin(f"downloading {self.ai_model}", "Downloading")
+        self._ai_status(f"downloading {self.ai_model}", "Downloading")
         worker = ai.ReviewWorker(ai.DEFAULT_HOST, self.ai_model, pull_only=True)
         worker.progress.connect(self._pull_progress)
         # (A method of the window, not a lambda: a lambda would run in the
@@ -3505,8 +3511,22 @@ class MainWindow(QMainWindow):
         worker.failed.connect(self._review_failed)
         self._start_ai_worker(worker)
 
+    def _ai_status(self, description: str, status: str):
+        """Getting ready (starting Ollama, downloading the model), in the
+        Review panel: a new entry for a review, the status of an explanation
+        (which is already there)."""
+        self.show_panel(self.review_monitor)
+        if self.review_monitor.running and self.review_monitor.mode == "explain":
+            self.review_monitor.set_status(status)
+        else:
+            self.review_monitor.begin(description, status)
+
+    def _end_explain_setup(self, why: str):
+        if self.review_monitor.running and self.review_monitor.mode == "explain":
+            self.review_monitor.finish(False, why)
+
     def _pull_finished(self, *_):
-        self._ai_done(then=self._run_review)
+        self._ai_done(then=self._after_model)
 
     def _pull_progress(self, status: str, fraction: float):
         if fraction >= 0:
@@ -3536,18 +3556,63 @@ class MainWindow(QMainWindow):
         worker.failed.connect(self._review_failed)
         self._start_ai_worker(worker)
 
+    # ------------------------------------------------- explain with AI
+    EXPLAINABLE = ("build", "fortitude", "fortls")  # (Problems' sources: compiler, linter, language server)
+
+    def explain_problem(self, editor: EditorTab, problem):
+        """Explain with AI: ask the model what a problem means and how to fix
+        it; the answer appears in a window as it's written."""
+        if self._ai_thread is not None or self._ai_starting:
+            self.statusBar().showMessage("The AI is busy (a review or an explanation): try again when it's done",
+                                         5000)
+            return
+        if not ai.ollama_available():
+            QMessageBox.warning(self, "Explain with AI", "The 'ollama' Python package isn't installed.\n"
+                                "Run 'pixi install' (or 'pip install ollama').")
+            return
+        self._explaining = (editor, problem)
+        self._after_model = self._run_explain
+        self.show_panel(self.review_monitor)
+        self.review_monitor.begin_explain(f"{editor.path.name}:{problem.line} · {self.ai_model}", problem.message)
+        self._ensure_ollama(self._check_model)
+
+    def _run_explain(self):
+        editor, problem = self._explaining
+        if editor not in self.editors():
+            self.review_monitor.finish(False, "The file was closed")
+            return
+        prompt = ai.build_explain_prompt(editor.path.name, editor.editor.toPlainText(), problem.line, problem.source,
+                                         problem.message, problem.badge, self.effective_compiler()[0])
+        self.review_monitor.set_status("Thinking")
+        worker = ai.ReviewWorker(ai.DEFAULT_HOST, self.ai_model, prompt, system=ai.EXPLAIN_SYSTEM_PROMPT)
+        # (Methods, not lambdas: a lambda would run in the worker's thread.)
+        worker.chunk.connect(self.review_monitor.add_explanation)
+        worker.finished.connect(self._explain_finished)
+        worker.failed.connect(self._explain_failed)
+        self._start_ai_worker(worker)
+
+    def _explain_finished(self, _text: str, stats: dict):
+        detail = f"{stats.get('seconds', 0):.1f} s · {self.ai_model}" if stats.get("seconds") else self.ai_model
+        self.review_monitor.finish(True, detail)
+
+    def _explain_failed(self, message: str):
+        hint = f" (is '{self.ai_model}' downloaded? See AI → Model)" if "not found" in message.lower() else ""
+        self.review_monitor.finish(False, message + hint)
+
     def _start_ai_worker(self, worker):
         self._ai_worker = worker
         self._ai_thread = ai.start_worker(worker, self)
         self._ai_thread.finished.connect(self._ai_thread_done)
         self._update_review_actions()
         self.stop_review_action.setEnabled(True)
+        self.review_monitor.set_stoppable(True)
 
     def _ai_thread_done(self):
         self._ai_thread = None
         self._ai_worker = None
         self._update_review_actions()
         self.stop_review_action.setEnabled(False)
+        self.review_monitor.set_stoppable(False)
 
     def _ai_done(self, then=None):
         # Let the download thread finish before starting the review thread.

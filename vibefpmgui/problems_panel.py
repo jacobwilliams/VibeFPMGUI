@@ -11,19 +11,29 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from qtpy.QtCore import Signal
-from qtpy.QtWidgets import QHBoxLayout, QLabel, QToolButton, QVBoxLayout, QWidget
+from qtpy.QtCore import Qt, Signal
+from qtpy.QtWidgets import (
+    QApplication,
+    QHBoxLayout,
+    QLabel,
+    QMenu,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
 
-from .result_tree import Problem, ResultTree
+from .result_tree import RESULT_ROLE, Problem, ResultTree
 
 # (source, button label), in the order the buttons are shown.
 SOURCES = [("build", "Build"), ("fortitude", "fortitude"), ("fortls", "fortls"),
            ("spelling", "Spelling"), ("gremlins", "Gremlins"), ("review", "AI review")]
 HINT = "Open a file in the editor to see its problems here."
+EXPLAINABLE = ("build", "fortitude", "fortls")  # (sources Explain with AI is offered for)
 
 
 class ProblemsPanel(QWidget):
     open_requested = Signal(str, int, int, int, int)  # file, line, column, end line, end column
+    explain_requested = Signal(object)  # a Problem (right-click → Explain with AI)
 
     def __init__(self, settings=None, parent=None):
         super().__init__(parent)
@@ -52,12 +62,35 @@ class ProblemsPanel(QWidget):
         self.tree = ResultTree()
         self.tree.set_wrapping(True)  # (long messages wrap: an AI review's can be a few sentences)
         self.tree.open_requested.connect(self.open_requested)
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._context_menu)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
         layout.addLayout(header)
         layout.addWidget(self.tree, 1)
         self.show_problems(None, [])
+
+    def _context_menu(self, pos):
+        menu = self.context_menu(pos)
+        if menu is not None:
+            menu.exec(self.tree.viewport().mapToGlobal(pos))
+            menu.deleteLater()
+
+    def context_menu(self, pos) -> QMenu | None:
+        """A problem's right-click menu (None: not on a problem)."""
+        item = self.tree.itemAt(pos)
+        data = item.data(0, RESULT_ROLE) if item is not None else None
+        problem = data[1] if data else None
+        if not isinstance(problem, Problem):
+            return None
+        menu = QMenu(self)
+        explain = menu.addAction("Explain with AI", lambda: self.explain_requested.emit(problem))
+        explain.setEnabled(problem.source in EXPLAINABLE)
+        explain.setToolTip("Ask the local AI model what this means here, and how to fix it")
+        menu.addAction("Copy Message", lambda: QApplication.clipboard().setText(problem.message))
+        menu.setToolTipsVisible(True)
+        return menu
 
     def _filter_changed(self):
         if self.settings is not None:

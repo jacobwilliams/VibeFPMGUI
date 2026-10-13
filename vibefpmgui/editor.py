@@ -413,6 +413,7 @@ class CodeEditor(QPlainTextEdit):
     rename_requested = Signal()      # right-click menu → Rename Symbol…
     lint_fix_requested = Signal(object)  # a lint.LintIssue whose fix to apply (hover link or menu)
     word_added = Signal(str)  # "Add to Dictionary" (hover link or menu)
+    explain_requested = Signal(int)  # right-click → Explain Error with AI, on this line (1-based)
     typed = Signal(str)                # a key that changed the text (after it did; "\b" = Backspace)
     completion_chosen = Signal(object)  # Enter/Tab in the completion list
     cursors_changed = Signal()          # extra cursors added or removed (multiple cursors)
@@ -817,6 +818,14 @@ class CodeEditor(QPlainTextEdit):
             add = QAction(f"Add “{misspelled.word}” to Dictionary", menu)
             add.triggered.connect(lambda _=False, w=misspelled.word: self.word_added.emit(w))
             menu.insertAction(first, add)
+            menu.insertSeparator(first)
+        line = self.document().findBlock(spot).blockNumber() + 1
+        if any(severity not in ("review", "remark") for severity, _ in self.markers.get(line, [])):
+            first = menu.actions()[0] if menu.actions() else None
+            explain = QAction("Explain Error with AI", menu)
+            explain.setToolTip("Ask the local AI model what this line's problem means, and how to fix it")
+            explain.triggered.connect(lambda _=False, n=line: self.explain_requested.emit(n))
+            menu.insertAction(first, explain)
             menu.insertSeparator(first)
         if fixes:
             first = menu.actions()[0] if menu.actions() else None
@@ -1597,6 +1606,7 @@ class EditorTab(QWidget):
     references_found = Signal(str, object)  # name, [(file, line, start column, end column)]
     rename_ready = Signal(str, str, object)  # old name, new name, {file: [lsp.TextEdit]}
     problems_changed = Signal()  # (see problems)
+    explain_requested = Signal(object)  # a Problem to Explain with AI (from the editor's menu)
 
     def __init__(self, path: Path, parent=None):
         super().__init__(parent)
@@ -1713,6 +1723,7 @@ class EditorTab(QWidget):
         self.editor.references_requested.connect(self.find_references)
         self.editor.rename_requested.connect(self.rename_symbol)
         self.editor.lint_fix_requested.connect(self.apply_lint_fix)
+        self.editor.explain_requested.connect(self._explain_line)
         self._complete_timer = QTimer(self)
         self._complete_timer.setSingleShot(True)
         self._complete_timer.setInterval(COMPLETE_MS)
@@ -2516,6 +2527,14 @@ class EditorTab(QWidget):
                                  PROBLEM_SOURCES.get(issue.severity, "fortitude")))
         found.sort(key=lambda p: (p.line, p.column))
         return found
+
+    def _explain_line(self, line: int):
+        """Explain Error with AI on a line: its most serious compiler, fortitude
+        or fortls problem."""
+        rank = {"fatal error": 0, "error": 1, "lint error": 2, "fortls error": 3, "warning": 4}
+        found = [p for p in self.problems() if p.line == line and p.source in ("build", "fortitude", "fortls")]
+        if found:
+            self.explain_requested.emit(min(found, key=lambda p: rank.get(p.severity, 9)))
 
     def replace_text(self, text: str):
         """Replace the whole text as one undoable edit, keeping the cursor

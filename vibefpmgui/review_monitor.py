@@ -1,12 +1,24 @@
-"""The "Review" tab: progress and findings of an AI code review."""
+"""The "Review" tab: progress and findings of an AI code review, or the
+model's explanation of one problem (*Explain with AI*)."""
 
 from __future__ import annotations
 
+import html
 import time
 from typing import ClassVar
 
 from qtpy.QtCore import QEvent, QRectF, QSize, Qt, QTimer, Signal
-from qtpy.QtGui import QColor, QFont, QFontDatabase, QFontMetricsF, QPainter, QPen
+from qtpy.QtGui import (
+    QColor,
+    QFont,
+    QFontDatabase,
+    QFontMetricsF,
+    QPainter,
+    QPen,
+    QTextCharFormat,
+    QTextCursor,
+    QTextFormat,
+)
 from qtpy.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -17,6 +29,7 @@ from qtpy.QtWidgets import (
     QStyledItemDelegate,
     QTableWidget,
     QTableWidgetItem,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
@@ -33,6 +46,7 @@ from .build_monitor import (
     panel_stylesheet,
     scaled,
 )
+from .editor import monospace_font
 
 CATEGORY_COLORS = {"bug": "#e03131", "warning": "#f08c00", "performance": "#0c8599",
                    "style": "#7048e8", "suggestion": "#1c7ed6"}
@@ -110,10 +124,13 @@ def _category_rank(category: str) -> int:
 
 class ReviewMonitor(SortableTable, QWidget):
     """Findings table with chips, a progress line and the model's summary.
-    Clicking a finding emits `finding_selected` with its line."""
+    Clicking a finding emits `finding_selected` with its line; Stop emits
+    `stop_requested`. In the "explain" mode the table gives way to the
+    explanation of one problem."""
 
     COLUMNS: ClassVar[list[str]] = ["LINE", "CATEGORY", "COMMENT"]
     finding_selected = Signal(int)
+    stop_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -122,6 +139,8 @@ class ReviewMonitor(SortableTable, QWidget):
         self.selected_row = -1
         self.filter_category: str | None = None
         self.running = False
+        self.mode = "review"  # or "explain"
+        self.answer = ""     # the explanation so far (Markdown)
         self._started = 0.0
         self.is_light = True
         self.palette_colors = PALETTES["light"]
@@ -153,6 +172,16 @@ class ReviewMonitor(SortableTable, QWidget):
         progress_row.setSpacing(10)
         progress_row.addWidget(self.progress, 1)
         progress_row.addWidget(self.progress_label)
+        self.stop_button = QPushButton("Stop")
+        self.stop_button.setToolTip("Stop the model")
+        self.stop_button.clicked.connect(self.stop_requested)
+        self.stop_button.hide()
+        progress_row.addWidget(self.stop_button)
+        self.copy_button = QPushButton("Copy")
+        self.copy_button.setToolTip("Copy the explanation (Markdown)")
+        self.copy_button.clicked.connect(lambda: QApplication.clipboard().setText(self.answer))
+        self.copy_button.hide()
+        progress_row.addWidget(self.copy_button)
 
         self.table = QTableWidget(0, len(self.COLUMNS))
         self.table.setHorizontalHeaderLabels(self.COLUMNS)
@@ -188,6 +217,12 @@ class ReviewMonitor(SortableTable, QWidget):
         self.empty = QLabel()
         self.empty.setAlignment(Qt.AlignCenter)
         self.empty.setWordWrap(True)
+        self.question = QLabel()  # (explain mode: the problem's message)
+        self.question.setWordWrap(True)
+        self.question.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.explanation = QTextBrowser()
+        self.explanation.setOpenExternalLinks(True)
+        self.explanation.setFrameShape(QTextBrowser.NoFrame)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 10, 14, 6)
@@ -197,6 +232,10 @@ class ReviewMonitor(SortableTable, QWidget):
         layout.addWidget(self.table, 1)
         layout.addWidget(self.empty, 1)
         layout.addWidget(self.summary)
+        layout.addWidget(self.question)
+        layout.addWidget(self.explanation, 1)
+        self.question.hide()
+        self.explanation.hide()
 
         self._timer = QTimer(self)
         self._timer.setInterval(50)
@@ -229,6 +268,19 @@ class ReviewMonitor(SortableTable, QWidget):
         self.refresh_palette()
 
     # ------------------------------------------------------------- state
+    def _set_mode(self, mode: str):
+        """"review" (findings) or "explain" (one problem's explanation)."""
+        self.mode = mode
+        explaining = mode == "explain"
+        self.title.setText("Explain with AI" if explaining else "AI review")
+        for widget in (self.table, self.empty, self.summary):
+            widget.setVisible(not explaining)
+        for widget in (self.question, self.explanation, self.copy_button):
+            widget.setVisible(explaining)
+        if explaining:
+            for chip in self.chips.values():
+                chip.hide()
+
     def show_message(self, message: str | None):
         self.empty.setText(message or "")
         self.empty.setVisible(bool(message))
@@ -237,6 +289,8 @@ class ReviewMonitor(SortableTable, QWidget):
     def reset(self):
         """Back to the empty state (e.g. when another project is opened)."""
         self._timer.stop()
+        self._set_mode("review")
+        self.stop_button.hide()
         self.running = False
         self.findings = []
         self.table.setRowCount(0)
@@ -253,6 +307,7 @@ class ReviewMonitor(SortableTable, QWidget):
 
     def begin(self, description: str, status: str = "Starting…"):
         """A review (or model download) is starting."""
+        self._set_mode("review")
         self.findings = []
         self.table.setRowCount(0)
         self.selected_row = -1
@@ -261,13 +316,55 @@ class ReviewMonitor(SortableTable, QWidget):
         self.subtitle.setText(description)
         self._update_chips()
         self.running = True
-        self._started = time.monotonic()
-        self._tokens = 0
         self._status = status
         self.progress.set_busy(True)  # how long the model takes is unknown
         self.show_message("The model is reading the file…")
+        self._start()
+
+    def begin_explain(self, description: str, message: str):
+        """An explanation of one problem (its ``message``) is starting; the
+        findings of the last review are put aside."""
+        self.findings = []
+        self.table.setRowCount(0)
+        self.selected_row = -1
+        self.summary.clear()
+        self._set_mode("explain")
+        self.subtitle.setText(description)
+        self.question.setText(f"<b>{html.escape(message, quote=False)}</b>")
+        self.answer = ""
+        self.explanation.clear()
+        self.copy_button.setEnabled(False)
+        self.running = True
+        self._status = "Starting"
+        self.progress.set_busy(True)
+        self._start()
+
+    def _start(self):
+        self._started = time.monotonic()
+        self._tokens = 0
+        self.stop_button.setEnabled(False)  # (until there's a model to stop: see set_stoppable)
+        self.stop_button.show()
         self._timer.start()
         self._update_label()
+
+    def set_stoppable(self, on: bool):
+        """The model is working (Stop can end it), or not."""
+        self.stop_button.setEnabled(on)
+
+    def add_explanation(self, text: str):
+        """More of the explanation, as the model writes it."""
+        self._tokens += 1
+        if self._status != "Explaining":
+            self._status = "Explaining"
+            self._update_label()
+        self.answer += text
+        self.copy_button.setEnabled(True)
+        bar = self.explanation.verticalScrollBar()
+        at_end = bar.value() >= bar.maximum() - 4  # (following the answer, unless scrolled back)
+        self.explanation.setMarkdown(self.answer)
+        monospace_code(self.explanation.document(), monospace_font(editor=True).family())
+        if at_end:
+            bar.setValue(bar.maximum())
 
     def set_status(self, status: str, fraction: float = -1.0):
         """Download progress (fraction 0..1) or a status text (fraction < 0)."""
@@ -320,9 +417,13 @@ class ReviewMonitor(SortableTable, QWidget):
     def finish(self, ok: bool, message: str = ""):
         self.running = False
         self._timer.stop()
+        self.stop_button.hide()
         self.progress.set(1.0, "ok" if ok else "failed")
         self._status = message
-        if not ok:
+        if self.mode == "explain":
+            if not ok and not self.answer:
+                self.explanation.setPlainText(message)
+        elif not ok:
             # Keep findings that already arrived; the error goes in the label.
             if self.findings:
                 self.show_message(None)
@@ -353,6 +454,8 @@ class ReviewMonitor(SortableTable, QWidget):
         if self.running:
             extra = f" · {self._tokens} tokens" if self._tokens else ""
             text = f"<b>{self._status or 'Working'}…</b> {muted}{seconds:.0f} s{extra}</span>"
+        elif self.mode == "explain":
+            text = f"<b>Explanation</b> {muted}· {self._status}</span>" if self._status else ""
         elif self.findings or self._status:
             n = len(self.findings)
             text = f"<b>{n} finding{'s' * (n != 1)}</b> {muted}· {self._status}</span>"
@@ -390,3 +493,28 @@ class ReviewMonitor(SortableTable, QWidget):
         if obj is self.table.viewport() and event.type() == QEvent.Leave:
             self._set_hover(-1, 0)
         return super().eventFilter(obj, event)
+
+
+def monospace_code(document, family: str):
+    """Code in a Markdown document in a fixed-width font: Qt's Markdown asks
+    only for "monospace", which macOS turns into a serif font (inline) or
+    ignores (fenced blocks)."""
+    fixed = QTextCharFormat()
+    fixed.setFontFamilies([family])
+    cursor = QTextCursor(document)
+    block = document.begin()
+    while block.isValid():
+        if block.blockFormat().hasProperty(QTextFormat.BlockCodeFence):
+            cursor.setPosition(block.position())
+            cursor.setPosition(block.position() + block.length() - 1, QTextCursor.KeepAnchor)
+            cursor.mergeCharFormat(fixed)
+        else:
+            it = block.begin()
+            while not it.atEnd():
+                fragment = it.fragment()
+                if fragment.charFormat().fontFixedPitch():
+                    cursor.setPosition(fragment.position())
+                    cursor.setPosition(fragment.position() + fragment.length(), QTextCursor.KeepAnchor)
+                    cursor.mergeCharFormat(fixed)
+                it += 1
+        block = block.next()

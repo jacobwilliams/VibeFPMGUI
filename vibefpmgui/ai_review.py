@@ -199,6 +199,34 @@ def build_prompt(path: str, language: str, code: str, focus: str,
     return "\n\n".join(parts)
 
 
+EXPLAIN_SYSTEM_PROMPT = """You are an expert in modern Fortran, its compilers (gfortran, \
+LFortran, Intel) and linters, helping a programmer understand one message about their code. \
+Answer in Markdown, briefly and concretely, for this code (not in general):
+1. **What it means**: the message in plain words.
+2. **Why here**: what in the marked line (and around it) causes it.
+3. **How to fix it**: the change to make, with the corrected lines in a ```fortran block.
+If the message is harmless or a style preference, say so. Don't invent code that isn't shown."""
+
+EXPLAIN_CONTEXT_LINES = 15  # lines of code shown before and after the problem
+
+
+def build_explain_prompt(path: str, code: str, line: int, kind: str, message: str,
+                         rule: str = "", compiler: str = "") -> str:
+    """The question for one problem: the message, where, and the code around
+    it (numbered, the problem's line marked with >>)."""
+    lines = code.split("\n")
+    first = max(1, line - EXPLAIN_CONTEXT_LINES)
+    last = min(len(lines), line + EXPLAIN_CONTEXT_LINES)
+    width = len(str(last))
+    shown = "\n".join(f"{'>>' if n == line else '  '} {n:>{width}}| {lines[n - 1]}" for n in range(first, last + 1))
+    source = {"build": f"the compiler ({compiler})" if compiler else "the compiler",
+              "fortitude": "the fortitude linter", "fortls": "the fortls language server"}.get(kind, kind)
+    what = f"{rule}: {message}" if rule and rule != kind else message
+    return (f"In {path}, line {line}, {source} reports:\n\n    {what}\n\n"
+            f"The code around it (line numbers on the left; the line is marked >>):\n\n{shown}\n\n"
+            "Explain this message for this code, and how to fix it.")
+
+
 def context_size(prompt: str) -> int:
     """A context window big enough for the prompt plus the answer (Ollama's
     default is much smaller than the files we send)."""
@@ -257,9 +285,13 @@ class ReviewWorker(QObject):
     finished = Signal(str, dict)        # full answer, stats
     failed = Signal(str)
 
-    def __init__(self, host: str | None, model: str, prompt: str = "", pull_only: bool = False):
+    def __init__(self, host: str | None, model: str, prompt: str = "", pull_only: bool = False,
+                 system: str = SYSTEM_PROMPT):
+        """``system``: the model's instructions (a review's, by default;
+        EXPLAIN_SYSTEM_PROMPT to explain one problem)."""
         super().__init__()
         self.host, self.model, self.prompt, self.pull_only = host, model, prompt, pull_only
+        self.system = system
         self._cancel = threading.Event()
         self._client = None
 
@@ -276,7 +308,7 @@ class ReviewWorker(QObject):
                 client._client.close()  # the client's httpx connection
 
     def _stopped_message(self) -> str:
-        return "Download cancelled" if self.pull_only else "Review stopped"
+        return "Download cancelled" if self.pull_only else "Stopped"
 
     @Slot()
     def run(self):
@@ -315,7 +347,7 @@ class ReviewWorker(QObject):
         }
         started = time.monotonic()
         stream = client.chat(model=self.model, stream=True, options=options, messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": self.system},
             {"role": "user", "content": self.prompt},
         ])
         guard = RepeatGuard()

@@ -257,6 +257,11 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   *AI → Focus* steers the review (bugs, modern Fortran style, performance,
   documentation). The GUI starts `ollama serve` itself if it isn't running.
   Small local models are helpful but fallible — treat findings as hints.
+  *Explain with AI* (right-click a compiler error, fortitude or fortls
+  problem in the Problems panel, or a marked line in the editor) asks the
+  same model what the message means, why it applies to that line and how to
+  fix it; the answer streams into the Review panel (with Stop and Copy)
+  while you keep editing.
   See [AI code review](#ai-code-review) below for setup and where models
   are stored.
 * *Build outputs* panel: what fpm keeps in `build/`, one card per

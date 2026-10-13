@@ -164,7 +164,7 @@ def test_worker_cancel(ollama):
     worker.failed.connect(lambda message: out.update(failed=message))
     threading.Timer(0.1, worker.cancel).start()
     worker.run()
-    assert out["failed"] == "Review stopped"
+    assert out["failed"] == "Stopped"
 
 
 # ----------------------------------------------------- in the main window
@@ -299,3 +299,133 @@ def test_the_window_never_waits_for_ollama(qtbot, window, project, ollama, monke
     monkeypatch.setattr(ai, "installed_models", lambda host=None: time.sleep(0.8) or ["m"])
     window._fill_model_menu()  # (the Model menu opening)
     assert time.monotonic() - started < 0.3
+
+
+# ----------------------------------------------------- explain with AI
+def test_explain_prompt():
+    code = "\n".join(f"line {i}" for i in range(1, 41))
+    prompt = ai.build_explain_prompt("foo.f90", code, 20, "build", "Symbol 'x' has no IMPLICIT type", "error",
+                                     "gfortran")
+    assert "line 20, the compiler (gfortran) reports" in prompt and "error: Symbol 'x'" in prompt
+    assert ">> 20| line 20" in prompt and "   5| line 5" in prompt and "   35| line 35" in prompt
+    assert "line 4\n" not in prompt and "line 36" not in prompt  # (15 lines each side)
+    assert "the fortitude linter" in ai.build_explain_prompt("f.f90", code, 1, "fortitude", "m", "S061")
+
+
+def explain_from_the_problems(qtbot, window, editor):
+
+    window.show_panel(window.problems_panel)
+    qtbot.waitUntil(lambda: window.problems_panel.tree.topLevelItemCount() > 0, timeout=5_000)
+    tree = window.problems_panel.tree
+    row = tree.topLevelItem(0).child(0)
+    menu = window.problems_panel.context_menu(tree.visualItemRect(row).center())
+    action = next(a for a in menu.actions() if a.text() == "Explain with AI")
+    assert action.isEnabled()
+    action.trigger()
+
+
+def wait_for_explanation(qtbot, window):
+    qtbot.waitUntil(lambda: not window.review_monitor.running and window._ai_thread is None, timeout=10_000)
+
+
+def test_explain_a_compiler_error(qtbot, window, project, ollama):
+    from types import SimpleNamespace
+
+    editor = open_editor(window, project / "src/foo.f90")
+    editor.show_diagnostics([SimpleNamespace(line=2, severity="error", message="Symbol 'count' has no type")])
+    explain_from_the_problems(qtbot, window, editor)
+    monitor = window.review_monitor
+    assert monitor.mode == "explain" and monitor.running and monitor.stop_button.isVisibleTo(monitor)
+    wait_for_explanation(qtbot, window)
+    messages = ollama.chats[-1]["messages"]
+    assert messages[0]["content"] == ai.EXPLAIN_SYSTEM_PROMPT  # (not the review's instructions)
+    assert "Symbol 'count' has no type" in messages[1]["content"] and ">> 2|" in messages[1]["content"]
+    assert monitor.answer == ollama.answer and "Symbol 'count'" in monitor.question.text()
+    assert monitor.explanation.isVisibleTo(monitor) and not monitor.table.isVisibleTo(monitor)
+    assert not monitor.stop_button.isVisibleTo(monitor) and "Explanation" in monitor.progress_label.text()
+    assert not editor._review_markers  # (an explanation doesn't touch the review's markers)
+    window.start_review()  # (a review afterwards: the findings again)
+    qtbot.waitUntil(lambda: len(ollama.chats) == 2 and window._ai_thread is None and not monitor.running,
+                    timeout=10_000)
+    assert monitor.mode == "review" and monitor.table.isVisibleTo(monitor) and not monitor.explanation.isVisibleTo(monitor)
+
+
+def test_explain_from_the_editor_menu(qtbot, window, project, ollama):
+    from types import SimpleNamespace
+
+    editor = open_editor(window, project / "src/foo.f90")
+    editor.show_diagnostics([SimpleNamespace(line=2, severity="warning", message="Unused variable"),
+                             SimpleNamespace(line=2, severity="error", message="Bad thing")])
+    code = editor.editor
+    from qtpy.QtGui import QTextCursor
+    cursor = QTextCursor(code.document().findBlockByNumber(1))
+    menu = code.context_menu(code.cursorRect(cursor).center())
+    next(a for a in menu.actions() if a.text() == "Explain Error with AI").trigger()
+    wait_for_explanation(qtbot, window)
+    assert "Bad thing" in ollama.chats[-1]["messages"][1]["content"]  # (the line's most serious problem)
+    cursor = QTextCursor(code.document().findBlockByNumber(0))  # (a line without problems: not offered)
+    assert "Explain Error with AI" not in [a.text() for a in code.context_menu(code.cursorRect(cursor).center()).actions()]
+
+
+def test_explain_only_what_can_be_explained_and_one_at_a_time(qtbot, window, project, ollama):
+    from vibefpmgui.result_tree import Problem
+
+    open_editor(window, project / "src/foo.f90")
+    spelling = Problem(1, 0, 1, 3, "spelling", "spelling", "“teh” isn't in the dictionary", "#ae3ec9", "spelling")
+    window.problems_panel.show_problems(project / "src/foo.f90", [spelling])
+    tree = window.problems_panel.tree
+    menu = window.problems_panel.context_menu(tree.visualItemRect(tree.topLevelItem(0).child(0)).center())
+    assert not next(a for a in menu.actions() if a.text() == "Explain with AI").isEnabled()
+    window._ai_starting = True  # (a review getting ready)
+    window.explain_problem(window.current_editor(), spelling._replace(source="build"))
+    assert "busy" in window.statusBar().currentMessage() and not ollama.chats
+    assert window.review_monitor.mode == "review"  # (the panel is left alone)
+    window._ai_starting = False
+
+
+def test_stop_an_explanation(qtbot, window, project, ollama):
+    from types import SimpleNamespace
+
+    ollama.endless = True
+    editor = open_editor(window, project / "src/foo.f90")
+    editor.show_diagnostics([SimpleNamespace(line=2, severity="error", message="Oops")])
+    explain_from_the_problems(qtbot, window, editor)
+    monitor = window.review_monitor
+    qtbot.waitUntil(lambda: bool(ollama.chats) and monitor.stop_button.isEnabled(), timeout=10_000)
+    monitor.stop_button.click()
+    wait_for_explanation(qtbot, window)
+    assert "Stopped" in monitor.progress_label.text() and not monitor.stop_button.isVisibleTo(monitor)
+
+
+def test_explaining_with_ollama_starting_and_a_download(qtbot, window, project, ollama, monkeypatch):
+    """Getting ready (starting Ollama, downloading the model) shows in the
+    explanation's status, and the panel ends with the explanation."""
+    from types import SimpleNamespace
+
+    calls = []
+    real = ai.server_running
+    monkeypatch.setattr(ai, "server_running", lambda host=None: (calls.append(1) or len(calls) > 1) and real(host))  # (down, then up)
+    monkeypatch.setattr(ai, "ollama_executable", lambda: "/bin/sleep")  # (a stand-in "ollama serve")
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+    ollama.models = []
+    editor = open_editor(window, project / "src/foo.f90")
+    editor.show_diagnostics([SimpleNamespace(line=2, severity="error", message="Oops")])
+    explain_from_the_problems(qtbot, window, editor)
+    monitor = window.review_monitor
+    qtbot.waitUntil(lambda: "Starting Ollama" in monitor.progress_label.text(), timeout=5_000)
+    assert monitor.mode == "explain"
+    wait_for_explanation(qtbot, window)
+    assert ollama.pulled and monitor.mode == "explain" and monitor.answer == ollama.answer
+    assert "Explanation" in monitor.progress_label.text()
+
+
+def test_explain_declined_download_ends(qtbot, window, project, ollama, monkeypatch):
+    from types import SimpleNamespace
+
+    ollama.models = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.No)
+    editor = open_editor(window, project / "src/foo.f90")
+    editor.show_diagnostics([SimpleNamespace(line=2, severity="error", message="Oops")])
+    explain_from_the_problems(qtbot, window, editor)
+    qtbot.waitUntil(lambda: not window.review_monitor.running, timeout=5_000)
+    assert "isn't downloaded" in window.review_monitor.progress_label.text()
