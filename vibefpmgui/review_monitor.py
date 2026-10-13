@@ -20,8 +20,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from pygments.lexers import get_lexer_by_name
+from pygments.styles import get_style_by_name
+from pygments.util import ClassNotFound
 from qtpy.QtCore import QEvent, Qt, QTimer, Signal
-from qtpy.QtGui import QFont, QTextCharFormat, QTextCursor, QTextFormat
+from qtpy.QtGui import (
+    QColor,
+    QFont,
+    QTextBlockFormat,
+    QTextCharFormat,
+    QTextCursor,
+    QTextFormat,
+)
 from qtpy.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -40,6 +50,7 @@ from qtpy.QtWidgets import (
 )
 
 from . import ai_edits as ed
+from . import highlighter as hl
 from .ai_edits import END_RE as EDIT_END_RE
 from .ai_edits import START_RE as EDIT_START_RE
 from .ai_review import Finding
@@ -137,29 +148,64 @@ def answer_display(answer: str) -> str:
     return "\n".join(shown)
 
 
-def monospace_code(document, family: str):
-    """Code in a Markdown document in a fixed-width font: Qt's Markdown asks
-    only for "monospace", which macOS turns into a serif font (inline) or
-    ignores (fenced blocks)."""
+def style_code(document, family: str, style_name: str | None = None):
+    """Code in a Markdown document in a fixed-width font (Qt's Markdown asks
+    only for "monospace", which macOS turns into a serif font, or ignores),
+    and code blocks labeled with a language (```fortran, ```toml…)
+    highlighted as the editor would, in its colors (``style_name``: a
+    Pygments style; by default the one the editor uses)."""
     fixed = QTextCharFormat()
     fixed.setFontFamilies([family])
     cursor = QTextCursor(document)
     block = document.begin()
     while block.isValid():
         if block.blockFormat().hasProperty(QTextFormat.BlockCodeFence):
-            cursor.setPosition(block.position())
-            cursor.setPosition(block.position() + block.length() - 1, QTextCursor.KeepAnchor)
+            language = str(block.blockFormat().property(QTextFormat.BlockCodeLanguage) or "")
+            lines = []
+            while block.isValid() and block.blockFormat().hasProperty(QTextFormat.BlockCodeFence) \
+                    and str(block.blockFormat().property(QTextFormat.BlockCodeLanguage) or "") == language:
+                lines.append(block)
+                block = block.next()
+            cursor.setPosition(lines[0].position())
+            cursor.setPosition(lines[-1].position() + lines[-1].length() - 1, QTextCursor.KeepAnchor)
             cursor.mergeCharFormat(fixed)
-        else:
-            it = block.begin()
-            while not it.atEnd():
-                fragment = it.fragment()
-                if fragment.charFormat().fontFixedPitch():
-                    cursor.setPosition(fragment.position())
-                    cursor.setPosition(fragment.position() + fragment.length(), QTextCursor.KeepAnchor)
-                    cursor.mergeCharFormat(fixed)
-                it += 1
+            _highlight(cursor, lines, language, style_name)
+            continue
+        it = block.begin()
+        while not it.atEnd():
+            fragment = it.fragment()
+            if fragment.charFormat().fontFixedPitch():
+                cursor.setPosition(fragment.position())
+                cursor.setPosition(fragment.position() + fragment.length(), QTextCursor.KeepAnchor)
+                cursor.mergeCharFormat(fixed)
+            it += 1
         block = block.next()
+
+
+def _highlight(cursor: QTextCursor, lines: list, language: str, style_name: str | None):
+    """One code block's lines, colored by the lexer for ``language``."""
+    if not language:
+        return
+    try:
+        lexer = hl.keep_positions(get_lexer_by_name(language))
+        style = get_style_by_name(style_name or hl.style_name(QApplication.palette()))
+    except ClassNotFound:
+        return  # (a language Pygments doesn't know: plain)
+    background = QTextBlockFormat()
+    background.setBackground(QColor(style.background_color))
+    plain = QTextCharFormat()
+    plain.setForeground(hl.style_text_color(style))
+    first = lines[0].position()
+    cursor.setPosition(first)
+    cursor.setPosition(lines[-1].position() + lines[-1].length() - 1, QTextCursor.KeepAnchor)
+    cursor.mergeBlockFormat(background)
+    cursor.mergeCharFormat(plain)
+    text = "\n".join(line.text() for line in lines)  # (a line break is one position, as between blocks)
+    for index, ttype, value in lexer.get_tokens_unprocessed(text):
+        if value and not value.isspace():
+            cursor.setPosition(first + index)
+            cursor.setPosition(first + index + len(value), QTextCursor.KeepAnchor)
+            cursor.mergeCharFormat(hl.token_format(style, ttype))
 
 
 class MarkdownView(QTextBrowser):
@@ -179,7 +225,13 @@ class MarkdownView(QTextBrowser):
         if text != self._text:
             self._text = text
             self.setMarkdown(text)
-            monospace_code(self.document(), monospace_font(editor=True).family())
+            style_code(self.document(), monospace_font(editor=True).family())
+
+    def restyle(self):
+        """Again, in the editor's colors as they are now."""
+        text, self._text = self._text, None
+        if text is not None:
+            self.set_markdown(text)
 
 
 class FindingsView(QWidget):
@@ -558,6 +610,8 @@ class ReviewMonitor(QWidget):
         self.subtitle.setStyleSheet(f"color: {pal['muted']};")
         self.empty.setStyleSheet(f"color: {pal['muted']};")
         for widget in self.widgets:
+            if isinstance(widget, EntryWidget):
+                widget.answer.restyle()  # (code in the editor's colors, which may have changed)
             self._refresh(widget)
         self.progress.update()
 

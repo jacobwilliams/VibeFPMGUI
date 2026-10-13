@@ -221,7 +221,8 @@ LFortran, Intel) and linters, helping a programmer understand one message about 
 Answer in Markdown, briefly and concretely, for this code (not in general):
 1. **What it means**: the message in plain words.
 2. **Why here**: what in the marked line (and around it) causes it.
-3. **How to fix it**: the change to make, with the corrected lines in a ```fortran block.
+3. **How to fix it**: the change to make, with the corrected lines in a ```fortran block \
+(code always in fenced blocks labeled with its language, so it can be highlighted).
 If the message is harmless or a style preference, say so. Don't invent code that isn't shown."""
 
 EXPLAIN_CONTEXT_LINES = 15  # lines of code shown before and after the problem
@@ -247,7 +248,9 @@ def build_explain_prompt(path: str, code: str, line: int, kind: str, message: st
 CHAT_SYSTEM_PROMPT = """You are a helpful assistant for a programmer working on a Fortran \
 project built with fpm (the Fortran Package Manager). You are an expert in modern Fortran \
 (2008/2018), its compilers (gfortran, LFortran, Intel), fpm, and numerical methods. \
-Answer in Markdown, concisely, with code in ```fortran blocks. If you are not sure, say so.
+Answer in Markdown, concisely. Put code in fenced blocks labeled with its language \
+(```fortran, ```toml for fpm.toml, ```bash for commands), so it can be highlighted. \
+If you are not sure, say so.
 When the user's file is attached (its lines are numbered on the left) and you point out a \
 problem or a change at specific lines, also write each one on a line of its own, exactly as
   LINE <n>: <category>: <comment>

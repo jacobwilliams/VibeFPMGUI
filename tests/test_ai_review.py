@@ -606,3 +606,61 @@ def test_no_sending_while_the_ai_is_busy(qtbot, window, ollama):
     monitor.stop_button.click()
     qtbot.waitUntil(lambda: window._ai_thread is None, timeout=10_000)
     assert monitor.send_button.isEnabled()
+
+
+def test_code_in_answers_is_highlighted(qtbot):
+    from qtpy.QtGui import QTextCursor
+
+    from vibefpmgui.review_monitor import MarkdownView
+
+    view = MarkdownView()
+    qtbot.addWidget(view)
+    view.set_markdown("Like this:\n\n```fortran\ninteger :: n  ! a count\n```\n\n```\nplain text\n```\n")
+    doc = view.document()
+
+    def color_at(word: str) -> str:
+        cursor = doc.find(word)
+        assert not cursor.isNull(), word
+        probe = QTextCursor(doc)
+        probe.setPosition(cursor.selectionStart() + 1)
+        return probe.charFormat().foreground().color().name()
+
+    assert color_at("integer") != color_at("a count")  # (a keyword and a comment: colored apart)
+    assert doc.find("integer").charFormat().fontFamilies()  # (and in the editor's font)
+    assert color_at("plain text") == color_at("Like this")  # (no language: not colored)
+
+
+def test_stop_the_ollama_server_the_app_started(qtbot, window, project, ollama, monkeypatch, tmp_path):
+    import os
+    import stat
+
+    # A stand-in "ollama serve" that starts a "model runner" of its own, as Ollama does.
+    runner_pid = tmp_path / "runner.pid"
+    serve = tmp_path / "ollama"
+    serve.write_text(f"#!/bin/sh\nsleep 300 &\necho $! > {runner_pid}\nwait\n")
+    serve.chmod(serve.stat().st_mode | stat.S_IEXEC)
+    calls = []
+    real = ai.server_running
+    monkeypatch.setattr(ai, "server_running", lambda host=None: (calls.append(1) or len(calls) > 1) and real(host))
+    monkeypatch.setattr(ai, "ollama_executable", lambda: str(serve))
+    window._update_ollama_action()
+    assert not window.stop_ollama_action.isEnabled()  # (no server of ours)
+    open_editor(window, project / "src/foo.f90")
+    window.start_review()
+    wait_for_review(qtbot, window)
+    qtbot.waitUntil(runner_pid.exists, timeout=5_000)
+    pid = int(runner_pid.read_text())
+    window._update_ollama_action()
+    assert window.stop_ollama_action.isEnabled()
+    window.stop_ollama_action.trigger()
+    assert window._ollama_process is None and not window.stop_ollama_action.isEnabled()
+    assert "Stopped the Ollama server" in window.statusBar().currentMessage()
+
+    def gone() -> bool:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        return False
+
+    qtbot.waitUntil(gone, timeout=5_000)  # (its runner too: not left holding the model's memory)

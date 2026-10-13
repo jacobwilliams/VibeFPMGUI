@@ -945,6 +945,7 @@ class MainWindow(QMainWindow):
         self._apply_highlight_style()
         for editor in self.editors():
             editor.refresh_style()
+        self.review_monitor.refresh_palette()  # (code in the AI's answers: the same colors)
 
     def changeEvent(self, event):
         if event.type() == QEvent.PaletteChange and hasattr(self, "terminal_panel"):  # (the window is built)
@@ -3513,6 +3514,12 @@ class MainWindow(QMainWindow):
         self.edit_with_ai_action.setStatusTip("Ask the AI to change the file in the editor (the selection, if "
                                               "there is one); you accept or reject each edit")
         self.edit_with_ai_action.triggered.connect(self.edit_with_ai)
+        self.stop_ollama_action = menu.addAction("Stop Ollama Server")
+        self.stop_ollama_action.setStatusTip("Stop the Ollama server the app started (and the model it has "
+                                             "loaded, freeing its memory); it starts again when the AI is next used")
+        self.stop_ollama_action.triggered.connect(self.stop_ollama)
+        menu.aboutToShow.connect(self._update_ollama_action)
+        self._update_ollama_action()
         self.clear_review_action = menu.addAction("Clear Review Markers")
         self.clear_review_action.triggered.connect(
             lambda: self._with_editor(lambda e: e.clear_review()))
@@ -4159,15 +4166,35 @@ class MainWindow(QMainWindow):
         if self._ai_worker is not None:
             self._ai_worker.cancel()
 
+    def _ollama_running(self) -> bool:
+        """A server the app started is running (one started otherwise isn't ours to stop)."""
+        return self._ollama_process is not None and self._ollama_process.state() != QProcess.NotRunning
+
+    def _update_ollama_action(self):
+        self.stop_ollama_action.setEnabled(self._ollama_running())
+
+    def stop_ollama(self, quitting: bool = False):
+        """AI → Stop Ollama Server: the server the app started, with the
+        model runner it started (killing only the server would leave that
+        running, holding the model's memory)."""
+        if not self._ollama_running():
+            return
+        if not quitting:
+            self.stop_review()
+        kill_process_tree(self._ollama_process)
+        self._ollama_process.waitForFinished(3000)
+        self._ollama_process = None
+        self._update_ollama_action()
+        if not quitting:
+            self.statusBar().showMessage("Stopped the Ollama server (it starts again when the AI is next used)", 5000)
+
     def _shutdown_ai(self):
         if self._ai_worker is not None:
             self._ai_worker.cancel()
         if self._ai_thread is not None:
             self._ai_thread.quit()
             self._ai_thread.wait(3000)
-        if self._ollama_process is not None:  # only a server we started ourselves
-            self._ollama_process.terminate()
-            self._ollama_process.waitForFinished(3000)
+        self.stop_ollama(quitting=True)
 
 
 def repo_web_url(git_url: str) -> str | None:

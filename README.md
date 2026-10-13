@@ -458,7 +458,9 @@ downloaded once it works offline.
 
 You don't need to start Ollama yourself: if no server is running, the GUI
 starts `ollama serve` when you ask for a review and stops it again when you
-quit (a server you started yourself is left alone). On Apple Silicon the
+quit (a server you started yourself is left alone); *AI → Stop Ollama
+Server* stops it sooner, freeing the memory the loaded model holds (it
+starts again when the AI is next used). On Apple Silicon the
 model runs on the GPU (Metal); a review of a typical source file takes
 around 5–15 seconds.
 
