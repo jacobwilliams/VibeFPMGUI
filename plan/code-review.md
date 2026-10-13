@@ -215,15 +215,19 @@ with mixed endings gets every line changed in git.
 *Fix:* only use CRLF when every line ending is CRLF (or most of them), and
 say "Mixed" in the status line otherwise.
 
-### 1.12 Low — smaller items
-- **Auto-indent and Backspace-over-indent take several Undo steps.**
+### ~~1.12 Low — smaller items~~
+
+> ✅ **Done.** All three below.
+
+- ~~**Auto-indent and Backspace-over-indent take several Undo steps.**~~
+  ✅ Fixed with View → Indentation (each is one edit block; tested).
   Return then `insertText(indent)` (`editor.py:1162–1168`), and Backspace
   deleting an indent one character at a time (`1169–1176`), aren't in an
   edit block.
-- **The full-output log is never removed.**
+- ~~**The full-output log is never removed.**~~ ✅ Deleted in `closeEvent` (tested).
   `vibefpmgui-output-<pid>.log` (`main_window.py:177`) stays in the temp
   folder after the app quits. Delete it in `closeEvent`.
-- **A local `import sys` shadows the module import.** `main()`
+- ~~**A local `import sys` shadows the module import.**~~ ✅ Removed. `main()`
   (`main_window.py:3454`) does `import sys` again; harmless, but confusing.
 
 ---

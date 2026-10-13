@@ -223,3 +223,12 @@ def test_dialogs_are_let_go_when_closed(qtbot, window, monkeypatch):
     window._preview_rename("old", "new", {})
     QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
     assert window.findChildren(QDialog) == []
+
+
+def test_the_full_output_log_is_removed_on_quit(window):
+    window._begin_output()  # (a command starting: its log is opened)
+    window._append("some output\n", colored=True)
+    log = window._full_output_path
+    assert log.exists()
+    assert window.close()
+    assert not log.exists()

@@ -1212,6 +1212,8 @@ class MainWindow(QMainWindow):
         self.search_panel.shutdown()
         self.terminal_panel.shutdown()
         self._shutdown_ai()
+        self._end_output(show_tail=False)
+        self._full_output_path.unlink(missing_ok=True)  # (the full-output log: only for this run)
         if clearing:
             super().closeEvent(event)
             return
@@ -3777,8 +3779,6 @@ def qt_argv(argv: list[str]) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    import sys
-
     argv = sys.argv if argv is None else argv
     set_windows_app_id()  # Windows: our own taskbar icon, not python.exe's
     set_macos_bundle_name(_APP_NAME)  # macOS: our name in the menu bar, not "Python" (before Qt starts)
