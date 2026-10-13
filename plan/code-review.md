@@ -134,7 +134,16 @@ never quits.
 *Fix:* catch `Exception` around each `future.result()` and report it as that
 row's error, and emit `finished` in a `finally`.
 
-### 1.7 Low — `git ls-remote` over SSH can wait for a prompt
+### ~~1.7 Low — `git ls-remote` over SSH can wait for a prompt~~
+
+> ✅ **Done.** `dep_updates.git_environment()` adds
+> `GIT_SSH_COMMAND="ssh -o BatchMode=yes"` (unless the user has their own
+> `GIT_SSH_COMMAND` or `GIT_SSH`), so SSH fails at once instead of waiting out
+> the timeout. Tried on a real SSH URL without a key in the agent: 0.5 s. Git's
+> errors are now shown by their cause (the first line and the `fatal:` one),
+> not the last line ("and the repository exists."), with a hint for SSH key and
+> host-key failures.
+
 `ls_remote` (`dep_updates.py:112`) sets `GIT_TERMINAL_PROMPT=0`, which stops
 HTTPS password prompts but not SSH (host-key confirmation, key passphrase).
 Those either fail or wait out the 30-second timeout per repository.

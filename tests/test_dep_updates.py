@@ -182,3 +182,35 @@ def test_a_check_that_fails_badly_still_ends_the_thread(monkeypatch):
     assert finished == [True]  # (so the thread quits)
     assert results[0][0] == du.UPDATE
     assert results[1][0] == du.ERROR and "permission denied" in results[1][1]
+
+
+def test_git_never_waits_for_a_prompt(monkeypatch):
+    env = du.git_environment({"PATH": "/bin"})
+    assert env["GIT_TERMINAL_PROMPT"] == "0"  # (HTTPS passwords)
+    assert env["GIT_SSH_COMMAND"] == "ssh -o BatchMode=yes"  # (SSH host keys and passphrases)
+    mine = du.git_environment({"GIT_SSH_COMMAND": "ssh -i ~/.ssh/work"})
+    assert mine["GIT_SSH_COMMAND"] == "ssh -i ~/.ssh/work"  # (the user's own: left alone)
+    assert "GIT_SSH_COMMAND" not in du.git_environment({"GIT_SSH": "/usr/local/bin/my-ssh"})
+    seen = {}
+
+    def run(args, **kwargs):
+        seen.update(kwargs["env"])
+        import subprocess
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(du.subprocess, "run", run)
+    du.ls_remote("git@github.com:x/y.git")
+    assert seen["GIT_SSH_COMMAND"].endswith("BatchMode=yes") or "GIT_SSH" in seen
+
+
+def test_git_errors_say_why():
+    ssh = ("git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.\n\n"
+           "Please make sure you have the correct access rights\nand the repository exists.\n")
+    text = du.git_error(ssh)
+    assert text.startswith("git@github.com: Permission denied (publickey). — Could not read from remote")
+    assert "ssh-agent" in text
+    https = "remote: Repository not found.\nfatal: repository 'https://github.com/x/y/' not found\n"
+    assert du.git_error(https) == "remote: Repository not found. — repository 'https://github.com/x/y/' not found"
+    assert du.git_error("fatal: unable to access 'https://x/': Could not resolve host: x\n") == \
+        "unable to access 'https://x/': Could not resolve host: x"
+    assert du.git_error("") == ""

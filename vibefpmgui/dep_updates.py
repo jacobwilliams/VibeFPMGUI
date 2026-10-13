@@ -106,10 +106,38 @@ def _declared_spec(manifest: Path, name: str) -> dict | None:
 
 
 # -------------------------------------------------------------------- check
+def git_environment(environ=os.environ) -> dict[str, str]:
+    """The environment for git commands that must never wait for a prompt:
+    no password questions (HTTPS), and SSH in batch mode (no host-key or
+    passphrase questions: a key in the agent still works; otherwise it fails
+    at once instead of waiting out the timeout). A GIT_SSH_COMMAND or
+    GIT_SSH of the user's own is left as it is."""
+    env = dict(environ, GIT_TERMINAL_PROMPT="0")
+    if not env.get("GIT_SSH_COMMAND") and not env.get("GIT_SSH"):
+        env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
+    return env
+
+
+def git_error(stderr: str) -> str:
+    """What went wrong, from git's message: its first line (the cause, e.g.
+    "Permission denied (publickey)") and its "fatal:" one, with a hint when
+    SSH couldn't ask for a key or a host key (see git_environment)."""
+    lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    fatal = next((line.removeprefix("fatal: ") for line in lines if line.startswith("fatal:")), "")
+    first = lines[0].removeprefix("fatal: ")
+    text = first if not fatal or fatal == first else f"{first} — {fatal}"
+    if "publickey" in stderr or "Host key verification failed" in stderr:
+        text += (" (SSH can't ask for a key or a host's fingerprint here: load the key into ssh-agent "
+                 "and connect once in a terminal, or use the repository's https:// URL)")
+    return text
+
+
 def ls_remote(url: str) -> dict[str, str]:
     """{ref: commit} for HEAD, branches and tags (annotated tags resolved
     to their commit). Raises RuntimeError with git's message on failure."""
-    env = dict(os.environ, GIT_TERMINAL_PROMPT="0")  # never wait for a password
+    env = git_environment()
     try:
         out = subprocess.run(["git", "ls-remote", url, "HEAD", "refs/heads/*", "refs/tags/*"],
                              capture_output=True, text=True, timeout=LS_REMOTE_TIMEOUT, env=env, check=False)
@@ -118,8 +146,7 @@ def ls_remote(url: str) -> dict[str, str]:
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"no answer from the server within {LS_REMOTE_TIMEOUT} s")
     if out.returncode != 0:
-        lines = (out.stderr or "").strip().splitlines()
-        raise RuntimeError(lines[-1] if lines else f"git ls-remote failed ({out.returncode})")
+        raise RuntimeError(git_error(out.stderr or "") or f"git ls-remote failed ({out.returncode})")
     refs: dict[str, str] = {}
     for line in out.stdout.splitlines():
         sha, _, ref = line.partition("\t")
