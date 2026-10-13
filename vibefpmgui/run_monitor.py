@@ -15,6 +15,7 @@ from .test_monitor import PASSED, TestMonitor
 
 class RunMonitor(TestMonitor):
     COLUMNS: ClassVar[list[str]] = ["PROGRAM", "STATUS", "TIME"]
+    ICON = "run"
     WORDS: ClassVar[dict[str, str]] = {
         "title": "Run", "item": "program", "items": "programs",
         PASSED: "Finished", "passed": "finished",

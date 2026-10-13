@@ -44,6 +44,7 @@ from .build_monitor import (
     PALETTES,
     ProgressLine,
     SortableTable,
+    TitleIcon,
     _tint,
     app_is_light,
     chip_stylesheet,
@@ -226,6 +227,7 @@ class TestMonitor(SortableTable, QWidget):
 
     COLUMNS: ClassVar[list[str]] = ["TEST", "STATUS", "TIME"]
     test_selected = Signal(str)
+    ICON = "test"  # (the toolbar's icon for the command: see TitleIcon)
     # Everything the panel says, so a "Run" version can reuse it (see run_monitor).
     WORDS: ClassVar[dict[str, str]] = {
         "title": "Tests", "item": "test", "items": "tests",
@@ -264,6 +266,7 @@ class TestMonitor(SortableTable, QWidget):
 
         self.setObjectName("TestMonitor")
         self.setAttribute(Qt.WA_StyledBackground, True)
+        self.title_icon = TitleIcon(self.ICON)
         self.title = QLabel(self.word("title"))
         title_font = self.title.font()
         title_font.setPointSizeF(title_font.pointSizeF() + 2)
@@ -272,6 +275,7 @@ class TestMonitor(SortableTable, QWidget):
         self.subtitle = QLabel()
         header = QHBoxLayout()
         header.setSpacing(6)
+        header.addWidget(self.title_icon)
         header.addWidget(self.title)
         header.addSpacing(4)
         header.addWidget(self.subtitle)
@@ -348,6 +352,7 @@ class TestMonitor(SortableTable, QWidget):
         self.is_light = app_is_light()
         self.palette_colors = pal = PALETTES["light" if self.is_light else "dark"]
         self.setStyleSheet(panel_stylesheet(self.objectName(), pal))
+        self.title_icon.draw(pal["text"], self.title)
         for status, chip in self.chips.items():
             chip.setStyleSheet(chip_stylesheet(pal, pal["status"][COLOR_KEY[status]]))
         self.empty.setStyleSheet(f"color: {pal['muted']};")

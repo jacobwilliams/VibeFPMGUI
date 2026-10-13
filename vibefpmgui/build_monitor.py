@@ -58,6 +58,7 @@ from qtpy.QtWidgets import (
 
 from . import manifest as m
 from .ansi import strip as strip_ansi
+from .icons import make_icon
 
 PROGRESS_RE = re.compile(r"^\[\s*(\d+)%\]\s+(\S+)(?:\s+(done|failed)\.)?\s*$")
 # gfortran/gcc: "src/a.f90:3:15:" (message on later lines) or "a.c:3:5: error: ..."
@@ -686,6 +687,20 @@ class LogFinder:
         return cached[1]
 
 
+class TitleIcon(QLabel):
+    """A panel's icon, the toolbar's for its command (see `icons.make_icon`),
+    drawn in front of the panel's title at the title's height."""
+
+    def __init__(self, name: str, parent=None):
+        super().__init__(parent)
+        self.name = name
+
+    def draw(self, color: str, title: QLabel):
+        size = round(title.fontMetrics().height() * 1.15)
+        self.setPixmap(make_icon(self.name, color).pixmap(QSize(size, size)))
+        self.setFixedSize(size, size)
+
+
 class BuildMonitor(SortableTable, QWidget):
     """Per-file compile status: header with filter chips, a slim progress bar
     and a custom-drawn table."""
@@ -725,6 +740,7 @@ class BuildMonitor(SortableTable, QWidget):
         self.setObjectName("BuildMonitor")
         self.setAttribute(Qt.WA_StyledBackground, True)
 
+        self.title_icon = TitleIcon("build")
         self.title = QLabel("Build")
         title_font = self.title.font()
         title_font.setPointSizeF(title_font.pointSizeF() + 2)
@@ -734,6 +750,7 @@ class BuildMonitor(SortableTable, QWidget):
         self.chips: dict[str, QPushButton] = {}
         header = QHBoxLayout()
         header.setSpacing(6)
+        header.addWidget(self.title_icon)
         header.addWidget(self.title)
         header.addSpacing(4)
         header.addWidget(self.subtitle)
@@ -815,6 +832,7 @@ class BuildMonitor(SortableTable, QWidget):
         self.palette_colors = PALETTES["light" if self.is_light else "dark"]
         self.setStyleSheet(panel_stylesheet(self.objectName(), self.palette_colors))
         self.empty.setStyleSheet(f"color: {self.palette_colors['muted']};")
+        self.title_icon.draw(self.palette_colors["text"], self.title)
         self._style_chips()
         self._update_header()
         self.table.viewport().update()

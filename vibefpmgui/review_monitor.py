@@ -44,6 +44,7 @@ from .build_monitor import (
     ROW_HEIGHT,
     ProgressLine,
     SortableTable,
+    TitleIcon,
     _tint,
     app_is_light,
     chip_stylesheet,
@@ -159,10 +160,12 @@ class ReviewMonitor(SortableTable, QWidget):
 
         self.setObjectName("ReviewMonitor")
         self.setAttribute(Qt.WA_StyledBackground, True)
+        self.title_icon = TitleIcon("robot")
         self.title = QLabel("AI review")
         self.subtitle = QLabel()
         header = QHBoxLayout()
         header.setSpacing(6)
+        header.addWidget(self.title_icon)
         header.addWidget(self.title)
         header.addSpacing(4)
         header.addWidget(self.subtitle)
@@ -290,6 +293,7 @@ class ReviewMonitor(SortableTable, QWidget):
         self.is_light = app_is_light()
         self.palette_colors = pal = PALETTES["light" if self.is_light else "dark"]
         self.setStyleSheet(panel_stylesheet(self.objectName(), pal))
+        self.title_icon.draw(pal["text"], self.title)
         for category, chip in self.chips.items():
             chip.setStyleSheet(chip_stylesheet(pal, CATEGORY_COLORS[category]))
         self.empty.setStyleSheet(f"color: {pal['muted']};")
