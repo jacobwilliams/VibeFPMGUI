@@ -2,14 +2,15 @@
 environment VibeFPMGUI was started with.
 
 The shell gets the app's environment variables as they are (only ``TERM``
-is set, for the terminal) and is started without its startup files
+is set, for the terminal, and a prompt: ``PS1``) and is started without its startup files
 (``zsh -f``, ``bash --noprofile --norc``, ``fish --no-config``), which
 would change them: conda's "base" activation, Homebrew's or your own PATH
 changes. Started from an activated pixi or conda environment, the terminal
 is in that environment, with everything its activation set (PATH,
 CONDA_PREFIX, the compilers' variables...): ``fpm`` and the compilers are
 the ones the app uses. (So your prompt, aliases and other shell settings
-don't load.)
+don't load; the prompt is a plain one, starting with the environment's
+name, e.g. ``(VibeFPMGUI) src %``, as activation would show it.)
 
 On macOS and Linux the shell runs in a pseudo-terminal read with a
 `QSocketNotifier`, so everything happens in the GUI thread; on Windows it
@@ -88,22 +89,36 @@ NO_STARTUP_FILES = {
 }
 
 
+# A plain prompt (the startup files that would set one aren't read): the
+# folder's name, after the environment's name when one is active.
+PROMPTS = {"zsh": "%1~ %# ", "bash": "\\W \\$ ", "sh": "$ ", "dash": "$ "}
+
+
 def shell_launch() -> Launch:
     """How to start the user's shell with exactly the app's environment:
-    the same variables (only TERM is set, for the terminal), and no startup
-    files to change them."""
+    the same variables (only TERM is set, for the terminal, and PS1, the
+    prompt), and no startup files to change them."""
     shell = user_shell()
     env = dict(os.environ)
     env["TERM"] = "xterm-256color"
     if WINDOWS:
         return Launch([shell], env)
     name = Path(shell).name
+    if name in PROMPTS and "PS1" not in env:  # (fish has its own prompt function)
+        active = environment_name()
+        env["PS1"] = (f"({active}) " if active else "") + PROMPTS[name]
     return Launch([shell, *NO_STARTUP_FILES.get(name, []), "-i"], env)
 
 
 def environment_name() -> str:
-    """The activated environment the app (and the terminal) runs in, if any."""
-    return os.environ.get("PIXI_PROJECT_NAME") or os.environ.get("CONDA_DEFAULT_ENV") or ""
+    """The activated environment the app (and the terminal) runs in, if any:
+    a pixi workspace's name (plus its environment, when not "default"), or a
+    conda environment's."""
+    pixi = os.environ.get("PIXI_PROJECT_NAME", "")
+    if pixi:
+        which = os.environ.get("PIXI_ENVIRONMENT_NAME", "default")
+        return pixi if which in ("", "default") else f"{pixi}:{which}"
+    return os.environ.get("CONDA_DEFAULT_ENV", "")
 
 
 # ------------------------------------------------------------ the shell

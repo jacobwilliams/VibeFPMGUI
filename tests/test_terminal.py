@@ -230,7 +230,7 @@ def test_draws_without_errors(view):
 
 
 # ------------------------------------------- the app's environment in the shell
-SHELL_OWNED = {"PWD", "OLDPWD", "SHLVL", "_", "TERM"}  # (set by the shell itself / the terminal)
+SHELL_OWNED = {"PWD", "OLDPWD", "SHLVL", "_", "TERM", "PS1"}  # (set by the shell itself / the terminal)
 
 
 @pytest.mark.parametrize("shell_name", ["zsh", "bash"])
@@ -262,6 +262,32 @@ def test_shell_has_exactly_the_app_environment(tmp_path, monkeypatch, shell_name
     assert got.get("PATH") == os.environ["PATH"]
     assert got == expected
     assert shell_env.get("TERM") == "xterm-256color"
+
+
+@pytest.mark.parametrize("shell_name", ["zsh", "bash"])
+def test_the_prompt_shows_the_environment(shell_name, monkeypatch, tmp_path):
+    import shutil
+    import subprocess
+
+    shell = shutil.which(shell_name)
+    if shell is None:
+        pytest.skip(f"{shell_name} not installed")
+    monkeypatch.setenv("SHELL", shell)
+    monkeypatch.delenv("PS1", raising=False)
+    monkeypatch.delenv("CONDA_DEFAULT_ENV", raising=False)
+    monkeypatch.setenv("PIXI_PROJECT_NAME", "demo")
+    monkeypatch.setenv("PIXI_ENVIRONMENT_NAME", "default")
+    launch = terminal.shell_launch()
+    assert launch.env["PS1"].startswith("(demo) ")
+    result = subprocess.run([*launch.argv, "-c", 'echo "[$PS1]"'], env=launch.env, cwd=tmp_path,
+                            capture_output=True, text=True, timeout=30, check=False, start_new_session=True)
+    assert "[(demo) " in result.stdout  # (the shell takes it, without its startup files)
+    monkeypatch.setenv("PIXI_ENVIRONMENT_NAME", "dev")
+    assert terminal.environment_name() == "demo:dev"
+    monkeypatch.delenv("PIXI_PROJECT_NAME")
+    assert not terminal.shell_launch().env["PS1"].startswith("(")  # (no environment: just the folder)
+    monkeypatch.setenv("PS1", "mine> ")
+    assert terminal.shell_launch().env["PS1"] == "mine> "  # (one that was given is kept)
 
 
 def test_odd_sequences_do_not_stop_the_terminal(view):
