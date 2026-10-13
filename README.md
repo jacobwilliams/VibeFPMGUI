@@ -124,7 +124,10 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   whole file in miniature, in its syntax colors, with the change bars,
   warnings, errors, lint and AI-review markers and find matches; click it
   to jump, or drag the box (the part in view) to scroll. *View → Show
-  Minimap* turns it off. *View → Word Wrap* (⌥/Alt+Z) wraps long lines at
+  Minimap* turns it off. Selecting text highlights its other occurrences in
+  the file, matched as the find bar's *Match case* and *Whole words* are set
+  (*View → Highlight Other Occurrences of the Selection* turns it off).
+  *View → Word Wrap* (⌥/Alt+Z) wraps long lines at
   the window's edge instead of scrolling sideways (in the editor, the
   Terminal and the Output panel). Tab indents to the next tab stop (with
   several lines selected, it indents them; ⇧Tab takes an indent level off,

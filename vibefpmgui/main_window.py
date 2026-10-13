@@ -402,6 +402,13 @@ class MainWindow(QMainWindow):
         self.minimap_action.setStatusTip("A zoomed-out view of the whole file at the right of the editor")
         self.minimap_action.toggled.connect(self.set_minimap_enabled)
         view_menu.addAction(self.minimap_action)
+        self.matches_action = QAction("Highlight Other Occurrences of the Selection", self, checkable=True)
+        editor_mod.CodeEditor.highlight_matches = self.settings.value("highlight_matches", True, type=bool)
+        self.matches_action.setChecked(editor_mod.CodeEditor.highlight_matches)
+        self.matches_action.setStatusTip("Selecting text in the editor highlights it everywhere else in the file "
+                                         "(Match case and Whole words as set in the find bar)")
+        self.matches_action.toggled.connect(self.set_highlight_matches)
+        view_menu.addAction(self.matches_action)
         self.word_wrap_action = QAction("Word Wrap", self, checkable=True)
         self.word_wrap_action.setShortcut(QKeySequence("Alt+Z"))
         EditorTab.word_wrap = self.settings.value("word_wrap", False, type=bool)
@@ -2210,6 +2217,12 @@ class MainWindow(QMainWindow):
                 self.navigate_to(path, line, column, record=False)
                 return
         self._update_editor_actions()
+
+    def set_highlight_matches(self, on: bool):
+        editor_mod.CodeEditor.highlight_matches = on
+        self.settings.setValue("highlight_matches", on)
+        for editor in self.editors():
+            editor.editor._update_occurrences()
 
     def set_minimap_enabled(self, on: bool):
         EditorTab.minimap_enabled = on

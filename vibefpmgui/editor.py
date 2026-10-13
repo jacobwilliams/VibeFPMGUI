@@ -421,6 +421,8 @@ class CodeEditor(QPlainTextEdit):
 
     indent_width = 4   # View → Indentation (set by the window)
     use_tabs = False
+    highlight_matches = True  # View → Highlight Other Occurrences of the Selection
+    MAX_MATCHES = 2000        # (highlighted at most)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -439,6 +441,15 @@ class CodeEditor(QPlainTextEdit):
         self.deletions: dict[int, tuple[str, int]] = {}          # line -> (kind, lines deleted above it)
         self.minimap = None  # the vibefpmgui.minimap.Minimap beside it, if any
         self.find_selections: list[QTextEdit.ExtraSelection] = []
+        # The selection's other occurrences, highlighted (see _update_occurrences):
+        # Match case / Whole words come from the tab's find bar.
+        self.occurrence_selections: list[QTextEdit.ExtraSelection] = []
+        self.match_options: Callable[[], tuple[bool, bool]] = lambda: (False, False)
+        self._occurrence_timer = QTimer(self)
+        self._occurrence_timer.setSingleShot(True)
+        self._occurrence_timer.setInterval(120)  # (once the selection rests: not on every step of a drag)
+        self._occurrence_timer.timeout.connect(self._update_occurrences)
+        self.selectionChanged.connect(self._occurrence_timer.start)
         self.lint_issues: list[lint.LintIssue] = []  # underlined, with a tooltip
         self._spelling: list = []        # the misspelled words among them, in line order (see set_lint)
         self._spelling_lines: list[int] = []
@@ -917,7 +928,7 @@ class CodeEditor(QPlainTextEdit):
                 sel.format.setForeground(self.palette().color(QPalette.HighlightedText))
                 sel.cursor = QTextCursor(c)
                 selections.append(sel)
-        self.setExtraSelections(selections + self.find_selections)
+        self.setExtraSelections(selections + self.occurrence_selections + self.find_selections)
 
     def _marker_and_issue_selections(self) -> list:
         selections = []
@@ -973,6 +984,41 @@ class CodeEditor(QPlainTextEdit):
             sel.cursor.setPosition(block.position() + start)
             out.append(sel)
         return out
+
+    def _update_occurrences(self):
+        """Highlight the other occurrences of the selected text in the file
+        (single-line selections of 2 to 200 characters; Match case and Whole
+        words as set in the find bar)."""
+        found: list[QTextEdit.ExtraSelection] = []
+        cursor = self.textCursor()
+        selected = cursor.selectedText()
+        if (self.highlight_matches and len(self.extra_cursors) == 0 and 2 <= len(selected) <= 200
+                and selected.strip() and "\u2029" not in selected):
+            case, word = self.match_options()
+            pattern = re.escape(selected)
+            if word:  # (as the find bar: "_" is part of a word, so count doesn't match in count_all)
+                pattern = rf"(?<!\w){pattern}(?!\w)"
+            text = self.toPlainText()
+            simple = text.isascii()  # (else Qt counts characters beyond U+FFFF twice)
+            color = occurrence_color(self.palette().color(QPalette.Base))
+            mine = cursor.selectionStart()
+            for match in re.finditer(pattern, text, 0 if case else re.IGNORECASE):
+                start, end = match.span()
+                if not simple:
+                    start, end = self._qt_position(text, start), self._qt_position(text, end)
+                if start == mine:
+                    continue  # (the selection itself)
+                sel = QTextEdit.ExtraSelection()
+                sel.format.setBackground(color)
+                sel.cursor = QTextCursor(self.document())
+                sel.cursor.setPosition(start)
+                sel.cursor.setPosition(end, QTextCursor.KeepAnchor)
+                found.append(sel)
+                if len(found) >= self.MAX_MATCHES:
+                    break
+        if found or self.occurrence_selections:
+            self.occurrence_selections = found
+            self._update_extra_selections(rebuild=False)
 
     def set_find_selections(self, selections):
         self.find_selections = selections
@@ -1404,6 +1450,29 @@ class CodeEditor(QPlainTextEdit):
         self.setFocus()
 
 
+def occurrence_color(background: QColor) -> QColor:
+    """The highlight of the selection's other occurrences on a syntax
+    style's background: a blue mixed into it until it's plainly lighter (on
+    a dark background) or darker (on a light one). The app's selection color
+    was all but invisible on some styles (github-dark's near-black)."""
+    tint = QColor(90, 150, 255)
+    dark = background.lightness() < 128
+    wanted = OCCURRENCE_CONTRAST[dark]
+    color = QColor(background)
+    for amount in (0.25, 0.35, 0.45, 0.55, 0.65, 0.75):
+        color = QColor(round(background.red() + (tint.red() - background.red()) * amount),
+                       round(background.green() + (tint.green() - background.green()) * amount),
+                       round(background.blue() + (tint.blue() - background.blue()) * amount))
+        if abs(color.lightness() - background.lightness()) >= wanted:
+            break
+    return color
+
+
+# How far the highlight is from the background (lightness, 0–255): a dark
+# background needs more to show (dark colors look closer than they measure).
+OCCURRENCE_CONTRAST = {False: 34, True: 60}
+
+
 class FindBar(QWidget):
     """Find (and optionally replace) bar shown below the editor."""
 
@@ -1678,6 +1747,11 @@ class EditorTab(QWidget):
         self.editor = CodeEditor()
         self.highlighter = PygmentsHighlighter(self.editor.document(), lexer_for_path(self.path))
         self.find_bar = FindBar(self.editor)
+        # The selection's other occurrences: matched as the find bar is set.
+        self.editor.match_options = lambda: (self.find_bar.case_check.isChecked(),
+                                             self.find_bar.word_check.isChecked())
+        self.find_bar.case_check.toggled.connect(self.editor._update_occurrences)
+        self.find_bar.word_check.toggled.connect(self.editor._update_occurrences)
         self.status = QLabel()
         self.status.setContentsMargins(8, 2, 8, 2)
 
