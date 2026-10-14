@@ -110,6 +110,7 @@ from .graph_view import (
     DependencyGraphView,
 )
 from .icons import app_icon, make_icon
+from .output_links import OutputLinks
 from .parallel_tests import ParallelTests
 from .problems_panel import ProblemsPanel
 from .project_search import SearchPanel, search_roots
@@ -662,6 +663,13 @@ class MainWindow(QMainWindow):
         # Compiler messages may be colored (lfortran always colors them).
         self.console_writer = ansi.AnsiWriter(self.console)
         self.single_writer = ansi.AnsiWriter(self.test_output)
+        # File locations in the output ("At line 12 of file src/x.f90", "src/x.f90:12:5:") open on a click.
+        self.output_links = []
+        for view in (self.console, self.test_output):
+            links = OutputLinks(view, lambda: self.manifest_path.parent if self.manifest_path else None)
+            links.open_requested.connect(lambda path, line, column: self.navigate_to(path, line, column,
+                                                                                    preview=True))
+            self.output_links.append(links)
         self.output_stack = QStackedWidget()
         self.output_stack.addWidget(self.console)
         self.output_stack.addWidget(self.test_output)
@@ -3157,6 +3165,8 @@ class MainWindow(QMainWindow):
         """A command is starting: reset the output limit and the saved copy."""
         self._end_output(show_tail=False)
         self._decoder.reset()
+        for links in self.output_links:
+            links.forget()  # (files may have come or gone)
         self._shown_chars = self._hidden_chars = self._hidden_lines = 0
         self._tail.clear()
         self._tail_partial = ""

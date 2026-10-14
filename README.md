@@ -25,6 +25,9 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   crash, for one, can print 100+ MB): after about 2 MB the Output panel
   stops, shows the last 200 lines when the command ends, and *Full Output…*
   shows the file the whole output was saved to.
+  File locations in the output are links: click a runtime error's "At line
+  1753 of file src/x.f90", a backtrace's "… at src/x.f90:12" or a compiler
+  message's "src/x.f90:12:5:" to open the file at that line.
   *File → Recent Manifests* reopens any of the last 10 projects (missing
   ones are greyed out); the last one is reopened at startup. Each project
   remembers the files open in the editor (with their cursor and scroll
