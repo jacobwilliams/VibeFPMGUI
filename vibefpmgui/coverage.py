@@ -14,6 +14,7 @@ are built here and run by `vibefpmgui.main_window`.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 from dataclasses import dataclass, field
@@ -221,10 +222,14 @@ def find_gcov(compiler: str) -> str | None:
     return shutil.which("gcov")
 
 
-def capture_command(lcov: str, gcov: str, build_dir: Path, output: Path) -> list[str]:
-    """lcov reading every .gcda under the project's build folder."""
+def capture_command(lcov: str, gcov: str, build_dir: Path, output: Path, jobs: int | None = None) -> list[str]:
+    """lcov reading every .gcda under the project's build folder, ``jobs``
+    files at a time (default: one per CPU; lcov alone reads them one by
+    one, about 3x slower on a large project)."""
+    jobs = jobs or os.cpu_count() or 1
     return [lcov, "--capture", "--directory", str(build_dir), "--output-file", str(output),
-            "--gcov-tool", gcov, "--branch-coverage", "--ignore-errors", IGNORE, "--quiet"]
+            "--gcov-tool", gcov, "--branch-coverage", "--parallel", str(jobs), "--ignore-errors", IGNORE,
+            "--quiet"]
 
 
 def clear_counts(build_dir: Path) -> int:

@@ -414,3 +414,10 @@ def test_quitting_while_lcov_runs(window, project, monkeypatch, tmp_path):
     except OSError:
         alive = False
     assert not alive
+
+
+def test_lcov_reads_the_counts_in_parallel(tmp_path):
+    command = cov.capture_command("lcov", "gcov", tmp_path / "build", tmp_path / "out.info", jobs=6)
+    assert command[command.index("--parallel") + 1] == "6"
+    default = cov.capture_command("lcov", "gcov", tmp_path / "build", tmp_path / "out.info")
+    assert int(default[default.index("--parallel") + 1]) >= 1
