@@ -994,6 +994,7 @@ class MainWindow(QMainWindow):
             self.test_monitor.refresh_palette()
             self.run_monitor.refresh_palette()
             self.review_monitor.refresh_palette()
+            self.coverage_panel.refresh_palette()
             self.terminal_panel.refresh_colors()
             for editor in self.editors():
                 editor.refresh_style()
@@ -1121,6 +1122,7 @@ class MainWindow(QMainWindow):
         self.test_monitor.refresh_fonts()
         self.run_monitor.refresh_fonts()
         self.review_monitor.refresh_fonts()
+        self.coverage_panel.refresh_fonts()
         for tree in self.result_trees:
             tree.mono = mono
             tree.doItemsLayout()
