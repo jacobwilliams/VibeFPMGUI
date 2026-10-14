@@ -142,7 +142,7 @@ PROBLEM_SOURCES = {"lint": "fortitude", "lint error": "fortitude", "fortls": "fo
 LINT_DELAY_MS = 600  # lint once typing pauses this long
 GREMLIN_WIDTH = 16  # the gutter's gremlin column (only while the file has gremlins)
 COVERAGE_WIDTH = 5  # the gutter's coverage bars, at its left edge (only while the file has coverage)
-COVERAGE_COLORS = {True: "#2f9e44", False: "#e03131"}  # (a line the tests ran, one they didn't)
+COVERAGE_COLORS = {"ran": "#2f9e44", "partial": "#f08c00", "missed": "#e03131"}  # (gutter bars, minimap)
 SPELLING_DELAY_MS = 250  # spell check this long after the colors are updated
 LSP_SYNC_MS = 300    # send edits to the language server once typing pauses this long
 COMPLETE_MS = 120    # ask for completions once typing pauses this long
@@ -449,6 +449,7 @@ class CodeEditor(QPlainTextEdit):
         self.minimap = None  # the vibefpmgui.minimap.Minimap beside it, if any
         self.find_selections: list[QTextEdit.ExtraSelection] = []
         self.coverage: dict[int, int] = {}  # line -> times the tests ran it (see set_coverage)
+        self.coverage_branches: dict[int, tuple[int, int]] = {}  # line -> (branches taken, branches)
         # The selection's other occurrences, highlighted (see _update_occurrences):
         # Match case / Whole words come from the tab's find bar.
         self.occurrence_selections: list[QTextEdit.ExtraSelection] = []
@@ -502,14 +503,54 @@ class CodeEditor(QPlainTextEdit):
     def _coverage_column(self) -> int:
         return COVERAGE_WIDTH if self.coverage and self.show_coverage else 0
 
-    def set_coverage(self, lines: dict[int, int] | None):
+    def set_coverage(self, lines: dict[int, int] | None, branches: dict[int, tuple[int, int]] | None = None):
         """The last test run's coverage of this file: line -> times run (lines
-        with code only), shown as green and red bars in the gutter."""
-        lines = dict(lines or {})
-        if lines == self.coverage:
+        with code only), shown as green and red bars in the gutter (amber: it
+        ran, but not all of its ``branches``: line -> (taken, total))."""
+        lines, branches = dict(lines or {}), dict(branches or {}) if lines else {}
+        if lines == self.coverage and branches == self.coverage_branches:
             return
-        self.coverage = lines
+        self.coverage, self.coverage_branches = lines, branches
         self.refresh_gutter()
+
+    def coverage_state(self, line: int) -> str | None:
+        """ "ran", "partial" (ran; not every branch taken), "missed", or None
+        (no code there, or no coverage)."""
+        if line not in self.coverage:
+            return None
+        if not self.coverage[line]:
+            return "missed"
+        taken, total = self.coverage_branches.get(line, (0, 0))
+        return "partial" if taken < total else "ran"
+
+    def missed_starts(self) -> list[int]:
+        """The first line of each stretch of lines the tests didn't run
+        (lines without code in between don't end a stretch)."""
+        starts, previous = [], None
+        for line in sorted(self.coverage):
+            missed = self.coverage[line] == 0
+            if missed and previous is not True:
+                starts.append(line)
+            previous = missed
+        return starts
+
+    def go_to_missed(self, forward: bool = True) -> bool:
+        """Edit → Next / Previous Missed Line: to the next stretch of lines
+        the tests didn't run (around to the start at the end); False if
+        there's none."""
+        starts = self.missed_starts()
+        if not starts:
+            return False
+        here = self.textCursor().blockNumber() + 1
+        if forward:
+            target = next((n for n in starts if n > here), starts[0])
+        else:
+            # (From inside a stretch, the one before it: not its own start.)
+            current = max((n for n in starts if n <= here), default=None)
+            target = next((n for n in reversed(starts) if n < (current if current is not None else here)),
+                          starts[-1])
+        self.go_to_line(target)
+        return True
 
     def refresh_gutter(self):
         """The gutter again, at its width now (a column shown or hidden), and
@@ -519,13 +560,20 @@ class CodeEditor(QPlainTextEdit):
                                       self.gutter_width(), self.contentsRect().height()))
         self.gutter.update()
         self._update_extra_selections()
+        self._update_minimap()
 
     def coverage_note(self, line: int) -> str:
         """The gutter's tooltip for a coverage bar."""
         if line not in self.coverage:
             return ""
         count = self.coverage[line]
-        return f"Run {count:,} time{'s' * (count != 1)} by the tests" if count else "Not run by the tests"
+        if not count:
+            return "Not run by the tests"
+        note = f"Run {count:,} time{'s' * (count != 1)} by the tests"
+        taken, total = self.coverage_branches.get(line, (0, 0))
+        if total:
+            note += f" · {taken} of {total} branch{'es' * (total != 1)} taken"
+        return note
 
     def set_gremlins(self, found: list[gremlins_mod.Gremlin]):
         """The file's gremlins (non-ASCII and invisible characters): a gremlin
@@ -587,9 +635,10 @@ class CodeEditor(QPlainTextEdit):
             if block.isVisible() and bottom >= event.rect().top():
                 line = number + 1
                 left = self._coverage_column()
-                if left and line in self.coverage:  # (ran: green; didn't: red)
+                state = self.coverage_state(line) if left else None
+                if state:  # (ran: green; ran, not every branch: amber; didn't: red)
                     painter.setPen(Qt.NoPen)
-                    painter.setBrush(QColor(COVERAGE_COLORS[self.coverage[line] > 0]))
+                    painter.setBrush(QColor(COVERAGE_COLORS[state]))
                     painter.drawRect(QRectF(0, top, 3, bottom - top))
                 if line in self.gremlins:
                     size = min(GREMLIN_WIDTH - 2, height)
@@ -975,7 +1024,7 @@ class CodeEditor(QPlainTextEdit):
     def _marker_and_issue_selections(self) -> list:
         selections = []
         if self.show_coverage:  # (lines the tests didn't run: a faint red, under the problems' tints)
-            missed = QColor(COVERAGE_COLORS[False])
+            missed = QColor(COVERAGE_COLORS["missed"])
             missed.setAlpha(26)
             for line, count in self.coverage.items():
                 block = self.document().findBlockByNumber(line - 1)

@@ -40,6 +40,7 @@ class FileCoverage:
     functions: list[FunctionCoverage] = field(default_factory=list)
     branches_found: int = 0
     branches_hit: int = 0
+    line_branches: dict[int, tuple[int, int]] = field(default_factory=dict)  # line -> (taken, total)
 
     @property
     def lines_found(self) -> int:
@@ -60,6 +61,11 @@ class FileCoverage:
     @property
     def percent(self) -> float:
         return 100.0 * self.lines_hit / self.lines_found if self.lines_found else 0.0
+
+    def partial(self, line: int) -> bool:
+        """The line ran, but not every one of its branches was taken."""
+        taken, total = self.line_branches.get(line, (0, 0))
+        return self.lines.get(line, 0) > 0 and taken < total
 
     def missed(self) -> list[tuple[int, int]]:
         """The lines not run, as (first, last) ranges: lines in between
@@ -121,6 +127,14 @@ def parse_info(text: str) -> dict[Path, FileCoverage]:
         found = {key for key in branches}
         current.branches_found += len(found)
         current.branches_hit += sum(1 for key in found if branches[key] > 0)
+        per_line: dict[int, list[int]] = {}
+        for key in found:
+            counts = per_line.setdefault(_int(key[0]), [0, 0])
+            counts[0] += branches[key] > 0
+            counts[1] += 1
+        for number, (taken, total) in per_line.items():
+            old_taken, old_total = current.line_branches.get(number, (0, 0))
+            current.line_branches[number] = (max(taken, old_taken), max(total, old_total))
 
     for raw in text.splitlines():
         line = raw.strip()

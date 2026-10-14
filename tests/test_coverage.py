@@ -219,6 +219,79 @@ def test_missed_lines_are_tinted(window, project):
     assert tinted() == set()
 
 
+def test_branches_per_line(tmp_path):
+    text = (f"SF:{tmp_path}/a.f90\nDA:3,2\nDA:4,2\nDA:5,0\n"
+            "BRDA:3,0,0,2\nBRDA:3,0,1,0\nBRDA:4,0,0,1\nBRDA:4,0,1,1\nBRDA:5,0,0,-\nBRDA:5,0,1,-\nend_of_record\n"
+            f"SF:{tmp_path}/a.f90\nDA:3,1\nBRDA:3,0,0,1\nBRDA:3,0,1,0\nend_of_record\n")
+    (a,) = cov.parse_info(text).values()
+    assert a.line_branches == {3: (1, 2), 4: (2, 2), 5: (0, 2)}
+    assert [a.partial(n) for n in (3, 4, 5)] == [True, False, False]  # (5 didn't run: missed, not partial)
+
+
+def test_partly_covered_lines(window, project):
+    code = open_editor(window, project / "src/foo.f90").editor
+    code.set_coverage({5: 3, 6: 3, 7: 0}, {5: (1, 2), 6: (2, 2), 7: (0, 2)})
+    assert [code.coverage_state(n) for n in (1, 5, 6, 7)] == [None, "partial", "ran", "missed"]
+    assert code.coverage_note(5) == "Run 3 times by the tests · 1 of 2 branches taken"
+    assert code.coverage_note(6) == "Run 3 times by the tests · 2 of 2 branches taken"
+    assert code.coverage_note(7) == "Not run by the tests"
+    code.set_coverage(None, {5: (1, 2)})
+    assert code.coverage_branches == {}  # (no coverage: no branches either)
+
+
+def test_partial_lines_get_amber_bars(window, project):
+    path = (project / "src/foo.f90").resolve()
+    window._apply_coverage(a_run_now(window, path))
+    window.coverage[path].line_branches = {5: (1, 2)}
+    window._apply_coverage(window.coverage)
+    code = open_editor(window, project / "src/foo.f90").editor
+    assert code.coverage_branches == {5: (1, 2)} and code.coverage_state(5) == "partial"
+    image = code.gutter.grab().toImage()
+    y = code.blockBoundingGeometry(code.document().findBlockByNumber(4)).translated(code.contentOffset()).center().y()
+    assert image.pixelColor(1, int(y * image.devicePixelRatio())).name() == "#f08c00"
+
+
+def test_next_and_previous_missed_line(window, project):
+    editor = open_editor(window, project / "src/foo.f90")
+    code = editor.editor
+    window.next_missed_action.trigger()  # (no coverage: stays put, says so)
+    assert code.textCursor().blockNumber() == 0
+    code.set_coverage({2: 0, 3: 0, 5: 1, 6: 0, 8: 0})  # (stretches: 2–3 and 6–8)
+    assert code.missed_starts() == [2, 6]
+
+    def line() -> int:
+        return code.textCursor().blockNumber() + 1
+
+    window.next_missed_action.trigger()
+    assert line() == 2
+    window.next_missed_action.trigger()
+    assert line() == 6
+    window.next_missed_action.trigger()
+    assert line() == 2  # (around to the first)
+    window.previous_missed_action.trigger()
+    assert line() == 6  # (around to the last)
+    code.go_to_line(7)  # (inside the 6–8 stretch: the one before it)
+    window.previous_missed_action.trigger()
+    assert line() == 2
+    assert window.next_missed_action.shortcut().toString() == "F6"
+
+
+def test_missed_lines_on_the_minimap(window, project):
+    editor = open_editor(window, project / "src/foo.f90")
+    code, minimap = editor.editor, editor.minimap
+
+    def red_at(line: int) -> bool:
+        image = minimap.grab().toImage()
+        ratio = image.devicePixelRatio()
+        return image.pixelColor(int(1 * ratio), int(((line - 1) * 2 + 1) * ratio)).name() == "#e03131"
+
+    code.set_coverage({5: 1, 6: 0})
+    assert red_at(6) and not red_at(5)
+    window.coverage_action.trigger()  # (View → Show Coverage in the Editor: off)
+    assert not red_at(6)
+    window.coverage_action.trigger()
+
+
 def test_coverage_flags(window):
     window.coverage_check.setChecked(True)
     window.flag_edit.setText("-O2")

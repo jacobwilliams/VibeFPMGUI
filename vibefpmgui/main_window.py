@@ -2403,7 +2403,7 @@ class MainWindow(QMainWindow):
             replaced = self._preview_editor() if preview else None
             index = self.tabs.indexOf(replaced) if replaced is not None and not replaced.is_dirty() else -1
             editor.set_font(self._mono_font(editor=True))
-            editor.editor.set_coverage(self._coverage_lines(editor))
+            self._show_coverage(editor)
             editor.dirty_changed.connect(lambda _dirty, e=editor: self._update_editor_title(e))
             editor.path_changed.connect(lambda _p, e=editor: self._update_editor_title(e))
             editor.path_changed.connect(self._update_editor_actions)
@@ -2656,7 +2656,8 @@ class MainWindow(QMainWindow):
         has_editor = self.current_editor() is not None
         for action in (self.save_action, self.save_as_action, self.close_tab_action,
                        self.find_action, self.replace_action, self.find_next_action,
-                       self.find_previous_action, self.goto_action):
+                       self.find_previous_action, self.goto_action, self.next_missed_action,
+                       self.previous_missed_action):
             action.setEnabled(has_editor)
         graph = getattr(self, "docks", {}).get("graph")  # (the panels exist)
         self.find_action.setEnabled(has_editor or (graph is not None and self.panel_in_front(graph.widget())))
@@ -2820,6 +2821,12 @@ class MainWindow(QMainWindow):
         self.replace_files_action.triggered.connect(lambda: self.find_in_files(replace=True))
         menu.addSeparator()
         self.goto_action = editor_action("Go to Line…", "Ctrl+L", lambda e: e.go_to_line_dialog())
+        self.next_missed_action = editor_action("Next Missed Line", "F6", lambda e: self._go_to_missed(e, True))
+        self.next_missed_action.setStatusTip("Go to the next lines the last test run didn't run "
+                                             "(Build options → Coverage)")
+        self.previous_missed_action = editor_action("Previous Missed Line", "Shift+F6",
+                                                    lambda e: self._go_to_missed(e, False))
+        self.previous_missed_action.setStatusTip("Go to the previous lines the last test run didn't run")
         menu.addSeparator()
         self.definition_action = editor_action("Go to Definition", "F12", lambda e: e.go_to_definition())
         self.definition_action.setStatusTip("Open the definition of the name at the cursor "
@@ -3547,9 +3554,19 @@ class MainWindow(QMainWindow):
         """The coverage shown in the editors' gutters."""
         self.coverage = files
         for editor in self.editors():
-            editor.editor.set_coverage(self._coverage_lines(editor))
+            self._show_coverage(editor)
 
-    def _coverage_lines(self, editor: EditorTab) -> dict[int, int] | None:
+    def _go_to_missed(self, editor: EditorTab, forward: bool):
+        if not editor.editor.go_to_missed(forward):
+            self.statusBar().showMessage("No missed lines in this file" if editor.editor.coverage else
+                                         "No coverage for this file: turn on Build options → Coverage "
+                                         "and run the tests", 5000)
+
+    def _show_coverage(self, editor: EditorTab):
+        found = self._coverage_for(editor)
+        editor.editor.set_coverage(found.lines if found else None, found.line_branches if found else None)
+
+    def _coverage_for(self, editor: EditorTab) -> cov.FileCoverage | None:
         """A file's coverage for its gutter, if its text is still what the
         tests ran: not changed on disk since the run started, and no unsaved
         changes (its line numbers could differ: the bars would be on the
@@ -3562,7 +3579,7 @@ class MainWindow(QMainWindow):
                 return None
         except OSError:
             return None
-        return found.lines
+        return found
 
     def _durations_key(self, kind: str = "test") -> str:
         digest = hashlib.sha1(str(self.manifest_path).encode()).hexdigest()[:16]
