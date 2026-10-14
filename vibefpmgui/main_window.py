@@ -722,6 +722,7 @@ class MainWindow(QMainWindow):
         self.coverage_panel.tests_check.setChecked(self.settings.value("coverage_tests", False, type=bool))
         self.coverage_panel.tests_check.toggled.connect(lambda on: self.settings.setValue("coverage_tests", on))
         self.coverage: dict[Path, cov.FileCoverage] = {}  # the last test run's (see _collect_coverage)
+        self._coverage_started = 0.0  # when that run started
         self._coverage_process: QProcess | None = None
         self.review_monitor = ReviewMonitor()
         monitor = self.review_monitor
@@ -2400,8 +2401,7 @@ class MainWindow(QMainWindow):
             replaced = self._preview_editor() if preview else None
             index = self.tabs.indexOf(replaced) if replaced is not None and not replaced.is_dirty() else -1
             editor.set_font(self._mono_font(editor=True))
-            found = self.coverage.get(editor.path)
-            editor.editor.set_coverage(found.lines if found else None)
+            editor.editor.set_coverage(self._coverage_lines(editor))
             editor.dirty_changed.connect(lambda _dirty, e=editor: self._update_editor_title(e))
             editor.path_changed.connect(lambda _p, e=editor: self._update_editor_title(e))
             editor.path_changed.connect(self._update_editor_actions)
@@ -3350,6 +3350,7 @@ class MainWindow(QMainWindow):
         self.build_monitor.reset()  # the build progress shown next is this run's
         if kind == "test" and self.coverage_check.isChecked():
             cov.clear_counts(self.manifest_path.parent / "build")  # (this run's counts only)
+            self._coverage_started = time.time()  # (files changed after this aren't what was compiled)
         self._marker_monitor().begin_listing(description)
         self.show_all_output()
         self.run_fpm([kind], True, False, phase="list", args=list_args)
@@ -3541,12 +3542,25 @@ class MainWindow(QMainWindow):
                                          "(see the Coverage panel)", 8000)
 
     def _apply_coverage(self, files: dict):
-        """The coverage shown in the editors' gutters (a file that changed
-        since drops its own: its line numbers no longer match)."""
+        """The coverage shown in the editors' gutters."""
         self.coverage = files
         for editor in self.editors():
-            found = files.get(editor.path)
-            editor.editor.set_coverage(found.lines if found else None)
+            editor.editor.set_coverage(self._coverage_lines(editor))
+
+    def _coverage_lines(self, editor: EditorTab) -> dict[int, int] | None:
+        """A file's coverage for its gutter, if its text is still what the
+        tests ran: not changed on disk since the run started, and no unsaved
+        changes (its line numbers could differ: the bars would be on the
+        wrong lines). An open file edited later drops its bars itself."""
+        found = self.coverage.get(editor.path)
+        if found is None or editor.is_dirty():
+            return None
+        try:
+            if editor.path.stat().st_mtime > self._coverage_started:
+                return None
+        except OSError:
+            return None
+        return found.lines
 
     def _durations_key(self, kind: str = "test") -> str:
         digest = hashlib.sha1(str(self.manifest_path).encode()).hexdigest()[:16]

@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from conftest import open_editor, write_files
 from qtpy.QtCore import Qt
+from qtpy.QtGui import QTextCursor
 
 from vibefpmgui import coverage as cov
 from vibefpmgui.coverage_panel import CoveragePanel, function_name, shown_functions
@@ -222,11 +223,49 @@ def test_the_panel_shows_file_icons(window, project):
     assert item.text() == "src/foo.f90" and not item.icon().isNull()  # (Project files' icon for it)
 
 
+def a_run_now(window, path: Path) -> dict:
+    """Coverage of ``path`` from a test run starting now (after the file
+    was last written, as when it's compiled)."""
+    import time
+
+    window._coverage_started = time.time() + 1
+    return {path: cov.FileCoverage(path, {5: 1, 6: 0})}
+
+
 def test_a_new_editor_gets_the_coverage(window, project):
     path = (project / "src/foo.f90").resolve()
-    window._apply_coverage({path: cov.FileCoverage(path, {5: 1})})
+    window._apply_coverage(a_run_now(window, path))
     editor = open_editor(window, project / "src/foo.f90")
-    assert editor.editor.coverage == {5: 1}
+    assert editor.editor.coverage == {5: 1, 6: 0}
+
+
+def test_no_stale_bars_on_a_file_changed_since_the_run(window, project):
+    """(Edited, saved, closed and opened again, it got the old bars back,
+    on lines that had moved.)"""
+    import os
+
+    path = (project / "src/foo.f90").resolve()
+    window._apply_coverage(a_run_now(window, path))
+    editor = open_editor(window, project / "src/foo.f90")
+    editor.editor.moveCursor(QTextCursor.Start)
+    editor.editor.insertPlainText("! a new first line\n")  # (every line moves down one)
+    assert editor.editor.coverage == {}  # (open: dropped at the edit)
+    editor.save()
+    os.utime(path, (window._coverage_started + 5, window._coverage_started + 5))  # (saved after the run started)
+    window.close_editor(window.tabs.indexOf(editor))
+    again = open_editor(window, project / "src/foo.f90")
+    assert again.editor.coverage == {}  # (not the old bars on moved lines)
+
+
+def test_no_bars_on_unsaved_changes(window, project):
+    path = (project / "src/foo.f90").resolve()
+    editor = open_editor(window, project / "src/foo.f90")
+    editor.editor.appendPlainText("! not saved")  # (not what was compiled)
+    window._apply_coverage(a_run_now(window, path))
+    assert editor.editor.coverage == {}
+    other = open_editor(window, project / "app/main.f90")
+    window._apply_coverage(a_run_now(window, path) | a_run_now(window, (project / "app/main.f90").resolve()))
+    assert other.editor.coverage == {5: 1, 6: 0} and editor.editor.coverage == {}
 
 
 # ------------------------------------------------- a real run (fpm, gfortran, lcov)
