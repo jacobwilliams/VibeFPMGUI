@@ -927,3 +927,20 @@ def test_showing_the_answer_waits_longer_when_it_takes_long(qtbot):
     monitor._render_cost = 0.5  # (the last showing, with its layout, took half a second)
     monitor._render_soon()
     assert monitor._render_timer.interval() == 1000  # (twice that before the next)
+
+
+def test_showing_the_answer_lays_out_only_its_own_panel(qtbot, monkeypatch):
+    """(It laid out the whole app, which cut into a panel being docked again
+    by double-clicking its title: it was left half placed.)"""
+    from qtpy.QtWidgets import QApplication
+
+    from vibefpmgui.review_monitor import Entry, ReviewMonitor
+
+    monitor = ReviewMonitor()
+    qtbot.addWidget(monitor)
+    monitor.add_entry(Entry("ask", "q"))
+    flushed = []
+    monkeypatch.setattr(QApplication, "sendPostedEvents", lambda *args: flushed.append(args))
+    monitor.add_answer("some of the answer")
+    monitor._render_current()
+    assert not flushed and "some of the answer" in monitor.widget_for(monitor.current).answer.toPlainText()

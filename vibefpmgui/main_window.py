@@ -23,6 +23,7 @@ from pathlib import Path
 from qtpy.QtCore import (
     QEvent,
     QFile,
+    QObject,
     QProcess,
     QProcessEnvironment,
     QSettings,
@@ -815,6 +816,9 @@ class MainWindow(QMainWindow):
                          | QDockWidget.DockWidgetClosable)
         self.docks[name] = dock
         self._dock_of[widget] = dock
+        if not hasattr(self, "_redock"):
+            self._redock = RedockOnDoubleClick(self)
+        dock.installEventFilter(self._redock)  # (see RedockOnDoubleClick)
         dock.toggleViewAction().toggled.connect(lambda shown, d=dock: shown and self._panel_shown(d))
         dock.topLevelChanged.connect(lambda floating, d=dock: floating or self._panel_docked(d))
         return dock
@@ -4311,6 +4315,54 @@ class MainWindow(QMainWindow):
             self._ai_thread.quit()
             self._ai_thread.wait(3000)
         self.stop_ollama(quitting=True)
+
+
+class RedockOnDoubleClick(QObject):
+    """Double-clicking a floating panel's title docks it back, once the
+    mouse button is up.
+
+    On macOS a floating panel has the system's title bar, and pressing on it
+    starts a window move that macOS carries out; the second press of a
+    double-click starts one too.
+    Qt docked the panel at the double-click itself, in the middle of that
+    move: the panel was left over the main window instead of in its place
+    (and macOS logged "Window move completed without beginning"). Here the
+    double-click is taken over, and the panel is docked (as setFloating(False)
+    does, which works) when the move is done."""
+
+    POLL_MS = 30
+    MAX_POLLS = 100  # (3 s: if the button is never seen up, dock anyway)
+
+    def __init__(self, parent: QObject):
+        super().__init__(parent)
+        self._dock: QDockWidget | None = None
+        self._polls = 0
+        self._timer = QTimer(self)
+        self._timer.setInterval(self.POLL_MS)
+        self._timer.timeout.connect(self._check)
+
+    def eventFilter(self, dock, event) -> bool:
+        if not (isinstance(dock, QDockWidget) and dock.isFloating()):
+            return False
+        # The title: the window's own title bar (macOS: a floating panel has
+        # the system's), or Qt's drawn above the panel's content.
+        on_title = event.type() == QEvent.NonClientAreaMouseButtonDblClick or (
+            event.type() == QEvent.MouseButtonDblClick and dock.widget() is not None
+            and event.position().y() < dock.widget().geometry().top())
+        if on_title and event.button() == Qt.LeftButton:
+            self._dock, self._polls = dock, 0
+            self._timer.start()
+            return True  # (not Qt's own docking, mid-move)
+        return False
+
+    def _check(self):
+        self._polls += 1
+        if QApplication.mouseButtons() != Qt.NoButton and self._polls < self.MAX_POLLS:
+            return  # (still held: macOS may still be moving the window)
+        self._timer.stop()
+        dock, self._dock = self._dock, None
+        if dock is not None and dock.isFloating():
+            dock.setFloating(False)
 
 
 def repo_web_url(git_url: str) -> str | None:

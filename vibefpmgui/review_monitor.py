@@ -821,9 +821,15 @@ class ReviewMonitor(QWidget):
         if self.current is not None:
             started = time.monotonic()
             self.refresh(self.current)
-            # (Laid out now, not later: the time it takes counts, so a costly
-            # showing makes the next one wait longer and the window stays free.)
-            QApplication.sendPostedEvents(None, QEvent.LayoutRequest)
+            # Laid out now, not later: the time it takes counts, so a costly
+            # showing makes the next one wait longer and the window stays free.
+            # Only this panel's timeline: laying out the whole app here (all
+            # posted layout requests) cut into other windows' changes, a panel
+            # docked again by double-clicking its title left half placed.
+            widget = self.widget_for(self.current)
+            if widget is not None:
+                widget.layout().activate()
+            self.timeline_layout.activate()
             self._render_cost = time.monotonic() - started
 
     def add_reasoning(self, text: str):
