@@ -2718,7 +2718,7 @@ class MainWindow(QMainWindow):
             action.setChecked(editor is not None and editor.newline == newline and not editor.mixed_newlines)
 
     def fix_lint_issues(self, editor: EditorTab, unsafe: bool):
-        """Edit → Fix All … Issues: fortitude --fix on the editor's text (one
+        """Edit → Fix Issues (fortitude) → Fix All … Issues: fortitude --fix on the editor's text (one
         Undo step), run in the background."""
         if not editor.can_lint():
             return
@@ -2793,48 +2793,68 @@ class MainWindow(QMainWindow):
             action.triggered.connect(focused(method))
         menu.addSeparator()
 
-        def editor_action(text, key, slot):
-            action = menu.addAction(text)
+        def editor_action(text, key, slot, into=None):
+            action = (into or menu).addAction(text)
             action.setShortcut(QKeySequence(key))
             action.triggered.connect(lambda: self._with_editor(slot))
             return action
 
-        self.find_action = editor_action("Find…", QKeySequence.Find, lambda e: e.find_bar.open_bar())
+        # Find, Go To and fortitude's fixes in submenus (the menu was getting long).
+        find_menu = self.find_menu = menu.addMenu("Find")  # (kept: PySide would let it go)
+        self.find_action = editor_action("Find…", QKeySequence.Find, lambda e: e.find_bar.open_bar(), find_menu)
         # With the dependency graph in front, Find goes to its package search.
         self.find_action.triggered.disconnect()
         self.find_action.triggered.connect(self._find)
         self.replace_action = editor_action("Find and Replace…", "Ctrl+Alt+F",
-                                            lambda e: e.find_bar.open_bar(replace=True))
+                                            lambda e: e.find_bar.open_bar(replace=True), find_menu)
         self.find_next_action = editor_action("Find Next", QKeySequence.FindNext,
-                                              lambda e: e.find_bar.find_next())
+                                              lambda e: e.find_bar.find_next(), find_menu)
         self.find_previous_action = editor_action("Find Previous", QKeySequence.FindPrevious,
-                                                  lambda e: e.find_bar.find_previous())
-        self.find_files_action = menu.addAction("Find in Files…")
+                                                  lambda e: e.find_bar.find_previous(), find_menu)
+        find_menu.addSeparator()
+        self.find_files_action = find_menu.addAction("Find in Files…")
         self.find_files_action.setShortcut(QKeySequence("Ctrl+Shift+F"))
         self.find_files_action.setStatusTip("Search all the files of the project and its dependencies "
                                             "(Search tab)")
         self.find_files_action.triggered.connect(lambda: self.find_in_files())
-        self.replace_files_action = menu.addAction("Replace in Files…")
+        self.replace_files_action = find_menu.addAction("Replace in Files…")
         self.replace_files_action.setShortcut(QKeySequence("Ctrl+Shift+H"))
         self.replace_files_action.setStatusTip("Search and replace across the project and its "
                                                "dependencies (Search tab)")
         self.replace_files_action.triggered.connect(lambda: self.find_in_files(replace=True))
-        menu.addSeparator()
-        self.goto_action = editor_action("Go to Line…", "Ctrl+L", lambda e: e.go_to_line_dialog())
-        self.next_missed_action = editor_action("Next Missed Line", "F6", lambda e: self._go_to_missed(e, True))
-        self.next_missed_action.setStatusTip("Go to the next lines the last test run didn't run "
-                                             "(Build options → Coverage)")
-        self.previous_missed_action = editor_action("Previous Missed Line", "Shift+F6",
-                                                    lambda e: self._go_to_missed(e, False))
-        self.previous_missed_action.setStatusTip("Go to the previous lines the last test run didn't run")
-        menu.addSeparator()
-        self.definition_action = editor_action("Go to Definition", "F12", lambda e: e.go_to_definition())
+        go_menu = self.go_menu = menu.addMenu("Go To")  # (kept: PySide would let it go)
+        self.goto_action = editor_action("Go to Line…", "Ctrl+L", lambda e: e.go_to_line_dialog(), go_menu)
+        self.symbol_action = go_menu.addAction("Go to Symbol in Project…")
+        self.symbol_action.setShortcut(QKeySequence("Ctrl+T"))
+        self.symbol_action.setStatusTip("Find a module, type or procedure in the project "
+                                        "and its dependencies")
+        self.symbol_action.triggered.connect(self.go_to_symbol)
+        go_menu.addSeparator()
+        self.definition_action = editor_action("Go to Definition", "F12", lambda e: e.go_to_definition(), go_menu)
         self.definition_action.setStatusTip("Open the definition of the name at the cursor "
                                             "(or ⌘/Ctrl-click the name)")
         self.implementation_action = editor_action("Go to Implementation", "Ctrl+F12",
-                                                   lambda e: e.go_to_implementation())
+                                                   lambda e: e.go_to_implementation(), go_menu)
         self.implementation_action.setStatusTip("For a type-bound procedure, open the procedure it binds; for a "
                                                 "generic interface, its first module procedure")
+        go_menu.addSeparator()
+        self.back_action = go_menu.addAction("Go Back")
+        self.back_action.setShortcut(QKeySequence(QKeySequence.Back))
+        self.back_action.triggered.connect(lambda: self._go_history(back=True))
+        self.forward_action = go_menu.addAction("Go Forward")
+        self.forward_action.setShortcut(QKeySequence(QKeySequence.Forward))
+        self.forward_action.triggered.connect(lambda: self._go_history(back=False))
+        self._back: list[tuple[str, int, int]] = []     # where Go to Definition jumped from
+        self._forward: list[tuple[str, int, int]] = []
+        go_menu.addSeparator()
+        self.next_missed_action = editor_action("Next Missed Line", "F6", lambda e: self._go_to_missed(e, True),
+                                                go_menu)
+        self.next_missed_action.setStatusTip("Go to the next lines the last test run didn't run "
+                                             "(Build options → Coverage)")
+        self.previous_missed_action = editor_action("Previous Missed Line", "Shift+F6",
+                                                    lambda e: self._go_to_missed(e, False), go_menu)
+        self.previous_missed_action.setStatusTip("Go to the previous lines the last test run didn't run")
+        menu.addSeparator()
         self.references_action = editor_action("Find References", "Shift+F12", lambda e: e.find_references())
         self.references_action.setStatusTip("List every use of the name at the cursor (References tab)")
         self.rename_action = editor_action("Rename Symbol…", "F2", lambda e: e.rename_symbol())
@@ -2846,19 +2866,6 @@ class MainWindow(QMainWindow):
                                              lambda e: e.request_completion(manual=True))
         self.complete_action.setStatusTip("Offer completions for the name being typed "
                                           "(they also appear by themselves as you type)")
-        self.symbol_action = menu.addAction("Go to Symbol in Project…")
-        self.symbol_action.setShortcut(QKeySequence("Ctrl+T"))
-        self.symbol_action.setStatusTip("Find a module, type or procedure in the project "
-                                        "and its dependencies")
-        self.symbol_action.triggered.connect(self.go_to_symbol)
-        self.back_action = menu.addAction("Go Back")
-        self.back_action.setShortcut(QKeySequence(QKeySequence.Back))
-        self.back_action.triggered.connect(lambda: self._go_history(back=True))
-        self.forward_action = menu.addAction("Go Forward")
-        self.forward_action.setShortcut(QKeySequence(QKeySequence.Forward))
-        self.forward_action.triggered.connect(lambda: self._go_history(back=False))
-        self._back: list[tuple[str, int, int]] = []     # where Go to Definition jumped from
-        self._forward: list[tuple[str, int, int]] = []
         menu.addSeparator()
         self.format_action = editor_action("Format with fprettify", "Ctrl+Shift+I", self.format_file)
         self.format_action.setIconText("Format")
@@ -2867,12 +2874,13 @@ class MainWindow(QMainWindow):
                                       "with fprettify (undo to revert)")
         self.format_action.setStatusTip("Re-indent and re-space the Fortran file in the editor "
                                         "with fprettify")
-        self.fix_safe_action = editor_action("Fix All Safe Issues (fortitude)", "",
-                                             lambda e: self.fix_lint_issues(e, unsafe=False))
+        fix_menu = self.fix_menu = menu.addMenu("Fix Issues (fortitude)")  # (kept: PySide would let it go)
+        self.fix_safe_action = editor_action("Fix All Safe Issues", "",
+                                             lambda e: self.fix_lint_issues(e, unsafe=False), fix_menu)
         self.fix_safe_action.setStatusTip("Apply fortitude's safe fixes (they don't change what the "
                                           "code does) to the file in the editor; Undo reverts")
-        self.fix_all_action = editor_action("Fix All Issues, Including Unsafe (fortitude)", "",
-                                            lambda e: self.fix_lint_issues(e, unsafe=True))
+        self.fix_all_action = editor_action("Fix All Issues, Including Unsafe", "",
+                                            lambda e: self.fix_lint_issues(e, unsafe=True), fix_menu)
         self.fix_all_action.setStatusTip("Also apply fortitude's unsafe fixes, which can change what the "
                                          "code does: check them before saving; Undo reverts")
         menu.addSeparator()

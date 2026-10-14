@@ -535,7 +535,7 @@ class CodeEditor(QPlainTextEdit):
         return starts
 
     def go_to_missed(self, forward: bool = True) -> bool:
-        """Edit → Next / Previous Missed Line: to the next stretch of lines
+        """Edit → Go To → Next / Previous Missed Line: to the next stretch of lines
         the tests didn't run (around to the start at the end); False if
         there's none."""
         starts = self.missed_starts()

@@ -64,9 +64,12 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   (lines, functions, branches), each file's coverage and missed lines, and a
   selected file's functions with how often they were called; click a file
   to open it at its first missed line. The editor's gutter shows green bars
-  for the lines the tests ran and red ones for those they didn't (hover for
-  the count; *View → Show Coverage in the Editor* hides them). Editing a
-  file drops its bars until the next run. The project's own files are
+  for the lines the tests ran, red ones for those they didn't, and amber
+  ones for lines that ran without taking every branch (hover for the
+  counts; *View → Show Coverage in the Editor* hides them). Missed lines
+  are also marked on the minimap; *Edit → Go To → Next / Previous Missed
+  Line* (F6 / ⇧F6) jumps between them. Editing a file drops its bars until
+  the next run. The project's own files are
   listed; *Include dependencies* adds the others.
 * Parallel tests (off by default): *Build options → Parallel tests* sets how
   many tests run at once. fpm runs tests one after another, so then fpm only
@@ -109,7 +112,7 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   Ctrl+C and Tab completion work; ⌘C/⌘V (macOS) or Ctrl+Shift+C/V copy and
   paste. *Restart* starts a new shell. The terminal emulation is
   [pyte](https://github.com/selectel/pyte)'s.
-* Find in Files (⌘/Ctrl+Shift+F, or *Edit → Replace in Files…*,
+* Find in Files (⌘/Ctrl+Shift+F, or *Edit → Find → Replace in Files…*,
   ⌘/Ctrl+Shift+H): searches every file of the project and of its
   dependencies, in the *Search* tab, with options for match case, whole
   words and regular expressions, files to include or exclude (`*.f90`,
@@ -178,9 +181,9 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   fortitude is part of the pixi environment; for a pip install, add it
   with `pip install fortitude-lint`.
   fortitude can fix many issues itself: hover one and click *Apply fix* (or
-  right-click it → *Fix: …*) to apply just that fix, or use *Edit → Fix All
-  Safe Issues* for the whole file. *Safe* fixes don't change what the code
-  does; *Edit → Fix All Issues, Including Unsafe* also applies the others
+  right-click it → *Fix: …*) to apply just that fix, or use *Edit → Fix Issues (fortitude) →
+  Fix All Safe Issues* for the whole file. *Safe* fixes don't change what the code
+  does; *Edit → Fix Issues (fortitude) → Fix All Issues, Including Unsafe* also applies the others
   (marked "unsafe — check it"), which you should review. Either way it's a
   single Undo step and nothing is saved until you save.
 * *Problems* panel: everything flagged in the file in the editor — the last
@@ -230,7 +233,7 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
     and procedures, follows the cursor, and jumps to the one you pick. A
     colored badge shows each one's kind (M module, P program, S subroutine,
     F function, T type, I interface), indented to show what is inside what.
-  * *Edit → Go to Symbol in Project…* (⌘T) finds a module, type or
+  * *Edit → Go To → Go to Symbol in Project…* (⌘T) finds a module, type or
     procedure by name in the project and its dependencies.
   * Completion: after two letters of a name (or a `%`, for a derived
     type's components) a list of matching names appears — your procedures,
