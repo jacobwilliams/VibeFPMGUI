@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from conftest import open_editor, write_files
 from qtpy.QtCore import Qt
-from qtpy.QtGui import QTextCursor
+from qtpy.QtGui import QColor, QTextCursor
 
 from vibefpmgui import coverage as cov
 from vibefpmgui.coverage_panel import CoveragePanel, function_name, shown_functions
@@ -198,6 +198,25 @@ def test_the_gutter_shows_coverage(window, project):
     window.coverage_action.trigger()
     code.appendPlainText("! an edit")  # (the lines may have moved: the bars go)
     assert code.coverage == {} and code.gutter_width() == width
+
+
+def test_missed_lines_are_tinted(window, project):
+    editor = open_editor(window, project / "src/foo.f90")
+    code = editor.editor
+
+    def tinted() -> set[int]:
+        red = QColor("#e03131")
+        return {sel.cursor.blockNumber() + 1 for sel in code.extraSelections()
+                if sel.format.background().color().rgb() == red.rgb()}
+
+    code.set_coverage({5: 3, 6: 0, 7: 0})
+    assert tinted() == {6, 7}  # (the lines the tests didn't run; not the one they did)
+    window.coverage_action.trigger()  # (View → Show Coverage in the Editor: off)
+    assert tinted() == set()
+    window.coverage_action.trigger()
+    assert tinted() == {6, 7}
+    code.appendPlainText("! an edit")  # (the bars go, and the tints)
+    assert tinted() == set()
 
 
 def test_coverage_flags(window):

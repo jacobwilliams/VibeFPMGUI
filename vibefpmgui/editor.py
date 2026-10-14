@@ -512,11 +512,13 @@ class CodeEditor(QPlainTextEdit):
         self.refresh_gutter()
 
     def refresh_gutter(self):
-        """The gutter again, at its width now (a column shown or hidden)."""
+        """The gutter again, at its width now (a column shown or hidden), and
+        the lines' tints (missed lines)."""
         self._update_gutter_width()
         self.gutter.setGeometry(QRect(self.contentsRect().left(), self.contentsRect().top(),
                                       self.gutter_width(), self.contentsRect().height()))
         self.gutter.update()
+        self._update_extra_selections()
 
     def coverage_note(self, line: int) -> str:
         """The gutter's tooltip for a coverage bar."""
@@ -972,6 +974,13 @@ class CodeEditor(QPlainTextEdit):
 
     def _marker_and_issue_selections(self) -> list:
         selections = []
+        if self.show_coverage:  # (lines the tests didn't run: a faint red, under the problems' tints)
+            missed = QColor(COVERAGE_COLORS[False])
+            missed.setAlpha(26)
+            for line, count in self.coverage.items():
+                block = self.document().findBlockByNumber(line - 1)
+                if count == 0 and block.isValid():
+                    selections += self._line_highlight(block, missed)
         for line, notes in self.markers.items():
             block = self.document().findBlockByNumber(line - 1)
             if not block.isValid():
