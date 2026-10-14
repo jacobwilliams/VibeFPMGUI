@@ -30,7 +30,7 @@ BIG_FILE_SHARE = 0.4    # …and so are files taking more than this share of the
 WINDOW_PADDING = 20     # lines shown around the selection or procedure
 WINDOW_MAX_LINES = 400
 
-PROCEDURE_RE = re.compile(r"^\s*(?!end\b)(?:[\w(),=*\s]*?\s)?(subroutine|function)\s+\w+", re.IGNORECASE)
+PROCEDURE_RE = re.compile(r"^(?!\s*end\b)\s*(?:[\w(),=*\s]*?\s)?(subroutine|function)\s+\w+", re.IGNORECASE)
 PROCEDURE_END_RE = re.compile(r"^\s*end\s*(subroutine|function)\b|^\s*end\s*(!.*)?$", re.IGNORECASE)
 OUTLINE_RE = re.compile(
     r"^\s*(module|submodule|program|use|implicit|contains|interface|abstract\s+interface|"

@@ -141,6 +141,8 @@ PROBLEM_SOURCES = {"lint": "fortitude", "lint error": "fortitude", "fortls": "fo
                    "fortls error": "fortls", "spelling": "spelling"}
 LINT_DELAY_MS = 600  # lint once typing pauses this long
 GREMLIN_WIDTH = 16  # the gutter's gremlin column (only while the file has gremlins)
+COVERAGE_WIDTH = 5  # the gutter's coverage bars, at its left edge (only while the file has coverage)
+COVERAGE_COLORS = {True: "#2f9e44", False: "#e03131"}  # (a line the tests ran, one they didn't)
 SPELLING_DELAY_MS = 250  # spell check this long after the colors are updated
 LSP_SYNC_MS = 300    # send edits to the language server once typing pauses this long
 COMPLETE_MS = 120    # ask for completions once typing pauses this long
@@ -341,6 +343,9 @@ class LineNumberArea(QWidget):
     def event(self, event):
         if event.type() == event.Type.ToolTip:
             line = self.editor.line_at_y(event.pos().y())
+            if event.pos().x() < self.editor._coverage_column() and self.editor.coverage_note(line):
+                QToolTip.showText(event.globalPos(), self.editor.coverage_note(line), self)
+                return True
             change_tip = self._change_tip(event.pos(), line)
             if change_tip:  # over a change bar or a deletion marker
                 QToolTip.showText(event.globalPos(), change_tip, self)
@@ -423,6 +428,7 @@ class CodeEditor(QPlainTextEdit):
     indent_width = 4   # View → Indentation (set by the window)
     use_tabs = False
     highlight_matches = True  # View → Highlight Other Occurrences of the Selection
+    show_coverage = True      # View → Show Coverage
     MAX_MATCHES = 2000        # (highlighted at most)
 
     def __init__(self, parent=None):
@@ -442,6 +448,7 @@ class CodeEditor(QPlainTextEdit):
         self.deletions: dict[int, tuple[str, int]] = {}          # line -> (kind, lines deleted above it)
         self.minimap = None  # the vibefpmgui.minimap.Minimap beside it, if any
         self.find_selections: list[QTextEdit.ExtraSelection] = []
+        self.coverage: dict[int, int] = {}  # line -> times the tests ran it (see set_coverage)
         # The selection's other occurrences, highlighted (see _update_occurrences):
         # Match case / Whole words come from the tab's find bar.
         self.occurrence_selections: list[QTextEdit.ExtraSelection] = []
@@ -486,10 +493,37 @@ class CodeEditor(QPlainTextEdit):
     # ------------------------------------------------------------- gutter
     def gutter_width(self) -> int:
         digits = max(3, len(str(max(1, self.blockCount()))))
-        return 22 + self.fontMetrics().horizontalAdvance("9") * digits + self._gremlin_column()
+        return (22 + self.fontMetrics().horizontalAdvance("9") * digits + self._coverage_column()
+                + self._gremlin_column())
 
     def _gremlin_column(self) -> int:
         return GREMLIN_WIDTH if self.gremlins else 0
+
+    def _coverage_column(self) -> int:
+        return COVERAGE_WIDTH if self.coverage and self.show_coverage else 0
+
+    def set_coverage(self, lines: dict[int, int] | None):
+        """The last test run's coverage of this file: line -> times run (lines
+        with code only), shown as green and red bars in the gutter."""
+        lines = dict(lines or {})
+        if lines == self.coverage:
+            return
+        self.coverage = lines
+        self.refresh_gutter()
+
+    def refresh_gutter(self):
+        """The gutter again, at its width now (a column shown or hidden)."""
+        self._update_gutter_width()
+        self.gutter.setGeometry(QRect(self.contentsRect().left(), self.contentsRect().top(),
+                                      self.gutter_width(), self.contentsRect().height()))
+        self.gutter.update()
+
+    def coverage_note(self, line: int) -> str:
+        """The gutter's tooltip for a coverage bar."""
+        if line not in self.coverage:
+            return ""
+        count = self.coverage[line]
+        return f"Run {count:,} time{'s' * (count != 1)} by the tests" if count else "Not run by the tests"
 
     def set_gremlins(self, found: list[gremlins_mod.Gremlin]):
         """The file's gremlins (non-ASCII and invisible characters): a gremlin
@@ -550,9 +584,14 @@ class CodeEditor(QPlainTextEdit):
         while block.isValid() and top <= event.rect().bottom():
             if block.isVisible() and bottom >= event.rect().top():
                 line = number + 1
+                left = self._coverage_column()
+                if left and line in self.coverage:  # (ran: green; didn't: red)
+                    painter.setPen(Qt.NoPen)
+                    painter.setBrush(QColor(COVERAGE_COLORS[self.coverage[line] > 0]))
+                    painter.drawRect(QRectF(0, top, 3, bottom - top))
                 if line in self.gremlins:
                     size = min(GREMLIN_WIDTH - 2, height)
-                    gremlins_mod.paint_gremlin(painter, QRectF(1, top + (height - size) / 2, size, size))
+                    gremlins_mod.paint_gremlin(painter, QRectF(1 + left, top + (height - size) / 2, size, size))
                 font = QFont(self.font())
                 font.setBold(number == current)
                 painter.setFont(font)
@@ -564,7 +603,7 @@ class CodeEditor(QPlainTextEdit):
                     painter.setPen(Qt.NoPen)
                     painter.setBrush(QColor(MARKER_COLORS.get(worst, "#868e96")))
                     d = max(6, height // 2)
-                    painter.drawEllipse(4 + self._gremlin_column(), top + (height - d) // 2, d, d)
+                    painter.drawEllipse(4 + left + self._gremlin_column(), top + (height - d) // 2, d, d)
                 # Change bar (full line height) at the edge next to the text.
                 change = self.change_marks.get(line)
                 if change:
@@ -1748,6 +1787,9 @@ class EditorTab(QWidget):
         self.editor = CodeEditor()
         self.highlighter = PygmentsHighlighter(self.editor.document(), lexer_for_path(self.path))
         self.find_bar = FindBar(self.editor)
+        # A change to the text: the last test run's coverage no longer fits its lines.
+        self.editor.document().contentsChange.connect(
+            lambda _pos, removed, added: (removed or added) and self.editor.coverage and self.editor.set_coverage(None))
         # The selection's other occurrences: matched as the find bar is set.
         self.editor.match_options = lambda: (self.find_bar.case_check.isChecked(),
                                              self.find_bar.word_check.isChecked())

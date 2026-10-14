@@ -206,6 +206,9 @@ def test_enclosing_procedure():
     start = lines.index("  subroutine s2(x)") + 1
     assert ctx.enclosing_procedure(lines, start + 4) == (start, start + 12)
     assert ctx.enclosing_procedure(lines, 2) == (2, 2)  # (not in one)
+    end = start + 12  # ("  end subroutine s2": the end of s2, not the start of another)
+    assert ctx.enclosing_procedure(lines, end) == (start, end)
+    assert not ctx.PROCEDURE_RE.match("  end subroutine s2")
 
 
 def test_fix_a_review_finding_with_ai(qtbot, window, project, ollama):

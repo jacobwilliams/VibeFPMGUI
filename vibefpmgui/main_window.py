@@ -83,6 +83,7 @@ from . import ai_context as ctx
 from . import ai_edits as ed
 from . import ai_review as ai
 from . import build_outputs as bo
+from . import coverage as cov
 from . import editor as editor_mod
 from . import highlighter as hl
 from . import manifest as m
@@ -98,6 +99,7 @@ from .compat import (
     set_windows_app_id,
     split_args,
 )
+from .coverage_panel import CoveragePanel
 from .edit_cards import diff_rows
 from .editor import EditorTab, monospace_font
 from .graph_view import (
@@ -111,7 +113,7 @@ from .icons import app_icon, make_icon
 from .parallel_tests import ParallelTests
 from .problems_panel import ProblemsPanel
 from .project_search import SearchPanel, search_roots
-from .project_tree import ProjectTree, reveal_in_file_manager
+from .project_tree import ProjectTree, fpm_folders, reveal_in_file_manager
 from .references_panel import ReferencesPanel
 from .rename_dialog import RenamePreviewDialog
 from .result_tree import Problem, file_labels, root_for
@@ -403,6 +405,13 @@ class MainWindow(QMainWindow):
         self.minimap_action.setStatusTip("A zoomed-out view of the whole file at the right of the editor")
         self.minimap_action.toggled.connect(self.set_minimap_enabled)
         view_menu.addAction(self.minimap_action)
+        self.coverage_action = QAction("Show Coverage in the Editor", self, checkable=True)
+        editor_mod.CodeEditor.show_coverage = self.settings.value("show_coverage", True, type=bool)
+        self.coverage_action.setChecked(editor_mod.CodeEditor.show_coverage)
+        self.coverage_action.setStatusTip("After a test run with Build options → Coverage: green and red bars in the "
+                                          "gutter for the lines the tests ran and didn't")
+        self.coverage_action.toggled.connect(self.set_show_coverage)
+        view_menu.addAction(self.coverage_action)
         self.matches_action = QAction("Highlight Other Occurrences of the Selection", self, checkable=True)
         editor_mod.CodeEditor.highlight_matches = self.settings.value("highlight_matches", True, type=bool)
         self.matches_action.setChecked(editor_mod.CodeEditor.highlight_matches)
@@ -513,6 +522,8 @@ class MainWindow(QMainWindow):
         self.test_jobs_spin.setSpecialValueText("off (one at a time)")
         self.test_jobs_spin.setSuffix(" at a time")
         form.addRow("Parallel tests:", self.test_jobs_spin)
+        self.coverage_check = QCheckBox("Coverage")
+        form.addRow(self.coverage_check)
         self.verbose_check = QCheckBox("Verbose")
         form.addRow(self.verbose_check)
         fpm_row = QHBoxLayout()
@@ -542,6 +553,9 @@ class MainWindow(QMainWindow):
             (self.test_jobs_spin, "(not a flag)",
              (f"Run this many tests at once (this computer has {os.cpu_count() or 1} cores). fpm builds "
               "them; the app runs them, each with its own output. Off: fpm runs them one after another.")),
+            (self.coverage_check, "--flag --coverage --link-flag --coverage",
+             ("Build with gfortran's coverage counting (a build of its own): after Test, the Coverage panel "
+              "and the editor's gutter show which lines the tests ran (needs lcov).")),
             (self.verbose_check, "--verbose", "Print more detail about what fpm is doing."),
             (self.fpm_edit, "(not a flag)", "The fpm program to run. Leave empty to use the fpm on your PATH."),
         ]:
@@ -702,6 +716,13 @@ class MainWindow(QMainWindow):
         self.run_monitor.test_selected.connect(
             lambda name: self._show_marked_output(self.run_monitor, name))
         self.run_monitor.build_percent = lambda: self.build_monitor._percent
+        self.coverage_panel = CoveragePanel()
+        self.coverage_panel.open_requested.connect(
+            lambda path, line: self.navigate_to(path, line, 0, preview=True))
+        self.coverage_panel.tests_check.setChecked(self.settings.value("coverage_tests", False, type=bool))
+        self.coverage_panel.tests_check.toggled.connect(lambda on: self.settings.setValue("coverage_tests", on))
+        self.coverage: dict[Path, cov.FileCoverage] = {}  # the last test run's (see _collect_coverage)
+        self._coverage_process: QProcess | None = None
         self.review_monitor = ReviewMonitor()
         monitor = self.review_monitor
         monitor.stop_requested.connect(self.stop_review)
@@ -741,6 +762,7 @@ class MainWindow(QMainWindow):
         self.terminal_panel.set_font(self._mono_font(editor=True))
         self.terminal_panel.set_word_wrap(EditorTab.word_wrap)
         # The lists of places in files (vibefpmgui.result_tree), drawn alike.
+        self.coverage_panel.icon_for = self.project_tree.icon_for
         self.result_trees = [self.references_panel.tree, self.search_panel.tree, self.problems_panel.tree]
         for tree in self.result_trees:
             tree.icon_for = self.project_tree.icon_for
@@ -777,7 +799,8 @@ class MainWindow(QMainWindow):
             ("options", "Build options", options), ("files", "Project files", files_box),
             ("graph", "Dependency graph", graph_tab), ("outputs", "Build outputs", self.outputs_view),
             ("build", "Build", self.build_monitor), ("tests", "Tests", self.test_monitor),
-            ("run", "Run", self.run_monitor), ("problems", "Problems", self.problems_panel),
+            ("run", "Run", self.run_monitor), ("coverage", "Coverage", self.coverage_panel),
+            ("problems", "Problems", self.problems_panel),
             ("review", "Review", self.review_monitor),
             ("references", "References", self.references_panel), ("search", "Search", self.search_panel),
             ("terminal", "Terminal", self.terminal_panel), ("output", "Output", console_box),
@@ -862,7 +885,7 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.BottomDockWidgetArea, d["build"])
         # (Output beside Build first: split next to a stacked panel, it would be stacked too.)
         self.splitDockWidget(d["build"], d["output"], Qt.Horizontal)
-        for name in ("tests", "run", "problems", "review", "references", "search", "terminal"):
+        for name in ("tests", "run", "coverage", "problems", "review", "references", "search", "terminal"):
             self.tabifyDockWidget(d["build"], d[name])
         for dock in d.values():
             dock.setFloating(False)  # (after it's placed: a floating one stays floating otherwise)
@@ -1206,6 +1229,11 @@ class MainWindow(QMainWindow):
             self.restoreGeometry(geometry)
         layout = s.value("panels")  # (where each panel was: docked, stacked, floating, hidden)
         self._layout_restored = layout is not None and self.restoreState(layout, self.LAYOUT_VERSION)
+        coverage = self.docks["coverage"]
+        if self._layout_restored and self.dockWidgetArea(coverage) == Qt.NoDockWidgetArea:
+            # (A layout saved before the Coverage panel existed: next to Tests.)
+            self.addDockWidget(Qt.BottomDockWidgetArea, coverage)
+            self.tabifyDockWidget(self.docks["tests"], coverage)
         # Applied once the project's own [profiles] are in the list.
         self._wanted_profile = s.value("profile", "(default)")
         self.profile_combo.setCurrentText(self._wanted_profile)
@@ -1214,6 +1242,7 @@ class MainWindow(QMainWindow):
         self.extra_edit.setText(s.value("extra", ""))
         self.fpm_edit.setText(s.value("fpm", ""))
         self.verbose_check.setChecked(s.value("verbose", False, type=bool))
+        self.coverage_check.setChecked(s.value("coverage", False, type=bool))
         self.test_jobs_spin.setValue(s.value("test_jobs", 1, type=int))
         self.set_font_delta(s.value("font_delta", 0, type=int), announce=False)
         self._set_graph_layout(s.value("graph_layout", next(iter(LAYOUTS))))
@@ -1279,6 +1308,7 @@ class MainWindow(QMainWindow):
         s.setValue("extra", self.extra_edit.text())
         s.setValue("fpm", self.fpm_edit.text())
         s.setValue("verbose", self.verbose_check.isChecked())
+        s.setValue("coverage", self.coverage_check.isChecked())
         s.setValue("test_jobs", self.test_jobs_spin.value())
         super().closeEvent(event)
 
@@ -1697,6 +1727,8 @@ class MainWindow(QMainWindow):
         self.build_monitor.reset()
         self.test_monitor.reset()
         self.run_monitor.reset()
+        self._apply_coverage({})
+        self.coverage_panel.clear()
         self.stop_review()
         self._ai_editor = None
         self._forget()
@@ -2222,6 +2254,12 @@ class MainWindow(QMainWindow):
                 return
         self._update_editor_actions()
 
+    def set_show_coverage(self, on: bool):
+        editor_mod.CodeEditor.show_coverage = on
+        self.settings.setValue("show_coverage", on)
+        for editor in self.editors():
+            editor.editor.refresh_gutter()
+
     def set_highlight_matches(self, on: bool):
         editor_mod.CodeEditor.highlight_matches = on
         self.settings.setValue("highlight_matches", on)
@@ -2362,6 +2400,8 @@ class MainWindow(QMainWindow):
             replaced = self._preview_editor() if preview else None
             index = self.tabs.indexOf(replaced) if replaced is not None and not replaced.is_dirty() else -1
             editor.set_font(self._mono_font(editor=True))
+            found = self.coverage.get(editor.path)
+            editor.editor.set_coverage(found.lines if found else None)
             editor.dirty_changed.connect(lambda _dirty, e=editor: self._update_editor_title(e))
             editor.path_changed.connect(lambda _p, e=editor: self._update_editor_title(e))
             editor.path_changed.connect(self._update_editor_actions)
@@ -2865,8 +2905,10 @@ class MainWindow(QMainWindow):
                 args += ["--profile", self.profile_combo.currentText()]
             if self.compiler_edit.text().strip():
                 args += ["--compiler", self.compiler_edit.text().strip()]
-            if self.flag_edit.text().strip():
-                args += ["--flag", self.flag_edit.text().strip()]
+            coverage = self.coverage_check.isChecked() and sub[0] in ("build", "run", "test", "install")
+            flags = " ".join(f for f in (self.flag_edit.text().strip(), cov.FLAG if coverage else "") if f)
+            if flags:
+                args += ["--flag", flags]
             if self.verbose_check.isChecked():
                 args.append("--verbose")
             if sub[0] in ("run", "test") and self.target_edit.text().strip():
@@ -2874,6 +2916,8 @@ class MainWindow(QMainWindow):
             extra = split_args(self.extra_edit.text())
             if sub[0] in ("test", "run"):
                 extra, _ = split_runner(extra)  # (the user's --runner: run inside ours, see _start_marked)
+            if coverage:  # (linked with it too: the user's own --link-flag gets it added)
+                extra = with_link_flag(extra, cov.FLAG)
             args += extra
             if program_args and sub[0] in ("run", "test") and self.runner_args_edit.text().strip():
                 args += ["--"] + split_args(self.runner_args_edit.text())
@@ -3304,6 +3348,8 @@ class MainWindow(QMainWindow):
         if inner_runner:
             description += f" · runner: {inner_runner}"
         self.build_monitor.reset()  # the build progress shown next is this run's
+        if kind == "test" and self.coverage_check.isChecked():
+            cov.clear_counts(self.manifest_path.parent / "build")  # (this run's counts only)
         self._marker_monitor().begin_listing(description)
         self.show_all_output()
         self.run_fpm([kind], True, False, phase="list", args=list_args)
@@ -3413,6 +3459,9 @@ class MainWindow(QMainWindow):
         monitor = self._marker_monitor()
         monitor.finish(code, stopped=stopped)
         self._save_durations(self._marker_kind, monitor.durations())
+        if self._marker_kind == "test" and self.coverage_check.isChecked() and not stopped \
+                and monitor._result != "buildfailed":
+            self._collect_coverage()
         counts = monitor.counts()
         total = len(monitor.tests)
         title = monitor.word("title")
@@ -3433,6 +3482,71 @@ class MainWindow(QMainWindow):
         else:
             message = f"{title}: all {total} {monitor.word('passed')}"
         self.statusBar().showMessage(message)
+
+    # ----------------------------------------------------------- coverage
+    def _collect_coverage(self):
+        """After a test run with coverage: lcov reads the counts the tests
+        wrote (in the background), then the Coverage panel and the editors
+        show them."""
+        lcov = shutil.which("lcov")
+        compiler = self.effective_compiler()[0]
+        gcov = cov.find_gcov(compiler)
+        panel = self.coverage_panel
+        if lcov is None or gcov is None:
+            missing = "lcov" if lcov is None else f"gcov (for {compiler})"
+            panel.show_message(f"Coverage needs {missing}: it isn't on the PATH. (pixi add lcov, or install it "
+                               "with your package manager.)")
+            return
+        if self._coverage_process is not None:
+            return
+        self._coverage_file = Path(tempfile.gettempdir()) / f"vibefpmgui-coverage-{os.getpid()}.info"
+        self._coverage_file.unlink(missing_ok=True)
+        panel.show_message("Collecting coverage…")
+        process = self._coverage_process = QProcess(self)
+        process.setWorkingDirectory(str(self.manifest_path.parent))
+        process.setProcessChannelMode(QProcess.MergedChannels)
+        process.finished.connect(lambda code, _status, p=process: self._coverage_collected(p, code))
+        process.errorOccurred.connect(
+            lambda error, p=process: error == QProcess.FailedToStart and self._coverage_collected(p, -1))
+        self._coverage_description = f"{time.strftime('%H:%M')} · {self._build_description()}"
+        command = cov.capture_command(lcov, gcov, self.manifest_path.parent / "build", self._coverage_file)
+        process.start(command[0], command[1:])
+
+    def _coverage_collected(self, process: QProcess, code: int):
+        if process is not self._coverage_process:
+            return
+        self._coverage_process = None
+        output = bytes(process.readAll()).decode(errors="replace").strip()
+        process.deleteLater()
+        if code != 0 or not self._coverage_file.is_file():
+            last = output.splitlines()[-1] if output else "it didn't start"
+            self.coverage_panel.show_message(f"lcov couldn't read the coverage: {last}")
+            return
+        call_in_background(lambda f=self._coverage_file: cov.parse_info(f.read_text(errors="replace")),
+                           self._coverage_read, self)
+
+    def _coverage_read(self, files: dict):
+        if not self.manifest_path:
+            return
+        if not files:
+            self.coverage_panel.show_message("The tests wrote no coverage counts: was the project built with "
+                                             "gfortran? (Coverage works with gfortran's --coverage.)")
+            return
+        self._apply_coverage(files)
+        tests = [Path(folder) for folder, role in fpm_folders(self.manifest_path).items() if role == "test"]
+        self.coverage_panel.show_report(files, self.manifest_path.parent, self._coverage_description, tests)
+        hit, found = cov.totals(self.coverage_panel.shown_files())["lines"]
+        if found:
+            self.statusBar().showMessage(f"Coverage: {100 * hit / found:.1f}% of the lines with code ran "
+                                         "(see the Coverage panel)", 8000)
+
+    def _apply_coverage(self, files: dict):
+        """The coverage shown in the editors' gutters (a file that changed
+        since drops its own: its line numbers no longer match)."""
+        self.coverage = files
+        for editor in self.editors():
+            found = files.get(editor.path)
+            editor.editor.set_coverage(found.lines if found else None)
 
     def _durations_key(self, kind: str = "test") -> str:
         digest = hashlib.sha1(str(self.manifest_path).encode()).hexdigest()[:16]
@@ -4483,6 +4597,20 @@ def _breakable(text: str) -> str:
     otherwise only breaks at spaces). For display only: text copied from the
     label may include them."""
     return re.sub(r"([_./\\-])(?=\w)", "\\1\u200b", text)
+
+
+def with_link_flag(args: list[str], flag: str) -> list[str]:
+    """fpm arguments with ``flag`` added to the link flags (to the user's own
+    --link-flag, if there's one: fpm would take only one of two)."""
+    out = list(args)
+    for i, arg in enumerate(out):
+        if arg == "--link-flag" and i + 1 < len(out):
+            out[i + 1] = f"{out[i + 1]} {flag}"
+            return out
+        if arg.startswith("--link-flag="):
+            out[i] = f"{arg} {flag}"
+            return out
+    return out + ["--link-flag", flag]
 
 
 def split_runner(args: list[str]) -> tuple[list[str], str]:
