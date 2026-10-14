@@ -15,7 +15,6 @@ from qtpy.QtCore import Qt, Signal
 from qtpy.QtWidgets import (
     QApplication,
     QHBoxLayout,
-    QLabel,
     QMenu,
     QToolButton,
     QVBoxLayout,
@@ -23,6 +22,7 @@ from qtpy.QtWidgets import (
 )
 
 from .result_tree import RESULT_ROLE, Problem, ResultTree
+from .widgets import StatusLabel
 
 # (source, button label), in the order the buttons are shown.
 SOURCES = [("build", "Build"), ("fortitude", "fortitude"), ("fortls", "fortls"),
@@ -42,7 +42,7 @@ class ProblemsPanel(QWidget):
         self.path: Path | None = None
         self.problems: list[Problem] = []
         self.labels: tuple[str, str] = ("", "")  # (folder, package) shown after the file's name
-        self.title = QLabel(HINT)
+        self.title = StatusLabel(HINT)
         self.title.setContentsMargins(8, 4, 8, 2)
         self.buttons: dict[str, QToolButton] = {}
         header = QHBoxLayout()

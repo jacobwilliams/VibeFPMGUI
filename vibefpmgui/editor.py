@@ -88,6 +88,7 @@ from .highlighter import (
 from .icons import SYMBOL_INDENT, symbol_icon
 from .minimap import Minimap
 from .result_tree import Problem
+from .widgets import StatusLabel
 
 INDENT_WIDTHS = (2, 3, 4, 8)  # View → Indentation
 
@@ -1752,7 +1753,7 @@ class EditorTab(QWidget):
                                              self.find_bar.word_check.isChecked())
         self.find_bar.case_check.toggled.connect(self.editor._update_occurrences)
         self.find_bar.word_check.toggled.connect(self.editor._update_occurrences)
-        self.status = QLabel()
+        self.status = StatusLabel()
         self.status.setContentsMargins(8, 2, 8, 2)
 
         # Outline of the file (modules, types, procedures), from the language server.

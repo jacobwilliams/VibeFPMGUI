@@ -63,6 +63,7 @@ from .build_monitor import (
 )
 from .edit_cards import EditList
 from .editor import monospace_font
+from .widgets import StatusLabel
 
 FINDING_LINE_RE = re.compile(r"\s*\**\s*LINES?\s*\d", re.IGNORECASE)  # (a finding in a chat answer)
 
@@ -574,7 +575,7 @@ class ReviewMonitor(QWidget):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.title_icon = TitleIcon("robot")
         self.title = QLabel("AI")
-        self.subtitle = QLabel()
+        self.subtitle = StatusLabel()
         header = QHBoxLayout()
         header.setSpacing(6)
         header.addWidget(self.title_icon)
@@ -600,7 +601,7 @@ class ReviewMonitor(QWidget):
         header.addWidget(self.clear_button)
 
         self.progress = ProgressLine(self)
-        self.progress_label = QLabel()
+        self.progress_label = StatusLabel()
         self.stop_button = QPushButton("Stop")
         self.stop_button.setToolTip("Stop the model")
         self.stop_button.clicked.connect(self.stop_requested)

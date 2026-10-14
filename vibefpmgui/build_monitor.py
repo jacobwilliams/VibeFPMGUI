@@ -59,6 +59,7 @@ from qtpy.QtWidgets import (
 from . import manifest as m
 from .ansi import strip as strip_ansi
 from .icons import make_icon
+from .widgets import StatusLabel
 
 PROGRESS_RE = re.compile(r"^\[\s*(\d+)%\]\s+(\S+)(?:\s+(done|failed)\.)?\s*$")
 # gfortran/gcc: "src/a.f90:3:15:" (message on later lines) or "a.c:3:5: error: ..."
@@ -746,7 +747,7 @@ class BuildMonitor(SortableTable, QWidget):
         title_font.setPointSizeF(title_font.pointSizeF() + 2)
         title_font.setWeight(QFont.Bold)
         self.title.setFont(title_font)
-        self.subtitle = QLabel()
+        self.subtitle = StatusLabel()
         self.chips: dict[str, QPushButton] = {}
         header = QHBoxLayout()
         header.setSpacing(6)
@@ -766,7 +767,7 @@ class BuildMonitor(SortableTable, QWidget):
             self.chips[status] = chip
 
         self.progress = ProgressLine(self)
-        self.progress_label = QLabel()
+        self.progress_label = StatusLabel()
         progress_row = QHBoxLayout()
         progress_row.setSpacing(10)
         progress_row.addWidget(self.progress, 1)

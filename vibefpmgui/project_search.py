@@ -26,7 +26,6 @@ from qtpy.QtWidgets import (
     QApplication,
     QCheckBox,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
     QMenu,
     QPushButton,
@@ -48,6 +47,7 @@ from .result_tree import (
     read_text,
     root_for,
 )
+from .widgets import StatusLabel
 
 MAX_RESULTS = 10_000          # matches shown (the search stops there)
 
@@ -384,7 +384,7 @@ class SearchPanel(QWidget):
         self.deps_check.setToolTip("Also search the dependencies' files")
         self.ignored_check = QCheckBox("Ignored files")
         self.ignored_check.setToolTip("Also search files ignored by git (.gitignore) and hidden files")
-        self.status = QLabel("Type to search the project and its dependencies.")
+        self.status = StatusLabel("Type to search the project and its dependencies.")
         self.status.setContentsMargins(4, 0, 4, 0)
         self.stop_button = QToolButton()
         self.stop_button.setText("Stop")

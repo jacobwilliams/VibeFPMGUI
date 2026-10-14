@@ -52,6 +52,7 @@ from .build_monitor import (
     panel_stylesheet,
     scaled,
 )
+from .widgets import StatusLabel
 
 MARKER_RE = re.compile(r"@@vibefpm:(start|end):([^:@]+)(?::(-?\d+):([\d.]+))?@@")
 # A test's command line, from "test_runner.py --collect" (for a parallel run).
@@ -272,7 +273,7 @@ class TestMonitor(SortableTable, QWidget):
         title_font.setPointSizeF(title_font.pointSizeF() + 2)
         title_font.setWeight(QFont.Bold)
         self.title.setFont(title_font)
-        self.subtitle = QLabel()
+        self.subtitle = StatusLabel()
         header = QHBoxLayout()
         header.setSpacing(6)
         header.addWidget(self.title_icon)
@@ -293,7 +294,7 @@ class TestMonitor(SortableTable, QWidget):
             self.chips[status] = chip
 
         self.progress = ProgressLine(self)
-        self.progress_label = QLabel()
+        self.progress_label = StatusLabel()
         progress_row = QHBoxLayout()
         progress_row.setSpacing(10)
         progress_row.addWidget(self.progress, 1)

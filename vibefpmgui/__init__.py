@@ -107,6 +107,7 @@ menu item says "not found" and the feature is off; without fprettify the
 | Module | What it does |
 |---|---|
 | `vibefpmgui.icons` | Toolbar icons, symbol badges and the app icon, drawn with QPainter |
+| `vibefpmgui.widgets` | Small shared widgets (a status line that never widens the window) |
 | `vibefpmgui.background` | Blocking calls (Format, Fix All, asking Ollama) on a pool thread, the result back in the GUI thread |
 | `vibefpmgui.compat` | Things that differ between macOS, Linux and Windows |
 
