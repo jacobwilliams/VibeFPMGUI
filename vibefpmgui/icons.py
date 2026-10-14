@@ -187,10 +187,25 @@ def _close(p: QPainter, c: QColor):
     p.drawLine(QPointF(17, 7), QPointF(7, 17))
 
 
+def _coverage(p: QPainter, c: QColor):
+    """A gutter of lines, most of them run (filled), one not (outlined)."""
+    p.setPen(_pen(c))
+    p.setBrush(Qt.NoBrush)
+    p.drawRoundedRect(QRectF(4, 4, 16, 16), 2.5, 2.5)
+    p.setPen(Qt.NoPen)
+    p.setBrush(c)
+    for y, width in ((7, 8), (11, 11), (15, 6)):
+        p.drawRect(QRectF(7, y, width, 2))
+    p.setPen(_pen(c, 1.4))
+    p.setBrush(Qt.NoBrush)
+    p.drawRect(QRectF(13.5, 14.5, 3.5, 3))
+
+
 DRAWERS = {
     "build": _hammer,
     "run": _play,
     "test": _flask,
+    "coverage": _coverage,
     "update": _download,
     "clean": _broom,
     "clean-all": _trash,

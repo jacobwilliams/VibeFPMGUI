@@ -57,6 +57,17 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   runs weight the bar by expected time and estimate the time left. Click a
   test to see only its output. A `--runner` you put in *Extra args* (e.g.
   `mpirun -np 4`) still wraps each test.
+* Test coverage: tick *Build options → Coverage* (gfortran) and run Test.
+  fpm builds with `--coverage` (a build of its own), the tests' counts are
+  read with [lcov](https://github.com/linux-test-project/lcov) (part of the
+  pixi environment) after the run, and the *Coverage* panel shows the totals
+  (lines, functions, branches), each file's coverage and missed lines, and a
+  selected file's functions with how often they were called; click a file
+  to open it at its first missed line. The editor's gutter shows green bars
+  for the lines the tests ran and red ones for those they didn't (hover for
+  the count; *View → Show Coverage in the Editor* hides them). Editing a
+  file drops its bars until the next run. The project's own files are
+  listed; *Include dependencies* adds the others.
 * Parallel tests (off by default): *Build options → Parallel tests* sets how
   many tests run at once. fpm runs tests one after another, so then fpm only
   builds them and reports each test's command line, and the app runs them

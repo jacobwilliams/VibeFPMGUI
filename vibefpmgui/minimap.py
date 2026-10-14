@@ -171,7 +171,17 @@ class Minimap(QWidget):
                                             LINE_HEIGHT), found)
 
         # Change bars (left edge) and deleted-line marks.
-        from .editor import CHANGE_COLORS, MARKER_COLORS, worst_severity
+        from .editor import (
+            CHANGE_COLORS,
+            COVERAGE_COLORS,
+            MARKER_COLORS,
+            worst_severity,
+        )
+        if editor.show_coverage and editor.coverage:  # (lines the tests didn't run: under the change bars)
+            missed = QColor(COVERAGE_COLORS["missed"])
+            for line, count in editor.coverage.items():
+                if not count and first <= line - 1 <= last:
+                    painter.fillRect(QRectF(0, (line - 1) * LINE_HEIGHT - offset, 3, LINE_HEIGHT), missed)
         for line, kind in editor.change_marks.items():
             if first <= line - 1 <= last:
                 painter.fillRect(QRectF(0, (line - 1) * LINE_HEIGHT - offset, 3, LINE_HEIGHT),

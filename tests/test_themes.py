@@ -79,3 +79,19 @@ def test_panels_never_animate(window):
         window.set_theme(key)
         assert QApplication.style().styleHint(QStyle.SH_Widget_Animation_Duration) == 0
         assert window.style().styleHint(QStyle.SH_Widget_Animation_Duration, None, window) == 0
+
+
+def test_every_panel_follows_the_theme(qtbot, window):
+    """(The Coverage panel stayed dark in a light theme: it wasn't told.)
+    Every panel with light and dark colors follows a switch."""
+    from vibefpmgui.build_monitor import app_is_light
+
+    panels = [dock.widget() for dock in window.docks.values() if hasattr(dock.widget(), "is_light")]
+    assert window.coverage_panel in panels
+    for key in ("nord", "ocean", "nord"):  # (dark, light, dark)
+        window.set_theme(key)
+        qtbot.wait(50)  # (the windows are told of the new palette through the event loop)
+        light = app_is_light()
+        assert light == (not themes.THEMES[key].dark)
+        wrong = [type(p).__name__ for p in panels if p.is_light != light]
+        assert not wrong, (key, wrong)
