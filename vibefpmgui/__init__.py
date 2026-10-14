@@ -51,6 +51,7 @@ menu item says "not found" and the feature is off; without fprettify the
 | Module | What it does |
 |---|---|
 | `vibefpmgui.main_window` | The window: build options, toolbar and menus, running fpm, and wiring the panels together |
+| `vibefpmgui.dock_snap` | Dragging a panel's edge past its smallest size collapses it, as in VS Code |
 | `vibefpmgui.manifest` | Reading `fpm.toml` files and resolving the dependency tree (no Qt) |
 | `vibefpmgui.graph_view` | The interactive dependency graph (pyqtgraph) |
 | `vibefpmgui.project_tree` | The *Project files* tree, with fpm folder badges and `.gitignore` handling |

@@ -100,6 +100,7 @@ from .compat import (
     split_args,
 )
 from .coverage_panel import CoveragePanel
+from .dock_snap import SnapClosed
 from .edit_cards import diff_rows
 from .editor import EditorTab, monospace_font
 from .graph_view import (
@@ -821,6 +822,8 @@ class MainWindow(QMainWindow):
         self.docks["problems"].visibilityChanged.connect(self._problems_shown)
         self.docks["graph"].visibilityChanged.connect(self._update_editor_actions)  # (Find: the graph's search)
         self.default_layout()
+        # Dragging a panel's edge past its smallest size collapses it (see dock_snap).
+        self.snap_closed = SnapClosed(self, list(self.docks.values()))
         self._update_central()
         view_menu.addSeparator()
         panels = self.panels_menu = view_menu.addMenu("Panels")  # (kept: PySide would let it go)
@@ -915,6 +918,7 @@ class MainWindow(QMainWindow):
         self.resizeDocks([d["build"], d["output"]], [3, 2], Qt.Horizontal)
 
     def reset_layout(self):
+        self.snap_closed.expand_all()
         self.default_layout()
         self.statusBar().showMessage("Panels back in their places", 3000)
 
@@ -923,8 +927,14 @@ class MainWindow(QMainWindow):
         dock = self._dock_of.get(widget)
         if dock is not None:
             dock.show()
+            self.snap_closed.expand(dock)  # (collapsed by dragging its edge: open again)
             self._keep_on_screen(dock)
             dock.raise_()
+
+    def _content(self, dock: QDockWidget) -> QWidget | None:
+        """A panel's content (collapsed by dragging its edge, the panel shows a grip instead)."""
+        snap = getattr(self, "snap_closed", None)
+        return snap.content(dock) if snap is not None else dock.widget()
 
     def panel_in_front(self, widget: QWidget) -> bool:
         """Whether a panel is shown (and not behind another in its stack)."""
@@ -1313,6 +1323,7 @@ class MainWindow(QMainWindow):
             return
         s = self.settings
         s.setValue("geometry", self.saveGeometry())
+        self.snap_closed.expand_all()  # (collapsed panels are saved open: nothing comes back hidden)
         s.setValue("panels", self.saveState(self.LAYOUT_VERSION))
         s.setValue("profile", self.profile_combo.currentText())
         s.setValue("compiler", self.compiler_edit.text())
@@ -2653,11 +2664,11 @@ class MainWindow(QMainWindow):
         focus = QApplication.focusWidget()
         if focus is not None and dock.isAncestorOf(focus):
             return True
-        return self.current_editor() is None and self.panel_in_front(dock.widget())
+        return self.current_editor() is None and self.panel_in_front(self._content(dock))
 
     def _find(self):
         if self._graph_in_use():
-            self.show_panel(self.docks["graph"].widget())
+            self.show_panel(self._content(self.docks["graph"]))
             self.graph_view.focus_search()
         else:
             self._with_editor(lambda e: e.find_bar.open_bar())
@@ -2670,7 +2681,7 @@ class MainWindow(QMainWindow):
                        self.previous_missed_action):
             action.setEnabled(has_editor)
         graph = getattr(self, "docks", {}).get("graph")  # (the panels exist)
-        self.find_action.setEnabled(has_editor or (graph is not None and self.panel_in_front(graph.widget())))
+        self.find_action.setEnabled(has_editor or (graph is not None and self.panel_in_front(self._content(graph))))
         editor = self.current_editor()
         self.format_action.setEnabled(editor is not None and formatter.can_format(editor.path)
                                       and formatter.executable() is not None)
