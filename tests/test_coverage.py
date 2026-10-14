@@ -385,3 +385,32 @@ def test_coverage_of_a_real_test_run(qtbot, make_window, tmp_path):
     assert editor.editor.coverage == calc.lines  # (in the gutter)
     names = [window.coverage_panel.table.item(r, 0).text() for r in range(window.coverage_panel.table.rowCount())]
     assert "src/calc.f90" in names
+
+
+def test_quitting_while_lcov_runs(window, project, monkeypatch, tmp_path):
+    """(lcov was still running at quit: its QProcess was gone when its
+    finished signal came, and reading its output raised.)"""
+    import os
+    import time
+
+    from vibefpmgui import main_window as mw
+
+    slow = tmp_path / "lcov"
+    slow.write_text("#!/bin/sh\nsleep 30\n")
+    slow.chmod(0o755)
+    which = shutil.which
+    monkeypatch.setattr(mw.shutil, "which", lambda name, *a, **k: str(slow) if name == "lcov" else which(name, *a, **k))
+    monkeypatch.setattr(cov, "find_gcov", lambda compiler: "/usr/bin/true")
+    window._collect_coverage()
+    process = window._coverage_process
+    assert process is not None and process.waitForStarted(5000)
+    pid = process.processId()
+    started = time.time()
+    window._clear_run_panels()  # (as when another project opens, or the window closes)
+    assert window._coverage_process is None and time.time() - started < 5
+    try:
+        os.kill(pid, 0)
+        alive = True
+    except OSError:
+        alive = False
+    assert not alive

@@ -1305,6 +1305,7 @@ class MainWindow(QMainWindow):
         self.search_panel.shutdown()
         self.terminal_panel.shutdown()
         self._shutdown_ai()
+        self._stop_coverage()
         self._end_output(show_tail=False)
         self._full_output_path.unlink(missing_ok=True)  # (the full-output log: only for this run)
         if clearing:
@@ -1738,6 +1739,7 @@ class MainWindow(QMainWindow):
         self.build_monitor.reset()
         self.test_monitor.reset()
         self.run_monitor.reset()
+        self._stop_coverage()  # (another project's: its result would land here)
         self._apply_coverage({})
         self.coverage_panel.clear()
         self.stop_review()
@@ -3539,6 +3541,18 @@ class MainWindow(QMainWindow):
         self._coverage_description = f"{time.strftime('%H:%M')} · {self._build_description()}"
         command = cov.capture_command(lcov, gcov, self.manifest_path.parent / "build", self._coverage_file)
         process.start(command[0], command[1:])
+
+    def _stop_coverage(self):
+        """Stop lcov if it's still reading the counts (quitting, or another
+        project). Its finished signal then finds it isn't the current one."""
+        process, self._coverage_process = self._coverage_process, None
+        if process is None:
+            return
+        kill_process_tree(process)
+        process.waitForFinished(1000)
+        process.deleteLater()
+        if self._coverage_file is not None:
+            self._coverage_file.unlink(missing_ok=True)
 
     def _coverage_collected(self, process: QProcess, code: int):
         if process is not self._coverage_process:
