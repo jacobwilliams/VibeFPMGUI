@@ -470,7 +470,8 @@ There are natural seams for splitting them:
 | `editor_lsp.py` | `EditorTab`'s hover/definition/implementation/completion/signature/references/rename methods | An `EditorLanguageFeatures` helper object. |
 
 ### 3.2 Duplicated code
-- **The per-project settings key is written out four times.**
+- ~~**The per-project settings key is written out four times.**~~ ✅ One
+  `_project_key(prefix)` in `window/project.py` (2026-10-14, with bandit's B324).
   `hashlib.sha1(str(self.manifest_path).encode()).hexdigest()[:16]`
   appears in `_session_key`, `_config_records`, `_features_key` and
   `_durations_key`. Use one `_project_key(prefix)` helper.
