@@ -70,6 +70,9 @@ testpaths = ["tests"]
 pythonpath = [".", "tests"]   # (the package from this checkout; conftest helpers)
 qt_api = "pyside6"
 timeout = 120            # pytest-timeout: a test waiting on a dialog fails instead of hanging
+# From a watchdog thread: dumps every thread's stack, then ends the run. (The default,
+# a signal, only fires when Python runs: a hang inside Qt's event loop never ended.)
+timeout_method = "thread"
 
 [tool.coverage.run]
 source = ["vibefpmgui"]
