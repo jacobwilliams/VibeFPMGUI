@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from types import SimpleNamespace
 
@@ -40,7 +41,7 @@ def test_ls_remote_parses_git(monkeypatch):
     answer = du.ls_remote(URL)
     assert answer["refs/tags/v1.0"] == SHA["v0.5.0"]  # (an annotated tag: its commit)
     assert answer["HEAD"] == SHA["head"]
-    assert seen["args"][:3] == ["git", "ls-remote", URL] and seen["env"]["GIT_TERMINAL_PROMPT"] == "0"
+    assert seen["args"][:4] == ["git", "ls-remote", "--", URL] and seen["env"]["GIT_TERMINAL_PROMPT"] == "0"
 
 
 @pytest.mark.parametrize(("behaviour", "message"), [
@@ -214,3 +215,16 @@ def test_git_errors_say_why():
     assert du.git_error("fatal: unable to access 'https://x/': Could not resolve host: x\n") == \
         "unable to access 'https://x/': Could not resolve host: x"
     assert du.git_error("") == ""
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git is needed")
+@pytest.mark.parametrize("url", ["--upload-pack=touch {marker}", "ext::sh -c touch% {marker}"])
+def test_a_dependency_url_never_runs_a_command(tmp_path, url):
+    """A git URL comes from a project's fpm.toml: as an option ("--upload-pack=…")
+    or through git's ext:: transport, it would run a command (it did)."""
+    marker = tmp_path / "ran"
+    with pytest.raises(RuntimeError):
+        du.ls_remote(url.format(marker=marker))
+    assert not marker.exists()
+    assert du.git_environment({})["GIT_ALLOW_PROTOCOL"] == du.ALLOWED_GIT_PROTOCOLS
+    assert du.git_environment({"GIT_ALLOW_PROTOCOL": "ext"})["GIT_ALLOW_PROTOCOL"] == du.ALLOWED_GIT_PROTOCOLS

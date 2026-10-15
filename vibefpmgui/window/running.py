@@ -6,7 +6,6 @@ The output goes to `vibefpmgui.window.output`; Test and Run's steps are in
 
 from __future__ import annotations
 
-import hashlib
 import html
 import os
 import shutil
@@ -312,8 +311,7 @@ class RunningMixin:
         self._rebuild_features_menu()
 
     def _features_key(self) -> str:
-        digest = hashlib.sha1(str(self.manifest_path).encode()).hexdigest()[:16]
-        return f"features/{digest}"
+        return self._project_key("features")
 
     def _rebuild_features_menu(self):
         menu = self.features_menu

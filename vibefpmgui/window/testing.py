@@ -7,7 +7,6 @@ Tests and Run panels know where each one starts and ends.
 from __future__ import annotations
 
 import fnmatch
-import hashlib
 import json
 import os
 import time
@@ -225,8 +224,7 @@ class TestingMixin:
         self.statusBar().showMessage(message)
 
     def _durations_key(self, kind: str = "test") -> str:
-        digest = hashlib.sha1(str(self.manifest_path).encode()).hexdigest()[:16]
-        return f"{kind}_durations/{digest}"
+        return self._project_key(f"{kind}_durations")
 
     def _load_durations(self, kind: str = "test") -> dict[str, float]:
         try:

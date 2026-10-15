@@ -3,7 +3,6 @@ and the command that compiled a file."""
 
 from __future__ import annotations
 
-import hashlib
 import html
 import os
 import sys
@@ -41,8 +40,7 @@ class BuildOutputsMixin:
         self.outputs_view.refresh_requested.connect(self.refresh_build_outputs)
 
     def _config_records(self) -> bo.ConfigRecords:
-        digest = hashlib.sha1(str(self.manifest_path).encode()).hexdigest()[:16]
-        return bo.ConfigRecords(self.settings, f"build_configs/{digest}")
+        return bo.ConfigRecords(self.settings, self._project_key("build_configs"))
 
     def _record_build_folders(self):
         """Remember which build folders the finished build wrote, and with
