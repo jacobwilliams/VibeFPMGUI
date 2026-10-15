@@ -64,6 +64,14 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   runs weight the bar by expected time and estimate the time left. Click a
   test to see only its output. A `--runner` you put in *Extra args* (e.g.
   `mpirun -np 4`) still wraps each test.
+* *Git* panel: the project's repository's branch (with its upstream and
+  how many commits ahead or behind), and its changed files: staged, not
+  staged, untracked, in conflict. Select a file to see its diff, side by side
+  (or *Unified*), syntax-colored, with unchanged stretches folded;
+  double-click a line to open the file there. It refreshes when a file is
+  saved, the project is reloaded, or the app is used again after another
+  (git in a terminal), and with *Refresh*. Read with
+  [pygit2](https://www.pygit2.org) (part of the pixi environment).
 * Test coverage: tick *Build options → Coverage* (gfortran) and run Test.
   fpm builds with `--coverage` (a build of its own), the tests' counts are
   read with gcov (which comes with gfortran) after the run, and the

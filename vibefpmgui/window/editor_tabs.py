@@ -311,6 +311,7 @@ class EditorTabsMixin:
 
     def _editor_saved(self, path: str):
         self.statusBar().showMessage(f"Saved {path}", 4000)
+        self.refresh_git()
         if self.manifest_path and Path(path) == self.manifest_path:
             self.reload()  # graph, features and profiles may have changed
 

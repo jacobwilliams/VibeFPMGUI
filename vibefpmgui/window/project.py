@@ -317,6 +317,7 @@ class ProjectMixin:
         self.terminal_panel.set_directory(self.manifest_path.parent)
         self._update_language_server()
         self.refresh_build_outputs()
+        self.refresh_git()
         self._set_project_enabled(True)
         self._load_features_and_profiles()
         missing = sum(1 for p in self.graph.packages.values() if p.kind == m.MISSING)

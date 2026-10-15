@@ -201,11 +201,24 @@ def _coverage(p: QPainter, c: QColor):
     p.drawRect(QRectF(13.5, 14.5, 3.5, 3))
 
 
+def _git(p: QPainter, c: QColor):
+    """A branch: two commits on a line, and one branching off it."""
+    p.setPen(_pen(c, 1.9))
+    p.setBrush(Qt.NoBrush)
+    p.drawLine(QPointF(7, 8.6), QPointF(7, 15.4))
+    path = QPainterPath(QPointF(17, 9.6))
+    path.cubicTo(QPointF(17, 14), QPointF(7, 12), QPointF(7, 15.4))
+    p.drawPath(path)
+    for x, y in ((7, 6), (7, 18), (17, 7)):
+        p.drawEllipse(QPointF(x, y), 2.6, 2.6)
+
+
 DRAWERS = {
     "build": _hammer,
     "run": _play,
     "test": _flask,
     "coverage": _coverage,
+    "git": _git,
     "update": _download,
     "clean": _broom,
     "clean-all": _trash,

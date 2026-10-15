@@ -256,6 +256,7 @@ class ViewMixin:
         for editor in self.editors():
             editor.refresh_style()
         self.review_monitor.refresh_palette()  # (code in the AI's answers: the same colors)
+        self.git_panel.refresh_palette()  # (the diff's colors too)
 
     def changeEvent(self, event):
         if event.type() == QEvent.PaletteChange and hasattr(self, "terminal_panel"):  # (the window is built)
@@ -267,6 +268,7 @@ class ViewMixin:
             self.run_monitor.refresh_palette()
             self.review_monitor.refresh_palette()
             self.coverage_panel.refresh_palette()
+            self.git_panel.refresh_palette()
             self.terminal_panel.refresh_colors()
             for editor in self.editors():
                 editor.refresh_style()
@@ -304,12 +306,15 @@ class ViewMixin:
             editor.set_font(code)
         if hasattr(self, "terminal_panel"):
             self.terminal_panel.set_font(code)
+        if hasattr(self, "git_panel"):
+            self.git_panel.set_code_font(code)
         self.command_toolbar.setIconSize(QSize(round(22 * factor), round(22 * factor)))
         self.build_monitor.refresh_fonts()
         self.test_monitor.refresh_fonts()
         self.run_monitor.refresh_fonts()
         self.review_monitor.refresh_fonts()
         self.coverage_panel.refresh_fonts()
+        self.git_panel.refresh_fonts()
         for tree in self.result_trees:
             tree.mono = mono
             tree.doItemsLayout()

@@ -30,6 +30,7 @@ from .window.build_outputs import BuildOutputsMixin
 from .window.coverage import CoverageMixin
 from .window.editing import EditingMixin
 from .window.editor_tabs import EditorTabsMixin
+from .window.git import GitMixin
 from .window.language import LanguageMixin
 from .window.output import OUTPUT_TAIL_LINES, OutputMixin
 from .window.packages import PackagesMixin
@@ -42,7 +43,7 @@ from .window.view import ViewMixin
 
 
 class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
-                 EditorTabsMixin, EditingMixin, LanguageMixin, SearchMixin,
+                 EditorTabsMixin, EditingMixin, LanguageMixin, SearchMixin, GitMixin,
                  RunningMixin, BuildOutputsMixin, OutputMixin, TestingMixin, CoverageMixin,
                  AIMixin, AIChatMixin,
                  QMainWindow):
@@ -118,6 +119,7 @@ class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
         self._build_review_panel()
         self._build_search_panels()
         self._build_terminal()
+        self._build_git_panel()
         self._link_file_lists()
         self._build_central()
         self._build_docks(options, files_box, graph_tab, console_box)
@@ -133,11 +135,13 @@ class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
             self.restoreGeometry(geometry)
         layout = s.value("panels")  # (where each panel was: docked, stacked, floating, hidden)
         self._layout_restored = layout is not None and self.restoreState(layout, self.LAYOUT_VERSION)
-        coverage = self.docks["coverage"]
-        if self._layout_restored and self.dockWidgetArea(coverage) == Qt.NoDockWidgetArea:
-            # (A layout saved before the Coverage panel existed: next to Tests.)
-            self.addDockWidget(Qt.BottomDockWidgetArea, coverage)
-            self.tabifyDockWidget(self.docks["tests"], coverage)
+        # A layout saved before a panel existed: the panel goes in the stack of
+        # the one it's next to by default.
+        for name, beside in (("coverage", "tests"), ("git", "search")):
+            dock = self.docks[name]
+            if self._layout_restored and self.dockWidgetArea(dock) == Qt.NoDockWidgetArea:
+                self.addDockWidget(Qt.BottomDockWidgetArea, dock)
+                self.tabifyDockWidget(self.docks[beside], dock)
         # Applied once the project's own [profiles] are in the list.
         self._wanted_profile = s.value("profile", "(default)")
         self.profile_combo.setCurrentText(self._wanted_profile)

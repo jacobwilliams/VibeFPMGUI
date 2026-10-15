@@ -12,6 +12,7 @@ these mixins, one per area of the window, which share the window's state
 | `vibefpmgui.window.editing` | The Edit menu, formatting, fortitude's fixes, line endings |
 | `vibefpmgui.window.language` | The language server: symbols, references, rename |
 | `vibefpmgui.window.search` | Find and Replace in Files, the Problems panel |
+| `vibefpmgui.window.git` | The Git panel: reading the repository's status when it may have changed |
 | `vibefpmgui.window.running` | Build options, fpm commands, features |
 | `vibefpmgui.window.build_outputs` | The Build outputs panel, running a built program, compile commands |
 | `vibefpmgui.window.output` | The Output panel |

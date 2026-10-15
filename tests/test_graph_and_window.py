@@ -218,11 +218,11 @@ def test_default_panels(window):
     assert areas(window) == {"options": "left", "files": "left", "graph": "right", "outputs": "right",
                              "build": "bottom", "tests": "bottom", "run": "bottom", "coverage": "bottom",
                              "problems": "bottom", "review": "bottom",
-                             "references": "bottom", "search": "bottom", "terminal": "bottom",
+                             "references": "bottom", "search": "bottom", "git": "bottom", "terminal": "bottom",
                              "output": "bottom"}
     assert stack_of(window, "graph") == {"graph", "outputs"}
     assert stack_of(window, "build") == {"build", "tests", "run", "coverage", "problems", "review", "references",
-                                             "search", "terminal"}
+                                             "search", "git", "terminal"}
     assert "output" not in stack_of(window, "build")  # (beside the stack)
     assert window.panel_in_front(window.docks["graph"].widget())  # (in front of Build outputs)
     assert window.panel_in_front(window.build_monitor)
