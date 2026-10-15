@@ -109,7 +109,7 @@ menu item says "not found" and the feature is off; without fprettify the
 | Module | What it does |
 |---|---|
 | `vibefpmgui.icons` | Toolbar icons, symbol badges and the app icon, drawn with QPainter |
-| `vibefpmgui.coverage` | Test coverage: lcov's tracefiles read, the commands to collect them |
+| `vibefpmgui.coverage` | Test coverage: gcov's counts collected and read |
 | `vibefpmgui.coverage_panel` | The *Coverage* tab: totals, each file's coverage, its missed lines and functions |
 | `vibefpmgui.widgets` | Small shared widgets (a status line that never widens the window) |
 | `vibefpmgui.background` | Blocking calls (Format, Fix All, asking Ollama) on a pool thread, the result back in the GUI thread |

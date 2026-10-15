@@ -1,9 +1,10 @@
-"""Test coverage: reading lcov's tracefiles, the Coverage panel, the editor's
-gutter bars, and (with fpm, gfortran and lcov installed) a real run."""
+"""Test coverage: reading gcov's JSON, the Coverage panel, the editor's
+gutter bars, and (with fpm and gfortran installed) a real run."""
 
 from __future__ import annotations
 
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -15,49 +16,36 @@ from vibefpmgui import coverage as cov
 from vibefpmgui.coverage_panel import CoveragePanel, function_name, shown_functions
 from vibefpmgui.main_window import with_link_flag
 
-LCOV2 = """\
-SF:{root}/src/calc.f90
-FNL:0,4,7
-FNA:0,1,__calc_MOD_add
-FNL:1,8,15
-FNA:1,0,__calc_MOD_never_called
-FNF:2
-FNH:1
-BRDA:10,0,0,-
-BRDA:10,0,1,-
-DA:4,1
-DA:6,1
-DA:7,1
-DA:8,0
-DA:10,0
-DA:11,0
-DA:13,0
-DA:15,0
-LF:8
-LH:3
-end_of_record
-SF:{root}/test/check.f90
-FNL:0,1,6
-FNA:0,1,MAIN__
-FNL:1,2,2
-FNA:1,1,main
-DA:1,1
-DA:4,1
-DA:6,1
-end_of_record
-SF:{root}/build/dependencies/lib/src/lib.f90
-DA:1,0
-DA:2,0
-end_of_record
-"""
+
+def gcov_json(root: Path, files: dict) -> str:
+    """What ``gcov --stdout --json-format`` prints for one .gcda file:
+    ``files``: source (relative to ``root``, where it was compiled) ->
+    lines {number: count}, functions [(name, start, end, hits)] and branches
+    {line: [times taken…]}."""
+    import json
+
+    entries = []
+    for name, data in files.items():
+        lines = [{"line_number": n, "count": c, "function_name": "f",
+                  "branches": [{"count": t, "throw": False} for t in data.get("branches", {}).get(n, [])]}
+                 for n, c in data["lines"].items()]
+        functions = [{"name": f, "start_line": a, "end_line": b, "execution_count": h}
+                     for f, a, b, h in data.get("functions", [])]
+        entries.append({"file": name, "lines": lines, "functions": functions})
+    return json.dumps({"format_version": "2", "current_working_directory": str(root), "files": entries})
 
 
 def tracefile(root: Path) -> dict[Path, cov.FileCoverage]:
-    return cov.parse_info(LCOV2.format(root=root))
+    return cov.read_gcov([gcov_json(root, {
+        "src/calc.f90": {"lines": {4: 1, 6: 1, 7: 1, 8: 0, 10: 0, 11: 0, 13: 0, 15: 0},
+                         "functions": [("__calc_MOD_add", 4, 7, 1), ("__calc_MOD_never_called", 8, 15, 0)],
+                         "branches": {10: [0, 0]}},
+        "test/check.f90": {"lines": {1: 1, 4: 1, 6: 1}, "functions": [("MAIN__", 1, 6, 1), ("main", 2, 2, 1)]},
+    }), gcov_json(root, {"build/dependencies/lib/src/lib.f90": {"lines": {1: 0, 2: 0}}})])
 
 
 # ------------------------------------------------------------ the module
-def test_parse_lcov2(tmp_path):
+def test_read_gcov(tmp_path):
     files = tracefile(tmp_path)
     calc = files[(tmp_path / "src/calc.f90").resolve()]
     assert (calc.lines_hit, calc.lines_found, round(calc.percent, 1)) == (3, 8, 37.5)
@@ -68,12 +56,14 @@ def test_parse_lcov2(tmp_path):
     assert cov.ranges_text([(8, 15), (20, 20)]) == "8–15, 20"
 
 
-def test_parse_the_old_format_and_add_up_records(tmp_path):
-    text = (f"SF:{tmp_path}/a.f90\nFN:3,s\nFNDA:2,s\nDA:3,2\nDA:4,0\nend_of_record\n"
-            f"SF:{tmp_path}/a.f90\nFN:3,s\nFNDA:1,s\nDA:3,1\nDA:4,5\nend_of_record\n")
-    (a,) = cov.parse_info(text).values()
-    assert a.lines == {3: 3, 4: 5}  # (two test programs ran it: counts added)
+def test_counts_from_several_data_files_are_added(tmp_path):
+    first = gcov_json(tmp_path, {"a.f90": {"lines": {3: 2, 4: 0}, "functions": [("s", 3, 4, 2)]}})
+    second = gcov_json(tmp_path, {"a.f90": {"lines": {3: 1, 4: 5}, "functions": [("s", 3, 4, 1)]}})
+    (a,) = cov.read_gcov([first + "\n" + second]).values()  # (gcov prints a line per .gcda file)
+    assert a.path == (tmp_path / "a.f90").resolve()
+    assert a.lines == {3: 3, 4: 5}  # (built twice, e.g. for the library and the tests: counts added)
     assert [(f.name, f.hits) for f in a.functions] == [("s", 3)]
+    assert cov.read_gcov(["not json", ""]) == {}
 
 
 def test_totals_and_function_names(tmp_path):
@@ -88,11 +78,12 @@ def test_totals_and_function_names(tmp_path):
 def test_find_gcov_next_to_the_compiler(tmp_path, monkeypatch):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    for name in ("x86_64-linux-gfortran", "x86_64-linux-gcov"):
+    for name in ("x86_64-linux-gfortran", "x86_64-linux-gcov", "gfortran.exe", "gcov.exe"):
         (bin_dir / name).write_text("")
         (bin_dir / name).chmod(0o755)
     monkeypatch.setenv("PATH", str(bin_dir))
     assert cov.find_gcov("x86_64-linux-gfortran") == str((bin_dir / "x86_64-linux-gcov").resolve())
+    assert cov.find_gcov("gfortran.exe") == str((bin_dir / "gcov.exe").resolve())  # (Windows)
 
 
 def test_clear_counts(tmp_path):
@@ -220,11 +211,11 @@ def test_missed_lines_are_tinted(window, project):
 
 
 def test_branches_per_line(tmp_path):
-    text = (f"SF:{tmp_path}/a.f90\nDA:3,2\nDA:4,2\nDA:5,0\n"
-            "BRDA:3,0,0,2\nBRDA:3,0,1,0\nBRDA:4,0,0,1\nBRDA:4,0,1,1\nBRDA:5,0,0,-\nBRDA:5,0,1,-\nend_of_record\n"
-            f"SF:{tmp_path}/a.f90\nDA:3,1\nBRDA:3,0,0,1\nBRDA:3,0,1,0\nend_of_record\n")
-    (a,) = cov.parse_info(text).values()
-    assert a.line_branches == {3: (1, 2), 4: (2, 2), 5: (0, 2)}
+    first = gcov_json(tmp_path, {"a.f90": {"lines": {3: 2, 4: 2, 5: 0}, "branches": {3: [2, 0], 4: [1, 1], 5: [0, 0]}}})
+    second = gcov_json(tmp_path, {"a.f90": {"lines": {3: 1}, "branches": {3: [1, 0]}}})
+    (a,) = cov.read_gcov([first, second]).values()
+    assert a.line_branches == {3: (1, 2), 4: (2, 2), 5: (0, 2)}  # (3's second branch: never, in either)
+    assert (a.branches_hit, a.branches_found) == (3, 6)
     assert [a.partial(n) for n in (3, 4, 5)] == [True, False, False]  # (5 didn't run: missed, not partial)
 
 
@@ -360,11 +351,11 @@ def test_no_bars_on_unsaved_changes(window, project):
     assert other.editor.coverage == {5: 1, 6: 0} and editor.editor.coverage == {}
 
 
-# ------------------------------------------------- a real run (fpm, gfortran, lcov)
-TOOLS = all(shutil.which(t) for t in ("fpm", "gfortran", "lcov"))
+# ------------------------------------------------- a real run (fpm, gfortran and its gcov)
+TOOLS = all(shutil.which(t) for t in ("fpm", "gfortran")) and cov.find_gcov("gfortran") is not None
 
 
-@pytest.mark.skipif(not TOOLS, reason="fpm, gfortran and lcov are needed")
+@pytest.mark.skipif(not TOOLS, reason="fpm, gfortran and gcov are needed")
 def test_coverage_of_a_real_test_run(qtbot, make_window, tmp_path):
     root = write_files(tmp_path / "calc", {
         "fpm.toml": 'name = "calc"\n[build]\nauto-tests = true\n',
@@ -387,37 +378,68 @@ def test_coverage_of_a_real_test_run(qtbot, make_window, tmp_path):
     assert "src/calc.f90" in names
 
 
-def test_quitting_while_lcov_runs(window, project, monkeypatch, tmp_path):
-    """(lcov was still running at quit: its QProcess was gone when its
-    finished signal came, and reading its output raised.)"""
-    import os
+def fake_gcov(tmp_path: Path, script: str) -> str:
+    gcov = tmp_path / "fake-gcov"
+    gcov.write_text("#!/bin/sh\n" + script)
+    gcov.chmod(0o755)
+    return str(gcov)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a shell script stands in for gcov")
+def test_the_collector_runs_gcov_on_every_data_file(tmp_path):
+    build = write_files(tmp_path, {f"build/gfortran_1/p/f{n}.gcda": b"x" for n in range(25)}) / "build"
+    line = gcov_json(tmp_path, {"a.f90": {"lines": {1: 1}}}).replace('"', '\\"')
+    # (Each run: the files it was given, then a JSON line per file, as gcov prints.)
+    gcov = fake_gcov(tmp_path, f'echo "$@" >> {tmp_path}/args\nfor f in "$@"; do case $f in *.gcda) echo "{line}";; esac; done\n')
+    files, error = cov.Collector(gcov, build, jobs=3).run()
+    assert error == "" and files[(tmp_path / "a.f90").resolve()].lines == {1: 25}  # (one count per file)
+    args = (tmp_path / "args").read_text()  # (the runs' lines can interleave: they're at once)
+    assert args.count("--stdout --json-format") == 3 and args.count(".gcda") == 25  # (10 files a run)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a shell script stands in for gcov")
+def test_the_collector_reports_gcov_failing(tmp_path):
+    build = write_files(tmp_path, {"build/a.gcda": b"x"}) / "build"
+    gcov = fake_gcov(tmp_path, 'echo "a.gcno:version \'B53*\', prefer \'B33*\'" >&2\nexit 1\n')
+    assert cov.Collector(gcov, build).run() == ({}, "a.gcno:version 'B53*', prefer 'B33*'")
+    assert cov.Collector(gcov, tmp_path / "nothing").run() == ({}, "")  # (no counts: no runs)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a shell script stands in for gcov")
+def test_quitting_while_gcov_runs(window, project, monkeypatch, tmp_path):
+    """(Collecting was still running at quit, or when another project
+    opened: it stops, and its result is dropped.)"""
     import time
 
-    from vibefpmgui import main_window as mw
-
-    slow = tmp_path / "lcov"
-    slow.write_text("#!/bin/sh\nsleep 30\n")
-    slow.chmod(0o755)
-    which = shutil.which
-    monkeypatch.setattr(mw.shutil, "which", lambda name, *a, **k: str(slow) if name == "lcov" else which(name, *a, **k))
-    monkeypatch.setattr(cov, "find_gcov", lambda compiler: "/usr/bin/true")
+    write_files(project, {"build/gfortran_1/p/a.gcda": b"x"})
+    gcov = fake_gcov(tmp_path, f"echo $$ > {tmp_path}/pid\nexec sleep 30\n")
+    monkeypatch.setattr(cov, "find_gcov", lambda compiler: gcov)
     window._collect_coverage()
-    process = window._coverage_process
-    assert process is not None and process.waitForStarted(5000)
-    pid = process.processId()
-    started = time.time()
+    collector = window._coverage_collector
+    assert collector is not None
+    pid_file = tmp_path / "pid"
+    deadline = time.time() + 10
+    while not pid_file.exists() and time.time() < deadline:
+        time.sleep(0.05)
+    pid = int(pid_file.read_text())
     window._clear_run_panels()  # (as when another project opens, or the window closes)
-    assert window._coverage_process is None and time.time() - started < 5
+    assert window._coverage_collector is None and collector._stopped
+    deadline = time.time() + 5
+    while _alive(pid) and time.time() < deadline:
+        time.sleep(0.05)
+    assert not _alive(pid)
+    assert collector.run() == ({}, "stopped")  # (stopped: nothing comes of it)
+
+
+def _alive(pid: int) -> bool:
+    import os
+
+    try:
+        os.waitpid(pid, os.WNOHANG)
+    except ChildProcessError:
+        pass
     try:
         os.kill(pid, 0)
-        alive = True
     except OSError:
-        alive = False
-    assert not alive
-
-
-def test_lcov_reads_the_counts_in_parallel(tmp_path):
-    command = cov.capture_command("lcov", "gcov", tmp_path / "build", tmp_path / "out.info", jobs=6)
-    assert command[command.index("--parallel") + 1] == "6"
-    default = cov.capture_command("lcov", "gcov", tmp_path / "build", tmp_path / "out.info")
-    assert int(default[default.index("--parallel") + 1]) >= 1
+        return False
+    return True

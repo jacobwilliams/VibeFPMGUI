@@ -557,7 +557,7 @@ class MainWindow(QMainWindow):
               "them; the app runs them, each with its own output. Off: fpm runs them one after another.")),
             (self.coverage_check, "--flag --coverage --link-flag --coverage",
              ("Build with gfortran's coverage counting (a build of its own): after Test, the Coverage panel "
-              "and the editor's gutter show which lines the tests ran (needs lcov).")),
+              "and the editor's gutter show which lines the tests ran.")),
             (self.verbose_check, "--verbose", "Print more detail about what fpm is doing."),
             (self.fpm_edit, "(not a flag)", "The fpm program to run. Leave empty to use the fpm on your PATH."),
         ]:
@@ -732,7 +732,7 @@ class MainWindow(QMainWindow):
         self.coverage_panel.tests_check.toggled.connect(lambda on: self.settings.setValue("coverage_tests", on))
         self.coverage: dict[Path, cov.FileCoverage] = {}  # the last test run's (see _collect_coverage)
         self._coverage_started = 0.0  # when that run started
-        self._coverage_process: QProcess | None = None
+        self._coverage_collector: cov.Collector | None = None
         self.review_monitor = ReviewMonitor()
         monitor = self.review_monitor
         monitor.stop_requested.connect(self.stop_review)
@@ -3526,57 +3526,37 @@ class MainWindow(QMainWindow):
 
     # ----------------------------------------------------------- coverage
     def _collect_coverage(self):
-        """After a test run with coverage: lcov reads the counts the tests
+        """After a test run with coverage: gcov reads the counts the tests
         wrote (in the background), then the Coverage panel and the editors
         show them."""
-        lcov = shutil.which("lcov")
         compiler = self.effective_compiler()[0]
         gcov = cov.find_gcov(compiler)
-        panel = self.coverage_panel
-        if lcov is None or gcov is None:
-            missing = "lcov" if lcov is None else f"gcov (for {compiler})"
-            panel.show_message(f"Coverage needs {missing}: it isn't on the PATH. (pixi add lcov, or install it "
-                               "with your package manager.)")
+        if gcov is None:
+            self.coverage_panel.show_message(f"Coverage needs gcov (for {compiler}): it isn't on the PATH. "
+                                             "(It comes with gfortran.)")
             return
-        if self._coverage_process is not None:
+        if self._coverage_collector is not None:
             return
-        self._coverage_file = Path(tempfile.gettempdir()) / f"vibefpmgui-coverage-{os.getpid()}.info"
-        self._coverage_file.unlink(missing_ok=True)
-        panel.show_message("Collecting coverage…")
-        process = self._coverage_process = QProcess(self)
-        process.setWorkingDirectory(str(self.manifest_path.parent))
-        process.setProcessChannelMode(QProcess.MergedChannels)
-        process.finished.connect(lambda code, _status, p=process: self._coverage_collected(p, code))
-        process.errorOccurred.connect(
-            lambda error, p=process: error == QProcess.FailedToStart and self._coverage_collected(p, -1))
+        self.coverage_panel.show_message("Collecting coverage…")
         self._coverage_description = f"{time.strftime('%H:%M')} · {self._build_description()}"
-        command = cov.capture_command(lcov, gcov, self.manifest_path.parent / "build", self._coverage_file)
-        process.start(command[0], command[1:])
+        collector = self._coverage_collector = cov.Collector(gcov, self.manifest_path.parent / "build")
+        call_in_background(collector.run, lambda result: self._coverage_collected(collector, *result), self)
 
     def _stop_coverage(self):
-        """Stop lcov if it's still reading the counts (quitting, or another
-        project). Its finished signal then finds it isn't the current one."""
-        process, self._coverage_process = self._coverage_process, None
-        if process is None:
-            return
-        kill_process_tree(process)
-        process.waitForFinished(1000)
-        process.deleteLater()
-        if self._coverage_file is not None:
-            self._coverage_file.unlink(missing_ok=True)
+        """Stop gcov if it's still reading the counts (quitting, or another
+        project); its result is then dropped."""
+        collector, self._coverage_collector = self._coverage_collector, None
+        if collector is not None:
+            collector.stop()
 
-    def _coverage_collected(self, process: QProcess, code: int):
-        if process is not self._coverage_process:
+    def _coverage_collected(self, collector: cov.Collector, files: dict, error: str):
+        if collector is not self._coverage_collector:
             return
-        self._coverage_process = None
-        output = bytes(process.readAll()).decode(errors="replace").strip()
-        process.deleteLater()
-        if code != 0 or not self._coverage_file.is_file():
-            last = output.splitlines()[-1] if output else "it didn't start"
-            self.coverage_panel.show_message(f"lcov couldn't read the coverage: {last}")
+        self._coverage_collector = None
+        if error:
+            self.coverage_panel.show_message(f"gcov couldn't read the coverage: {error}")
             return
-        call_in_background(lambda f=self._coverage_file: cov.parse_info(f.read_text(errors="replace")),
-                           self._coverage_read, self)
+        self._coverage_read(files)
 
     def _coverage_read(self, files: dict):
         if not self.manifest_path:
