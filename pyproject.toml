@@ -74,6 +74,17 @@ timeout = 120            # pytest-timeout: a test waiting on a dialog fails inst
 # a signal, only fires when Python runs: a hang inside Qt's event loop never ended.)
 timeout_method = "thread"
 
+[tool.bandit]
+# Checks that don't apply here (pixi run audit). The app's job is to run
+# programs (fpm, the compilers, fortitude, fortls, git, your shell), so:
+skips = [
+    "B404",  # importing subprocess
+    "B603",  # subprocess calls: always argument lists, never shell=True (no shell syntax in names
+             # or arguments; a git URL from fpm.toml comes after "--": see dep_updates.ls_remote)
+    "B606",  # the Terminal panel starts your shell (os.execve)
+    "B607",  # programs found on the PATH by name (git, ps, open, explorer, taskkill): intended
+]
+
 [tool.coverage.run]
 source = ["vibefpmgui"]
 branch = true

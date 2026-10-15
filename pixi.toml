@@ -12,6 +12,7 @@ test = "pytest"                                             # GUI and unit tests
 coverage = "pytest --cov --cov-report=html --cov-report=term"  # the tests, with a code coverage report in web/coverage
 docs = "pdoc -t docs/pdoc-template -o web/api vibefpmgui"   # API docs (HTML) from the docstrings, into the website
 docs-serve = "pdoc -t docs/pdoc-template vibefpmgui"        # the same, live in the browser while you edit
+audit = "bandit -c pyproject.toml -r vibefpmgui"            # security check (bandit; known-acceptable checks: see pyproject.toml)
 
 [dependencies]
 gfortran = "15.*"
