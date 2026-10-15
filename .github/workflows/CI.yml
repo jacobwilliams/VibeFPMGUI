@@ -27,9 +27,14 @@ jobs:
         cache: true
         cache-write: ${{ github.ref == 'refs/heads/master' }}
 
+    # Lint the package and the tests (ruff, the locked version: the same
+    # rules as locally). Fails the build on any finding.
+    - name: Lint (ruff)
+      run: pixi run lint
+
     # Security check (bandit): fails the build if it finds anything. The
     # checks that don't apply to an app that runs programs are skipped, with
-    # the reasons, in pyproject.toml's [tool.bandit]. First: it takes seconds.
+    # the reasons, in pyproject.toml's [tool.bandit]. Before the tests: it takes seconds.
     - name: Security audit (bandit)
       run: pixi run audit
 
