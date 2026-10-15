@@ -79,7 +79,7 @@ class MultiCursorMixin:
         elif not kept and not self.cursorWidth():  # one again: Qt's own
             self.setCursorWidth(self._caret_width)
         self._restart_blink()
-        self._update_extra_selections(rebuild=False)  # (the cursors' selections are always made anew)
+        self.update_extra_selections(rebuild=False)  # (the cursors' selections are always made anew)
         self.viewport().update()
         self.cursors_changed.emit()
 

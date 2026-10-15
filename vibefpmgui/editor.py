@@ -47,12 +47,12 @@ from .editor_shared import (
     LSP_SYNC_MS,
     SPELLING_DELAY_MS,
     line_changes,
-    line_endings,
 )
 from .find_bar import FindBar
 from .highlighter import PygmentsHighlighter, apply_style, lexer_for_path
 from .icons import SYMBOL_INDENT
 from .minimap import Minimap
+from .source_text import read_source
 from .widgets import StatusLabel
 
 
@@ -138,8 +138,8 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
         # The selection's other occurrences: matched as the find bar is set.
         self.editor.match_options = lambda: (self.find_bar.case_check.isChecked(),
                                              self.find_bar.word_check.isChecked())
-        self.find_bar.case_check.toggled.connect(self.editor._update_occurrences)
-        self.find_bar.word_check.toggled.connect(self.editor._update_occurrences)
+        self.find_bar.case_check.toggled.connect(self.editor.update_occurrences)
+        self.find_bar.word_check.toggled.connect(self.editor.update_occurrences)
         self.status = StatusLabel()
         self.status.setContentsMargins(8, 2, 8, 2)
 
@@ -246,8 +246,8 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
         self.editor.cursorPositionChanged.connect(self._cursor_moved_popups)
 
         self.editor.document().modificationChanged.connect(self.dirty_changed)
-        self.editor.cursorPositionChanged.connect(self._update_status)
-        self.editor.cursors_changed.connect(self._update_status)
+        self.editor.cursorPositionChanged.connect(self.update_status)
+        self.editor.cursors_changed.connect(self.update_status)
         self.load()
         self.refresh_style()
         self.editor.textChanged.connect(self._lint_timer.start)
@@ -284,13 +284,7 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
     def _read(self) -> tuple[str, str, str, bool]:
         """(text with "\\n" line ends, encoding, line end, whether the line
         ends are mixed) of the file on disk (see line_endings)."""
-        raw = self.path.read_bytes()
-        try:
-            text, encoding = raw.decode("utf-8"), "utf-8"
-        except UnicodeDecodeError:
-            text, encoding = raw.decode("latin-1"), "latin-1"
-        newline, mixed = line_endings(text)
-        return text.replace("\r\n", "\n"), encoding, newline, mixed
+        return read_source(self.path)
 
     def load(self):
         text, self.encoding, self.newline, self.mixed_newlines = self._read()
@@ -301,7 +295,7 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
         self.editor.setPlainText(text)
         self.editor.document().setModified(False)
         self._watch()
-        self._update_status()
+        self.update_status()
 
     def _watch(self):
         if self.watcher.files():
@@ -324,7 +318,7 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
         self.newline = newline
         self.mixed_newlines = False  # (all the same from the next save)
         self.dirty_changed.emit(self.is_dirty())
-        self._update_status()
+        self.update_status()
         return True
 
     def save(self) -> bool:
@@ -378,7 +372,7 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
         self._watch()
         self.lint()  # it may (no longer) be a Fortran file
         self.attach_lsp(client)
-        self._update_status()
+        self.update_status()
 
     def _set_path(self, path: str | Path):
         self.path = Path(path).resolve()
@@ -403,7 +397,7 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
         """The file changed on disk (another editor, git, ...)."""
         self._watch()  # some tools replace the file, which drops the watch
         if not self.path.exists():
-            self._update_status("deleted on disk")
+            self.update_status("deleted on disk")
             return
         try:
             text, encoding, newline, mixed = self._read()
@@ -459,17 +453,17 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
     def set_font(self, font: QFont):
         self.editor.setFont(font)
         self.editor.set_indentation(self.editor.indent_width, self.editor.use_tabs)  # (tab width in the new font)
-        self.editor._update_gutter_width()
+        self.editor.update_gutter_width()
 
     def refresh_style(self):
         """Apply the syntax colors (View → Syntax Colors, or automatic)."""
         apply_style(self.editor, self.highlighter)
-        self.editor._update_extra_selections()
+        self.editor.update_extra_selections()
         self.editor.gutter.update()
         if getattr(self, "minimap", None) is not None:
             self.minimap.invalidate()
 
-    def _update_status(self, note: str = ""):
+    def update_status(self, note: str = ""):
         cursor = self.editor.textCursor()
         indent = f"Tabs: {self.editor.indent_width}" if self.editor.use_tabs else f"Spaces: {self.editor.indent_width}"
         parts = [f"Ln {cursor.blockNumber() + 1}, Col {cursor.positionInBlock() + 1}",

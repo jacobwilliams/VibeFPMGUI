@@ -346,7 +346,7 @@ class TestMonitor(SortableTable, QWidget):
         self._timer.timeout.connect(self._tick)
         self.refresh_palette()
         self._show_empty(self.word("idle"))
-        self._update_header()
+        self.update_header()
 
     # ------------------------------------------------------------- styling
     def refresh_palette(self):
@@ -357,7 +357,7 @@ class TestMonitor(SortableTable, QWidget):
         for status, chip in self.chips.items():
             chip.setStyleSheet(chip_stylesheet(pal, pal["status"][COLOR_KEY[status]]))
         self.empty.setStyleSheet(f"color: {pal['muted']};")
-        self._update_header()
+        self.update_header()
         self.table.viewport().update()
         self.progress.update()
 
@@ -381,7 +381,7 @@ class TestMonitor(SortableTable, QWidget):
         self.set_filter(None)
         self.progress.set(0, "running")
         self._show_empty(self.word("idle"))
-        self._update_header()
+        self.update_header()
 
     def begin_listing(self, description: str = ""):
         """Phase 1: fpm is building and listing the tests."""
@@ -397,7 +397,7 @@ class TestMonitor(SortableTable, QWidget):
         self.progress.set_busy(True)  # the build's length is unknown here
         self._show_empty(self.word("collecting"))
         self._timer.start()
-        self._update_header()
+        self.update_header()
 
     def start(self, names: list[str], history: dict[str, float], building: bool = False):
         """Phase 2: run the tests (after fpm has built them, if ``building``)."""
@@ -414,7 +414,7 @@ class TestMonitor(SortableTable, QWidget):
             self.progress.set(0, "running")
         self._show_empty(None if names else self.word("none"))
         self._timer.start()
-        self._update_header()
+        self.update_header()
 
     def build_finished(self):
         """fpm has finished building; the tests are starting."""
@@ -422,7 +422,7 @@ class TestMonitor(SortableTable, QWidget):
             self._result = ""
             self._started = time.monotonic()
             self.progress.set(0, "running")
-            self._update_header()
+            self.update_header()
 
     def finish(self, exit_code: int, stopped: bool = False, no_tests: bool = False):
         if not self._active:
@@ -454,9 +454,14 @@ class TestMonitor(SortableTable, QWidget):
         state = {"ok": "ok", "failed": "failed", "stopped": "stopped", "none": "ok",
                  "buildfailed": "failed"}[self._result]
         self.progress.set(1.0 if self._result in ("ok", "none") else self.fraction(), state)
-        self._update_header()
+        self.update_header()
         self.table.viewport().update()
         self.schedule_sort()
+
+    @property
+    def build_failed(self) -> bool:
+        """The last run stopped because the build failed (nothing ran)."""
+        return self._result == "buildfailed"
 
     def durations(self) -> dict[str, float]:
         """Measured durations of the tests that ran to completion."""
@@ -524,7 +529,7 @@ class TestMonitor(SortableTable, QWidget):
 
     def _changed(self, test: TestCase):
         self._apply_filter(test)
-        self._update_header()
+        self.update_header()
         self.table.viewport().update()
         self.schedule_sort()
 
@@ -633,7 +638,7 @@ class TestMonitor(SortableTable, QWidget):
         hide = self.filter_status is not None and test.status != self.filter_status
         self.table.setRowHidden(test.row, hide)
 
-    def _update_header(self):
+    def update_header(self):
         pal = self.palette_colors
         self.subtitle.setText(f"<span style='color:{pal['muted']}'>{self.description}</span>")
         counts = self.counts()
@@ -688,7 +693,7 @@ class TestMonitor(SortableTable, QWidget):
         if self._active and self._result == "":
             self.progress.set(self.fraction())
         self.table.viewport().update()
-        self._update_header()
+        self.update_header()
         if not (self._active or flashing):
             self._timer.stop()
 

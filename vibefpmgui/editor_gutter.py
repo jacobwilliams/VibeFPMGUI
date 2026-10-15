@@ -174,11 +174,11 @@ class EditorGutterMixin:
     def refresh_gutter(self):
         """The gutter again, at its width now (a column shown or hidden), and
         the lines' tints (missed lines)."""
-        self._update_gutter_width()
+        self.update_gutter_width()
         self.gutter.setGeometry(QRect(self.contentsRect().left(), self.contentsRect().top(),
                                       self.gutter_width(), self.contentsRect().height()))
         self.gutter.update()
-        self._update_extra_selections()
+        self.update_extra_selections()
         self._update_minimap()
 
     def coverage_note(self, line: int) -> str:
@@ -203,17 +203,17 @@ class EditorGutterMixin:
         if by_line == self.gremlins:
             return
         self.gremlins = by_line
-        self._update_gutter_width()
+        self.update_gutter_width()
         self.gutter.setGeometry(QRect(self.contentsRect().left(), self.contentsRect().top(),
                                       self.gutter_width(), self.contentsRect().height()))
-        self._update_extra_selections()
+        self.update_extra_selections()
         self.gutter.update()
 
     def gremlin_notes(self, line: int) -> list[str]:
         """The gremlins on a line, described (for the gutter's tooltip)."""
         return [f"Gremlin at column {g.column + 1}: {g.message} ({g.code})" for g in self.gremlins.get(line, [])]
 
-    def _update_gutter_width(self, *_):
+    def update_gutter_width(self, *_):
         width = self.gutter_width()
         if width != self.viewportMargins().left():  # (called on every repaint of the whole view)
             self.setViewportMargins(width, 0, 0, 0)
@@ -224,7 +224,7 @@ class EditorGutterMixin:
         else:
             self.gutter.update(0, rect.y(), self.gutter.width(), rect.height())
         if rect.contains(self.viewport().rect()):
-            self._update_gutter_width()
+            self.update_gutter_width()
 
     def paint_gutter(self, event):
         pal = self.palette()
@@ -309,6 +309,6 @@ class EditorGutterMixin:
 
     def set_markers(self, markers: dict[int, list[tuple[str, str]]]):
         self.markers = markers
-        self._update_extra_selections()
+        self.update_extra_selections()
         self.gutter.update()
         self._update_minimap()

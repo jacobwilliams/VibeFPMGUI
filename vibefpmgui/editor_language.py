@@ -13,7 +13,13 @@ from qtpy.QtWidgets import QInputDialog, QLineEdit, QMessageBox
 from . import hover_card
 from . import lsp as lsp_mod
 from .completion import global_rect
-from .editor_shared import AUTO_COMPLETE_MIN, DEPTH_ROLE, WORD_RE
+from .editor_shared import (
+    AUTO_COMPLETE_MIN,
+    DEPTH_ROLE,
+    WORD_RE,
+    word_bounds,
+    word_start,
+)
 from .icons import symbol_icon
 
 
@@ -76,33 +82,20 @@ class EditorLanguageMixin:
 
     def go_to_definition(self):
         """Ask where the name at the cursor is defined, and go there."""
-        if self.lsp is None:
-            return
-        self._flush_lsp()
-        word = self._name_at_cursor()
-        if word is not None:
-            line, column = word[0], word[1]
-        else:
-            cursor = self.editor.textCursor()
-            line, column = cursor.blockNumber() + 1, cursor.positionInBlock()
-
-        def answered(result):
-            found = lsp_mod.first_location(result)
-            if found is None:
-                name = f"'{word[2]}'" if word else "the name at the cursor"
-                self._update_status(f"no definition found for {name}")
-                return
-            path, to_line, to_column = found
-            self.navigate_requested.emit(str(path), to_line, to_column)
-
-        self.lsp.definition(self.path, line, column, answered)
+        if self.lsp is not None:
+            self._go_to(self.lsp.definition, "definition")
 
     def go_to_implementation(self):
         """For a type-bound procedure: the procedure it binds (Go to
         Definition stops at the binding); for a generic interface: its first
         module procedure."""
-        if self.lsp is None:
-            return
+        if self.lsp is not None:
+            self._go_to(self.lsp.implementation, "implementation",
+                        " (only type-bound procedures and generic interfaces have one)")
+
+    def _go_to(self, request, what: str, why_none: str = ""):
+        """Ask the language server (``request``: e.g. its definition) about
+        the name at the cursor, and go to the place it answers."""
         self._flush_lsp()
         word = self._name_at_cursor()
         if word is not None:
@@ -115,13 +108,12 @@ class EditorLanguageMixin:
             found = lsp_mod.first_location(result)
             if found is None:
                 name = f"'{word[2]}'" if word else "the name at the cursor"
-                self._update_status(f"no implementation found for {name} (only type-bound procedures "
-                                    "and generic interfaces have one)")
+                self.update_status(f"no {what} found for {name}{why_none}")
                 return
             path, to_line, to_column = found
             self.navigate_requested.emit(str(path), to_line, to_column)
 
-        self.lsp.implementation(self.path, line, column, answered)
+        request(self.path, line, column, answered)
 
     def refresh_outline(self):
         if self.lsp is None:
@@ -184,9 +176,7 @@ class EditorLanguageMixin:
         cursor = self.editor.textCursor()
         text = cursor.block().text()
         column = cursor.positionInBlock()
-        start = column
-        while start > 0 and WORD_RE.match(text[start - 1]):
-            start -= 1
+        start = word_start(text, column)
         return cursor.blockNumber(), start, text[start:column], text
 
     def request_completion(self, manual: bool = True):
@@ -217,7 +207,7 @@ class EditorLanguageMixin:
             shown = self.editor.completion_popup.open(items, (block, start), now,
                                                       global_rect(self.editor, anchor_cursor))
             if manual and not shown:
-                self._update_status("no completions here")
+                self.update_status("no completions here")
 
         self.lsp.completion(self.path, block + 1, column, answered)
 
@@ -298,26 +288,18 @@ class EditorLanguageMixin:
                 start.setPosition(cursor.selectionStart())
                 return start.blockNumber() + 1, start.positionInBlock(), selected
         text = cursor.block().text()
-        i = cursor.positionInBlock()
-        if not (i < len(text) and WORD_RE.match(text[i])):
-            if i > 0 and WORD_RE.match(text[i - 1]):
-                i -= 1
-            else:
-                return None
-        start, end = i, i
-        while start > 0 and WORD_RE.match(text[start - 1]):
-            start -= 1
-        while end < len(text) and WORD_RE.match(text[end]):
-            end += 1
-        word = text[start:end]
-        return None if word[0].isdigit() else (cursor.blockNumber() + 1, start, word)
+        bounds = word_bounds(text, cursor.positionInBlock())
+        if bounds is None:
+            return None
+        start, end = bounds
+        return cursor.blockNumber() + 1, start, text[start:end]
 
     def find_references(self):
         if self.lsp is None:
             return
         found = self._name_at_cursor()
         if found is None:
-            self._update_status("put the cursor on a name to find its references")
+            self.update_status("put the cursor on a name to find its references")
             return
         line, column, name = found
         self._flush_lsp()
@@ -329,7 +311,7 @@ class EditorLanguageMixin:
             return
         found = self._name_at_cursor()
         if found is None:
-            self._update_status("put the cursor on a name to rename it")
+            self.update_status("put the cursor on a name to rename it")
             return
         line, column, name = found
         new, ok = QInputDialog.getText(self, "Rename Symbol", f"Rename '{name}' everywhere it is used, to:",
@@ -345,7 +327,7 @@ class EditorLanguageMixin:
         def answered(result):
             edits = lsp_mod.workspace_edits(result)
             if not edits:
-                self._update_status(f"'{name}' can't be renamed (fortls found nothing to change)")
+                self.update_status(f"'{name}' can't be renamed (fortls found nothing to change)")
                 return
             self.rename_ready.emit(name, new, edits)
 

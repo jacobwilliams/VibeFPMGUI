@@ -15,7 +15,7 @@ def select(editor, line: int, column: int, length: int):
     cursor.setPosition(block.position() + column)
     cursor.setPosition(block.position() + column + length, QTextCursor.KeepAnchor)
     code.setTextCursor(cursor)
-    code._update_occurrences()  # (what the timer does once the selection rests)
+    code.update_occurrences()  # (what the timer does once the selection rests)
 
 
 def highlighted(editor) -> list[tuple[int, str]]:
@@ -55,7 +55,7 @@ def test_what_isnt_highlighted(window, project):
     cursor = code.textCursor()
     cursor.movePosition(QTextCursor.Down, QTextCursor.KeepAnchor)  # (across lines)
     code.setTextCursor(cursor)
-    code._update_occurrences()
+    code.update_occurrences()
     assert highlighted(editor) == []
     select(editor, 6, 0, 4)  # (only spaces)
     assert highlighted(editor) == []

@@ -354,8 +354,7 @@ class AIMixin:
             self.review_monitor.finish(False, "The file was closed")
             return
         code = editor.editor.toPlainText()
-        diagnostics = [(line, sev, msg) for line, notes in sorted(editor._compiler_markers.items())
-                       for sev, msg in notes]
+        diagnostics = editor.compiler_diagnostics()
         lines = ctx.file_lines(code)
         options = self._answer_options()
         cap = self._chat_context()

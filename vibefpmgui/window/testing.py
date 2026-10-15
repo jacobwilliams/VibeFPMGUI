@@ -36,14 +36,14 @@ class TestingMixin:
         self.build_monitor = BuildMonitor()
         self.test_monitor = TestMonitor()
         self.test_monitor.test_selected.connect(self.show_test_output)
-        self.test_monitor.build_percent = lambda: self.build_monitor._percent
+        self.test_monitor.build_percent = lambda: self.build_monitor.percent
         self.build_monitor.details_requested.connect(self.show_build_details)
         self.build_monitor.open_file_requested.connect(self.open_file)
         self.build_monitor.compile_command_requested.connect(self.show_compile_command)
         self.run_monitor = RunMonitor()
         self.run_monitor.test_selected.connect(
             lambda name: self._show_marked_output(self.run_monitor, name))
-        self.run_monitor.build_percent = lambda: self.build_monitor._percent
+        self.run_monitor.build_percent = lambda: self.build_monitor.percent
         self.coverage_panel = CoveragePanel()
         self.coverage_panel.open_requested.connect(
             lambda path, line: self.navigate_to(path, line, 0, preview=True))
@@ -119,7 +119,7 @@ class TestingMixin:
         monitor.jobs = jobs
         if jobs > 1:
             monitor.description += f" · {jobs} at a time"
-            monitor._update_header()  # fpm only builds them and says how to run each; we run them (see _after_collect)
+            monitor.update_header()  # fpm only builds them and says how to run each; we run them (see _after_collect)
             self._collected: list[tuple[str, list[str]]] = []
             self.run_fpm(["test"], True, False, phase="collect", args=collect_args)
             return
@@ -200,14 +200,14 @@ class TestingMixin:
         monitor.finish(code, stopped=stopped)
         self._save_durations(self._marker_kind, monitor.durations())
         if self._marker_kind == "test" and self.coverage_check.isChecked() and not stopped \
-                and monitor._result != "buildfailed":
+                and not monitor.build_failed:
             self._collect_coverage()
         counts = monitor.counts()
         total = len(monitor.tests)
         title = monitor.word("title")
         if stopped:
             message = f"{title}: stopped"
-        elif monitor._result == "buildfailed":
+        elif monitor.build_failed:
             message = f"{title}: the build failed (see the Build tab)"
         elif counts["Failed"]:
             failed = [t for t in monitor.tests if t.status == "Failed"]

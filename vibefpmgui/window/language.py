@@ -9,6 +9,7 @@ from qtpy.QtWidgets import QDialog, QMessageBox
 from .. import lsp
 from ..editor import EditorTab
 from ..rename_dialog import RenamePreviewDialog
+from ..source_text import read_source
 from ..symbol_search import SymbolSearchDialog
 from ..widgets import run_dialog
 
@@ -63,23 +64,12 @@ class LanguageMixin:
         path = path.resolve()
         return next((e for e in self.editors() if e.path == path), None)
 
-    @staticmethod
-    def _read_source(path: Path) -> tuple[str, str, str]:
-        """(text with "\\n" line ends, encoding, original line end) of a file."""
-        raw = path.read_bytes()
-        try:
-            text, encoding = raw.decode("utf-8"), "utf-8"
-        except UnicodeDecodeError:
-            text, encoding = raw.decode("latin-1"), "latin-1"
-        newline = "\r\n" if "\r\n" in text else "\n"
-        return text.replace("\r\n", "\n"), encoding, newline
-
     def _file_text(self, path: Path) -> str:
         """A file's current text: the editor's (maybe unsaved) if it's open."""
         editor = self._open_editor_for(path)
         if editor is not None:
             return editor.editor.toPlainText()
-        return self._read_source(path)[0]
+        return read_source(path).text
 
     def _show_references(self, name: str, results: list):
         roots, _texts, project_dir = self._search_sources()
@@ -104,7 +94,7 @@ class LanguageMixin:
                 changed_open += 1
             else:
                 try:
-                    text, encoding, newline = self._read_source(path)
+                    text, encoding, newline, _mixed = read_source(path)
                     text = lsp.apply_edits(text, file_edits)
                     path.write_bytes(text.replace("\n", newline).encode(encoding, errors="replace"))
                 except OSError as exc:

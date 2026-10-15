@@ -399,7 +399,7 @@ class ReviewWorker(QObject):
         client = self._client
         if client is not None:
             with contextlib.suppress(Exception):  # (already closed: fine)
-                client._client.close()  # the client's httpx connection
+                client.close()  # (its connection)
 
     def _stopped_message(self) -> str:
         return "Download cancelled" if self.pull_only else "Stopped"

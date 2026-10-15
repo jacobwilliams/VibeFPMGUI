@@ -655,19 +655,27 @@ def completions(result) -> list[Completion]:
     return out
 
 
-def in_comment_or_string(line_text: str, column: int) -> bool:
-    """Is ``column`` of a line inside a "!" comment or a quoted string?"""
-    quote = None
-    for ch in line_text[:column]:
+def code_spans(line: str) -> list[tuple[int, int]]:
+    """The parts of a line that are code: not in a string or a "!" comment."""
+    spans, start, quote = [], 0, None
+    for i, ch in enumerate(line):
         if quote:
             if ch == quote:
-                quote = None
+                quote, start = None, i + 1
         elif ch in "'\"":
+            spans.append((start, i))
             quote = ch
         elif ch == "!":
-            return True
-    return quote is not None
+            spans.append((start, i))
+            return spans
+    if quote is None:
+        spans.append((start, len(line)))
+    return spans
 
+
+def in_comment_or_string(line_text: str, column: int) -> bool:
+    """Is ``column`` of a line inside a "!" comment or a quoted string?"""
+    return not any(start <= column <= end for start, end in code_spans(line_text))
 
 # --------------------------------------------------------- signature help
 def signature_html(result, active_hint: int | None = None) -> str:
@@ -704,27 +712,23 @@ def signature_html(result, active_hint: int | None = None) -> str:
 
 
 def argument_index(text_before: str) -> int | None:
-    """Which argument (0-based) the cursor is in, from the text before it
-    on the line: the commas at the level of the innermost open "(" (None if
-    the cursor isn't inside parentheses)."""
-    depth, commas, quote = 0, 0, None
-    for ch in reversed(text_before):
-        if quote:
-            if ch == quote:
-                quote = None
-            continue
-        if ch in "'\"":
-            quote = ch
-        elif ch in ")]":
-            depth += 1
-        elif ch in "([":
-            if depth == 0:
-                return commas if ch == "(" else None
-            depth -= 1
-        elif ch == "," and depth == 0:
-            commas += 1
-    return None
-
+    """Which argument (0-based) the cursor is in, from the code before it on
+    the line: the commas at the level of the innermost open "(" (None if the
+    cursor isn't inside parentheses, or the innermost is a "[")."""
+    open_brackets: list[list] = []  # [bracket, commas] of each one still open
+    for start, end in code_spans(text_before):
+        for ch in text_before[start:end]:
+            if ch in "([":
+                open_brackets.append([ch, 0])
+            elif ch in ")]":
+                if open_brackets:
+                    open_brackets.pop()
+            elif ch == "," and open_brackets:
+                open_brackets[-1][1] += 1
+    if not open_brackets:
+        return None
+    bracket, commas = open_brackets[-1]
+    return commas if bracket == "(" else None
 
 # ------------------------------------------------------- references / rename
 class TextEdit(NamedTuple):
@@ -787,24 +791,6 @@ def apply_edits(text: str, edits: list[TextEdit]) -> str:
     return text
 
 
-def _code_spans(line: str) -> list[tuple[int, int]]:
-    """The parts of a line that are code: not in a string or a "!" comment."""
-    spans, start, quote = [], 0, None
-    for i, ch in enumerate(line):
-        if quote:
-            if ch == quote:
-                quote, start = None, i + 1
-        elif ch in "'\"":
-            spans.append((start, i))
-            quote = ch
-        elif ch == "!":
-            spans.append((start, i))
-            return spans
-    if quote is None:
-        spans.append((start, len(line)))
-    return spans
-
-
 def add_result_variable_edits(edits: dict[Path, list[TextEdit]], old: str, new: str,
                               file_text: Callable[[Path], str]) -> dict[Path, list[TextEdit]]:
     """fortls's rename misses a function's result variable: in a function
@@ -823,20 +809,20 @@ def add_result_variable_edits(edits: dict[Path, list[TextEdit]], old: str, new: 
         have = {(e.line, e.column) for e in file_edits}
         added = list(file_edits)
         for i, line in enumerate(lines):
-            code = "".join(line[a:b] for a, b in _code_spans(line))
+            code = "".join(line[a:b] for a, b in code_spans(line))
             if not header.search(code):
                 continue
             # The whole statement (it may continue over "&" lines).
             statement, j = code, i
             while statement.rstrip().endswith("&") and j + 1 < len(lines):
                 j += 1
-                statement += "".join(lines[j][a:b] for a, b in _code_spans(lines[j]))
+                statement += "".join(lines[j][a:b] for a, b in code_spans(lines[j]))
             if re.search(r"\bresult\s*\(", statement, re.IGNORECASE):
                 continue  # the result has its own name
             for k in range(j + 1, len(lines)):
                 if end.match(lines[k]):
                     break
-                for a, b in _code_spans(lines[k]):
+                for a, b in code_spans(lines[k]):
                     for match in word.finditer(lines[k], a, b):
                         if (k, match.start()) not in have:
                             have.add((k, match.start()))

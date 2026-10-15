@@ -824,7 +824,7 @@ class BuildMonitor(SortableTable, QWidget):
         self._timer.timeout.connect(self._tick)
 
         self.refresh_palette()
-        self._update_header()
+        self.update_header()
 
     # ------------------------------------------------------------- styling
     def refresh_palette(self):
@@ -835,7 +835,7 @@ class BuildMonitor(SortableTable, QWidget):
         self.empty.setStyleSheet(f"color: {self.palette_colors['muted']};")
         self.title_icon.draw(self.palette_colors["text"], self.title)
         self._style_chips()
-        self._update_header()
+        self.update_header()
         self.table.viewport().update()
         self.progress.update()
 
@@ -870,7 +870,7 @@ class BuildMonitor(SortableTable, QWidget):
         self.set_filter(None)
         self.progress.set(0, "running")
         self._timer.start()
-        self._update_header()
+        self.update_header()
 
     def reset(self):
         """Back to the empty state (e.g. when another project is opened)."""
@@ -888,7 +888,12 @@ class BuildMonitor(SortableTable, QWidget):
         self._active = False
         self.set_filter(None)
         self.progress.set(0, "running")
-        self._update_header()
+        self.update_header()
+
+    @property
+    def percent(self) -> int:
+        """How far the build is (0–100)."""
+        return self._percent
 
     def finish(self, exit_code: int, stopped: bool = False):
         if not self._active:
@@ -908,7 +913,7 @@ class BuildMonitor(SortableTable, QWidget):
             self._result = "ok"
             self._percent = 100
         self.progress.set(self._percent / 100, {"uptodate": "ok"}.get(self._result, self._result))
-        self._update_header()
+        self.update_header()
         self.table.viewport().update()
 
     # ------------------------------------------------------------- parsing
@@ -934,7 +939,7 @@ class BuildMonitor(SortableTable, QWidget):
                                      else WARNING if target.warnings else DONE)
             else:
                 self._add(name)
-            self._update_header()
+            self.update_header()
             return
 
         match = FAILED_OBJECT_RE.search(line)
@@ -942,14 +947,14 @@ class BuildMonitor(SortableTable, QWidget):
             target = self._find_object(match.group(1))
             if target:
                 self._mark_failed(target)
-            self._update_header()
+            self.update_header()
             return
 
         if UP_TO_DATE_RE.search(line):
             self._percent = 100
             self._result = "uptodate"
             self.progress.set(1.0, "ok")
-            self._update_header()
+            self.update_header()
             return
 
         self._parse_diagnostic(line)
@@ -1015,7 +1020,7 @@ class BuildMonitor(SortableTable, QWidget):
             if target.status in (DONE, WARNING):
                 self._set_status(target, WARNING)
         self._update_tooltip(target)
-        self._update_header()
+        self.update_header()
 
     # ------------------------------------------------------------- helpers
     def _find(self, name: str, running: bool) -> Target | None:
@@ -1149,7 +1154,7 @@ class BuildMonitor(SortableTable, QWidget):
             counts[t.status] += 1
         return counts
 
-    def _update_header(self):
+    def update_header(self):
         pal = self.palette_colors
         parts = [self.description] if self.description else []
         if self.peak_parallel > 1:
@@ -1204,7 +1209,7 @@ class BuildMonitor(SortableTable, QWidget):
         now = time.monotonic()
         flashing = any(t.finished is not None and now - t.finished < FLASH_SECONDS for t in self.targets)
         self.table.viewport().update()  # also clears the last flash frame
-        self._update_header()
+        self.update_header()
         if not (self._active or flashing):
             self._timer.stop()
 

@@ -85,20 +85,20 @@ class CodeEditor(EditorGutterMixin, EditorIssuesMixin, MultiCursorMixin, QPlainT
         self.find_selections: list[QTextEdit.ExtraSelection] = []
         self.coverage: dict[int, int] = {}  # line -> times the tests ran it (see set_coverage)
         self.coverage_branches: dict[int, tuple[int, int]] = {}  # line -> (branches taken, branches)
-        # The selection's other occurrences, highlighted (see _update_occurrences):
+        # The selection's other occurrences, highlighted (see update_occurrences):
         # Match case / Whole words come from the tab's find bar.
         self.occurrence_selections: list[QTextEdit.ExtraSelection] = []
         self.match_options: Callable[[], tuple[bool, bool]] = lambda: (False, False)
         self._occurrence_timer = QTimer(self)
         self._occurrence_timer.setSingleShot(True)
         self._occurrence_timer.setInterval(120)  # (once the selection rests: not on every step of a drag)
-        self._occurrence_timer.timeout.connect(self._update_occurrences)
+        self._occurrence_timer.timeout.connect(self.update_occurrences)
         self.selectionChanged.connect(self._occurrence_timer.start)
         self.lint_issues: list[lint.LintIssue] = []  # underlined, with a tooltip
         self._spelling: list = []        # the misspelled words among them, in line order (see set_lint)
         self._spelling_lines: list[int] = []
         # The highlights that only change when the markers, issues or gremlins
-        # do (rebuilt then, not on every cursor move: see _update_extra_selections).
+        # do (rebuilt then, not on every cursor move: see update_extra_selections).
         self._fixed_selections: list[QTextEdit.ExtraSelection] = []
         self.gremlins: dict[int, list[gremlins_mod.Gremlin]] = {}  # line -> its gremlins (View → Show Gremlins)
         # Multiple cursors: ⌥/Alt-click adds one, ⌘⇧/Ctrl+Shift-click a column
@@ -115,11 +115,11 @@ class CodeEditor(EditorGutterMixin, EditorIssuesMixin, MultiCursorMixin, QPlainT
         self.textChanged.connect(self._restart_blink)
         self.gutter = LineNumberArea(self)
         self.setLineWrapMode(QPlainTextEdit.NoWrap)
-        self.blockCountChanged.connect(self._update_gutter_width)
+        self.blockCountChanged.connect(self.update_gutter_width)
         self.updateRequest.connect(self._update_gutter)
-        self.cursorPositionChanged.connect(lambda: self._update_extra_selections(rebuild=False))
-        self._update_gutter_width()
-        self._update_extra_selections()
+        self.cursorPositionChanged.connect(lambda: self.update_extra_selections(rebuild=False))
+        self.update_gutter_width()
+        self.update_extra_selections()
 
     def toPlainText(self) -> str:
         """The text exactly as it is (see highlighter.document_text): what's
@@ -131,14 +131,14 @@ class CodeEditor(EditorGutterMixin, EditorIssuesMixin, MultiCursorMixin, QPlainT
         cr = self.contentsRect()
         self.gutter.setGeometry(QRect(cr.left(), cr.top(), self.gutter_width(), cr.height()))
         if self.lineWrapMode() != QPlainTextEdit.NoWrap:  # (lines re-wrap: highlight their new rows)
-            QTimer.singleShot(0, self, self._update_extra_selections)
+            QTimer.singleShot(0, self, self.update_extra_selections)
 
     def set_word_wrap(self, on: bool):
         """Wrap long lines at the window's edge (at a space if there is
         one), or scroll sideways."""
         self.setWordWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
         self.setLineWrapMode(QPlainTextEdit.WidgetWidth if on else QPlainTextEdit.NoWrap)
-        QTimer.singleShot(0, self, self._update_extra_selections)
+        QTimer.singleShot(0, self, self.update_extra_selections)
         self.gutter.update()
         self._update_minimap()
 
@@ -297,7 +297,7 @@ class CodeEditor(EditorGutterMixin, EditorIssuesMixin, MultiCursorMixin, QPlainT
         self.centerCursor()
 
     # -------------------------------------------------------- highlights
-    def _update_extra_selections(self, rebuild: bool = True):
+    def update_extra_selections(self, rebuild: bool = True):
         """Current line, lines with errors/warnings, underlined issues,
         gremlins, the extra cursors' selections and find matches. The
         markers', issues' and gremlins' are kept between calls and only built
@@ -382,7 +382,7 @@ class CodeEditor(EditorGutterMixin, EditorIssuesMixin, MultiCursorMixin, QPlainT
             out.append(sel)
         return out
 
-    def _update_occurrences(self):
+    def update_occurrences(self):
         """Highlight the other occurrences of the selected text in the file
         (single-line selections of 2 to 200 characters; Match case and Whole
         words as set in the find bar)."""
@@ -415,11 +415,11 @@ class CodeEditor(EditorGutterMixin, EditorIssuesMixin, MultiCursorMixin, QPlainT
                     break
         if found or self.occurrence_selections:
             self.occurrence_selections = found
-            self._update_extra_selections(rebuild=False)
+            self.update_extra_selections(rebuild=False)
 
     def set_find_selections(self, selections):
         self.find_selections = selections
-        self._update_extra_selections(rebuild=False)  # (kept apart: see _update_extra_selections)
+        self.update_extra_selections(rebuild=False)  # (kept apart: see update_extra_selections)
         self._update_minimap()
 
     def paintEvent(self, event):

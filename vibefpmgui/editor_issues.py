@@ -19,7 +19,11 @@ from qtpy.QtGui import (
 )
 
 from . import hover_card, lint
-from .editor_shared import DARK_UNDERLINE_COLORS, MARKER_COLORS, WORD_RE
+from .editor_shared import (
+    DARK_UNDERLINE_COLORS,
+    MARKER_COLORS,
+    word_bounds,
+)
 
 
 class EditorIssuesMixin:
@@ -30,7 +34,7 @@ class EditorIssuesMixin:
         # The misspelled words in line order, for the squiggles (see squiggle_spans).
         self._spelling = sorted((i for i in issues if i.severity == "spelling"), key=lambda i: (i.line, i.column))
         self._spelling_lines = [i.line for i in self._spelling]
-        self._update_extra_selections()
+        self.update_extra_selections()
         self.viewport().update()  # (the spelling squiggles: see _paint_squiggles)
 
     def replace_word(self, issue, word: str):
@@ -70,21 +74,11 @@ class EditorIssuesMixin:
         if abs(self.cursorRect(cursor).center().x() - point.x()) > self.fontMetrics().horizontalAdvance("M"):
             return None  # the nearest text is too far away
         text = cursor.block().text()
-        i = cursor.positionInBlock()
-        if not (i < len(text) and WORD_RE.match(text[i])):
-            if i > 0 and WORD_RE.match(text[i - 1]):
-                i -= 1
-            else:
-                return None
-        start, end = i, i
-        while start > 0 and WORD_RE.match(text[start - 1]):
-            start -= 1
-        while end < len(text) and WORD_RE.match(text[end]):
-            end += 1
-        word = text[start:end]
-        if word[0].isdigit():
-            return None  # a number
-        return cursor.blockNumber() + 1, start, word
+        bounds = word_bounds(text, cursor.positionInBlock())
+        if bounds is None:
+            return None
+        start, end = bounds
+        return cursor.blockNumber() + 1, start, text[start:end]
 
     def lint_card_html(self, issues, other_notes=()) -> str:
         """fortitude's messages for ``issues`` (with fix links), plus any

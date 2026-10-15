@@ -131,15 +131,6 @@ def line_changes(opened: str, saved: str, current: str) -> tuple[dict[int, str],
     deletions.update({line: ("unsaved", n) for line, n in unsaved_deleted.items()})
     return marks, deletions
 
-def line_endings(text: str) -> tuple[str, bool]:
-    """(the line end most lines of a file's text have: "\\n" or "\\r\\n",
-    whether it has more than one kind). Old Mac line ends (a lone "\\r") count
-    as another kind: Qt reads them as line breaks, saved as the common one."""
-    crlf = text.count("\r\n")
-    lone_cr = text.count("\r") - crlf
-    lf = text.count("\n") - crlf
-    kinds = sum(1 for n in (crlf, lone_cr, lf) if n)
-    return ("\r\n" if crlf > lf else "\n"), kinds > 1
 
 def occurrence_color(background: QColor) -> QColor:
     """The highlight of the selection's other occurrences on a syntax
@@ -164,3 +155,28 @@ OCCURRENCE_CONTRAST = {False: 34, True: 60}
 
 
 DEPTH_ROLE = Qt.UserRole + 7  # outline entries: how deeply nested
+
+
+def word_start(text: str, column: int) -> int:
+    """Where the name ending at ``column`` of a line starts (``column`` if
+    there's none just before it)."""
+    start = column
+    while start > 0 and WORD_RE.match(text[start - 1]):
+        start -= 1
+    return start
+
+
+def word_bounds(text: str, column: int) -> tuple[int, int] | None:
+    """(start, end) of the name at ``column`` of a line, or just before it
+    (the cursor right after a name); None if there's none there, or it's a
+    number."""
+    i = column
+    if not (i < len(text) and WORD_RE.match(text[i])):
+        if i > 0 and WORD_RE.match(text[i - 1]):
+            i -= 1
+        else:
+            return None
+    start, end = word_start(text, i), i
+    while end < len(text) and WORD_RE.match(text[end]):
+        end += 1
+    return None if text[start].isdigit() else (start, end)

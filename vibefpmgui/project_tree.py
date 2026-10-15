@@ -348,7 +348,7 @@ class ProjectTree(QWidget):
                     deps_group.setFont(font)
                     self.model.appendRow(deps_group)
                 deps_group.appendRow(item)
-        self._apply_marks()
+        self.refresh_marks()
         self._update_empty()
         if expanded is None:
             if root_item is not None:
@@ -570,9 +570,9 @@ class ProjectTree(QWidget):
     def set_marks(self, marks: dict[str, str]):
         """Color files by the last build: {path: "error" | "warning"}."""
         self._marks = {str(Path(p).resolve()): v for p, v in marks.items()}
-        self._apply_marks()
+        self.refresh_marks()
 
-    def _apply_marks(self):
+    def refresh_marks(self):
         for path, item in self._items.items():
             if item.data(KIND_ROLE) == "file" or item.data(HIDDEN_ROLE) or item.data(IGNORED_ROLE):
                 self._mark_item(path, item)

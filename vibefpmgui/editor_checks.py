@@ -74,11 +74,11 @@ class EditorChecksMixin:
         if not issue.fixable:
             return
         if getattr(self, "_lint_text", None) != self.editor.toPlainText():
-            self._update_status("the file changed since fortitude checked it — try again in a moment")
+            self.update_status("the file changed since fortitude checked it — try again in a moment")
             self._lint_timer.start()
             return
         self.apply_text_edits(issue.edits)
-        self._update_status(f"applied fix: {issue.fix or issue.code}")
+        self.update_status(f"applied fix: {issue.fix or issue.code}")
 
     def stop_lint(self):
         """Before the tab is closed: don't leave fortitude running."""
@@ -102,7 +102,7 @@ class EditorChecksMixin:
         before = self.editor.gremlins
         self.editor.set_gremlins(found)
         if self.editor.gremlins != before:
-            self._update_status()
+            self.update_status()
             self.problems_changed.emit()
 
     def set_spelling_enabled(self, on: bool):
@@ -171,8 +171,13 @@ class EditorChecksMixin:
             for line, notes in source.items():
                 merged.setdefault(line, []).extend(notes)
         self.editor.set_markers(merged)
-        self._update_status()
+        self.update_status()
         self.problems_changed.emit()
+
+    def compiler_diagnostics(self) -> list[tuple[int, str, str]]:
+        """The last build's messages about this file: (line, severity, message), by line."""
+        return [(line, severity, message) for line, notes in sorted(self._compiler_markers.items())
+                for severity, message in notes]
 
     def problems(self) -> list[Problem]:
         """Everything flagged in the file, in line order: the last build's

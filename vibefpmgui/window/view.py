@@ -270,7 +270,7 @@ class ViewMixin:
             self.terminal_panel.refresh_colors()
             for editor in self.editors():
                 editor.refresh_style()
-            self.project_tree._apply_marks()
+            self.project_tree.refresh_marks()
             self._update_command_icons()
             for editor in self.editors():
                 if getattr(editor, "close_button", None) is not None:
@@ -362,7 +362,7 @@ class ViewMixin:
         CodeEditor.highlight_matches = on
         self.settings.setValue("highlight_matches", on)
         for editor in self.editors():
-            editor.editor._update_occurrences()
+            editor.editor.update_occurrences()
 
     def set_minimap_enabled(self, on: bool):
         EditorTab.minimap_enabled = on
@@ -379,7 +379,7 @@ class ViewMixin:
         self.settings.setValue("indent_tabs", cls.use_tabs)
         for editor in self.editors():
             editor.editor.set_indentation(cls.indent_width, cls.use_tabs)
-            editor._update_status()
+            editor.update_status()
         self._check_indent_actions()
 
     def _check_indent_actions(self):

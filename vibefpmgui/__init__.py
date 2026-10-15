@@ -90,6 +90,7 @@ menu item says "not found" and the feature is off; without fprettify the
 | `vibefpmgui.hover_popup` | The editor's hover card |
 | `vibefpmgui.find_bar` | The find and replace bar |
 | `vibefpmgui.editor_shared` | What the editor's modules share: colors, delays, severities, text helpers |
+| `vibefpmgui.source_text` | Reading source files the same way everywhere: encoding, line ends, what Search skips |
 | `vibefpmgui.highlighter` | Pygments syntax highlighting and the *Syntax Colors* styles |
 | `vibefpmgui.themes` | *View → Theme*: the whole window's colors (System, Light, Dark and colorful ones) |
 | `vibefpmgui.lsp` | The client for the fortls language server (hover, definition, completion, references, rename) |

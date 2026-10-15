@@ -72,7 +72,7 @@ def test_menu_needs_a_file(window):
 
 
 def test_the_most_common_line_ending_wins():
-    from vibefpmgui.editor_shared import line_endings
+    from vibefpmgui.source_text import line_endings
 
     assert line_endings("a\nb\nc\r\nd\n") == ("\n", True)    # (one stray CRLF: still LF)
     assert line_endings("a\r\nb\r\nc\nd\r\n") == ("\r\n", True)

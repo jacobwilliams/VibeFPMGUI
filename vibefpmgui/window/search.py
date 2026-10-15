@@ -16,6 +16,7 @@ from ..problems_panel import ProblemsPanel
 from ..project_search import SearchPanel, search_roots
 from ..references_panel import ReferencesPanel
 from ..result_tree import file_labels, root_for
+from ..source_text import read_source
 from ..widgets import run_dialog
 
 
@@ -158,7 +159,7 @@ class SearchMixin:
                 changed_open += 1
                 continue
             try:
-                text, encoding, newline = self._read_source(path)
+                text, encoding, newline, _mixed = read_source(path)
                 text = lsp.apply_edits(text, edits)
                 path.write_bytes(text.replace("\n", newline).encode(encoding, errors="replace"))
             except OSError as exc:
