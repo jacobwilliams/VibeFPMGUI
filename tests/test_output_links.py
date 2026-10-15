@@ -69,3 +69,43 @@ def test_the_output_panel_opens_locations(window, project):
     links.open_requested.emit(str(loc.path), loc.line, loc.column)
     editor = window.current_editor()
     assert editor.path.name == "foo.f90" and editor.editor.textCursor().blockNumber() == 4
+
+
+IFX_TRACEBACK = """\
+forrtl: severe (170): Program Exception - stack overflow
+Image              PC                Routine            Line        Source             
+test_large_sparse  00007FF7011B1BC7  Unknown               Unknown  Unknown
+test_large_sparse  00007FF7010C7F25  DENSE_REDUCED_STE        1266  sqpopt_qp_reduced_hessian_module.f90
+test_large_sparse  00007FF7010ED93E  SQPOPT_ITERATE            393  sqpopt_iterate_module.f90
+test_large_sparse  00007FF7010767A8  SQPOPT_SOLVE              262  sqpopt_module.F90
+test_large_sparse  00007FF70106112B  TEST_LARGE_SPARSE          61  test_large_sparse.f90
+test_large_sparse  00007FF7011B1DE4  Unknown               Unknown  Unknown
+KERNEL32.DLL       00007FFEAD58CD87  Unknown               Unknown  Unknown
+"""
+
+
+def test_an_ifx_traceback(qtbot, tmp_path):
+    """ifx's traceback names each file without its folder: it's looked for
+    in the project (its own files before a dependency's; not other build output)."""
+    write_files(tmp_path, {
+        "src/sqpopt_qp_reduced_hessian_module.f90": "", "src/sqpopt_module.F90": "",
+        "test/test_large_sparse.f90": "",
+        "build/dependencies/dep/src/sqpopt_iterate_module.f90": "",  # (only in a dependency)
+        "build/dependencies/dep/src/sqpopt_module.F90": "",           # (also the project's: not this one)
+        "build/gfortran_123/sqpopt/sqpopt_qp_reduced_hessian_module.f90": "",  # (build output: never)
+    })
+    links = links_for(qtbot, tmp_path)
+    lines = IFX_TRACEBACK.splitlines()
+
+    def found(n):
+        text = lines[n]
+        return [(text[loc.start:loc.end], loc.path.relative_to(tmp_path).as_posix(), loc.line)
+                for loc in links.locations(text)]
+
+    assert found(3) == [("1266  sqpopt_qp_reduced_hessian_module.f90", "src/sqpopt_qp_reduced_hessian_module.f90", 1266)]
+    assert found(4) == [("393  sqpopt_iterate_module.f90", "build/dependencies/dep/src/sqpopt_iterate_module.f90", 393)]
+    assert found(5) == [("262  sqpopt_module.F90", "src/sqpopt_module.F90", 262)]
+    assert found(6) == [("61  test_large_sparse.f90", "test/test_large_sparse.f90", 61)]
+    for n in (0, 1, 2, 7, 8):  # (the message, the header, rows without a source)
+        assert found(n) == []
+    assert links.find_by_name("nowhere.f90") is None

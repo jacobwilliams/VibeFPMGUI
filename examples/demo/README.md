@@ -10,7 +10,7 @@ A small fpm project for trying out every part of VibeFPMGUI. Open
 | **Build** | The Build tab lists each file; independent modules compile in parallel. `utils.f90` exists in both `demo` and `mathutils`, so the Package column tells them apart |
 | Features → `warnings`, then Build | Files with warnings get orange badges (hover for the messages) |
 | Features → `broken`, then Build | `demo_broken.F90` fails; the rest are aborted or done |
-| **Test** | Four tests; `check_slow` takes a few seconds so you can watch the progress bar. Run it twice to get time estimates |
+| **Test** | Five tests; `check_slow` takes a few seconds so you can watch the progress bar. Run it twice to get time estimates. `check_traceback` prints a traceback like ifx's for a runtime error (it passes): click a row's line number and file in the Output panel to open the file there |
 | Features → `failing-test` (or Profile → `failures`), then Test | `check_feature` fails with exit code 1; click it to see only its output |
 | Features → `greeting`, then Run with Target `demo` | The program prints a greeting enabled by a preprocessor macro |
 | Target `bench`, then Run | The second program (OpenMP timing loop) |
