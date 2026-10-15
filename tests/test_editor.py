@@ -6,7 +6,7 @@ from conftest import open_editor
 from qtpy.QtGui import QTextCursor
 from qtpy.QtWidgets import QPlainTextEdit
 
-from vibefpmgui.editor import line_changes
+from vibefpmgui.editor_shared import line_changes
 from vibefpmgui.lsp import TextEdit
 
 

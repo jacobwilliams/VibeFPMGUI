@@ -14,7 +14,7 @@ from qtpy.QtGui import QColor, QTextCursor
 
 from vibefpmgui import coverage as cov
 from vibefpmgui.coverage_panel import CoveragePanel, function_name, shown_functions
-from vibefpmgui.main_window import with_link_flag
+from vibefpmgui.fpm_args import with_link_flag
 
 
 def gcov_json(root: Path, files: dict) -> str:

@@ -106,13 +106,20 @@ def _declared_spec(manifest: Path, name: str) -> dict | None:
 
 
 # -------------------------------------------------------------------- check
+ALLOWED_GIT_PROTOCOLS = "https:http:ssh:git:file"
+
+
 def git_environment(environ=os.environ) -> dict[str, str]:
     """The environment for git commands that must never wait for a prompt:
     no password questions (HTTPS), and SSH in batch mode (no host-key or
     passphrase questions: a key in the agent still works; otherwise it fails
     at once instead of waiting out the timeout). A GIT_SSH_COMMAND or
-    GIT_SSH of the user's own is left as it is."""
-    env = dict(environ, GIT_TERMINAL_PROMPT="0")
+    GIT_SSH of the user's own is left as it is.
+
+    Only real transports are allowed: a URL comes from a project's fpm.toml,
+    which may not be trustworthy, and git's "ext::" transport (and other
+    remote helpers) would run the command in the URL."""
+    env = dict(environ, GIT_TERMINAL_PROMPT="0", GIT_ALLOW_PROTOCOL=ALLOWED_GIT_PROTOCOLS)
     if not env.get("GIT_SSH_COMMAND") and not env.get("GIT_SSH"):
         env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
     return env
@@ -139,7 +146,9 @@ def ls_remote(url: str) -> dict[str, str]:
     to their commit). Raises RuntimeError with git's message on failure."""
     env = git_environment()
     try:
-        out = subprocess.run(["git", "ls-remote", url, "HEAD", "refs/heads/*", "refs/tags/*"],
+        # ("--": a URL from fpm.toml that starts with "-", such as
+        # "--upload-pack=<command>", is a URL to git, never an option.)
+        out = subprocess.run(["git", "ls-remote", "--", url, "HEAD", "refs/heads/*", "refs/tags/*"],
                              capture_output=True, text=True, timeout=LS_REMOTE_TIMEOUT, env=env, check=False)
     except FileNotFoundError:
         raise RuntimeError("git was not found on PATH")

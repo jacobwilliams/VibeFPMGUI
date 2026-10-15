@@ -27,8 +27,8 @@ from qtpy.QtWidgets import (
 )
 
 from . import highlighter as hl
+from .source_text import search_text
 
-MAX_FILE_SIZE = 8 * 1024 * 1024
 PREVIEW_BEFORE = 50   # characters of the line shown before a result
 PREVIEW_AFTER = 200
 CONTEXT_LINES = 40    # lexed before a result's line, for its syntax colors
@@ -72,6 +72,7 @@ class Problem(NamedTuple):
     message: str
     color: str       # the badge's color
     source: str      # which tool: "build", "fortitude", "fortls", "spelling", "review"
+    issue: object = None  # fortitude's issue (a lint.LintIssue), with its fix if it has one
 
 
 def make_match(line_text: str, line: int, column: int, end_line: int, end_column: int) -> Match:
@@ -83,23 +84,6 @@ def make_match(line_text: str, line: int, column: int, end_line: int, end_column
         before, first = "…" + before[-PREVIEW_BEFORE:], column - PREVIEW_BEFORE
     return Match(line, column, end_line, end_column, before, line_text[column:end][:PREVIEW_AFTER],
                  line_text[end:][:PREVIEW_AFTER], first)
-
-
-def read_text(path: Path) -> str | None:
-    """A file's text ("\\n" line ends), or None for binary or huge files."""
-    try:
-        if path.stat().st_size > MAX_FILE_SIZE:
-            return None
-        raw = path.read_bytes()
-    except OSError:
-        return None
-    if b"\0" in raw[:8192]:
-        return None
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        text = raw.decode("latin-1")
-    return text.replace("\r\n", "\n")
 
 
 def root_for(path: Path, roots: list[Root]) -> Root | None:
@@ -423,7 +407,7 @@ class ResultTree(QTreeWidget):
         if lines is None:
             text = self.text_for(path) if self.text_for is not None else None
             if text is None:
-                text = read_text(path) or ""
+                text = search_text(path) or ""
             lines = text.split("\n")
             if len(self._file_lines) > 100:  # (keep the most recent files)
                 self._file_lines.pop(next(iter(self._file_lines)))

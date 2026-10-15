@@ -44,9 +44,9 @@ from .result_tree import (
     Root,
     file_labels,
     make_match,
-    read_text,
     root_for,
 )
+from .source_text import search_text
 from .widgets import StatusLabel
 
 MAX_RESULTS = 10_000          # matches shown (the search stops there)
@@ -266,7 +266,7 @@ def search(roots: list[Root], query: Query, pattern: re.Pattern, open_texts: dic
         resolved = path.resolve()
         text = open_texts.get(resolved)
         if text is None:
-            text = read_text(path)
+            text = search_text(path)
         if text is None:
             continue
         searched += 1
@@ -678,7 +678,7 @@ class SearchPanel(QWidget):
                 result = FileResult(path, root)
             text = open_texts.get(path)
             if text is None:
-                text = read_text(path) or ""
+                text = search_text(path) or ""
             result.matches = find_matches(text, self._pattern)
             if not result.matches:
                 self._remove_file(path)
@@ -714,7 +714,7 @@ class SearchPanel(QWidget):
                     keep = {(found.line, found.column) for found in result.matches}
                 text = open_texts.get(path)
                 if text is None:
-                    text = read_text(path)
+                    text = search_text(path)
                 if text is None:
                     continue
                 edits = replacement_edits(text, self._pattern, self._query, self.replace_edit.text(), keep)

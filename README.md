@@ -188,7 +188,8 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   fortitude is part of the pixi environment; for a pip install, add it
   with `pip install fortitude-lint`.
   fortitude can fix many issues itself: hover one and click *Apply fix* (or
-  right-click it → *Fix: …*) to apply just that fix, or use *Edit → Fix Issues (fortitude) →
+  right-click it → *Fix: …*, or right-click it in the *Problems* panel →
+  *Apply Fix*) to apply just that fix, or use *Edit → Fix Issues (fortitude) →
   Fix All Safe Issues* for the whole file. *Safe* fixes don't change what the code
   does; *Edit → Fix Issues (fortitude) → Fix All Issues, Including Unsafe* also applies the others
   (marked "unsafe — check it"), which you should review. Either way it's a

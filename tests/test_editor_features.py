@@ -251,7 +251,7 @@ def test_lint_fix_after_the_colors_change(qtbot, lint_window, project):
 
 # ---------------------------------------------------------- indentation
 def test_indentation_rules():
-    from vibefpmgui.editor import (
+    from vibefpmgui.editor_shared import (
         backspace_length,
         outdent_length,
         tab_text,

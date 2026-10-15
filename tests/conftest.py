@@ -17,6 +17,7 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # (before Qt is imported)
 
 import pytest
+from qtpy.QtCore import QCoreApplication, QEvent
 
 
 @pytest.fixture(autouse=True)
@@ -111,6 +112,11 @@ def make_window(qtbot):
     yield make
     for window in windows:
         close_window(window)
+        # Deleted, not only closed (hidden): a closed window lived on with
+        # its thousands of widgets, and every later style or theme change
+        # restyled them all (seconds per test, late in the run).
+        window.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
 
 
 @pytest.fixture

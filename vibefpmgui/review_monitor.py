@@ -8,7 +8,7 @@ lasts until the app quits (or *Clear*); *New Chat* draws a line: the model
 forgets what's above it.
 
 The panel only shows `Entry` objects and says what the user did;
-`vibefpmgui.main_window` runs the model and changes files.
+`vibefpmgui.window.ai` and `vibefpmgui.window.ai_chat` run the model and change files.
 """
 
 from __future__ import annotations

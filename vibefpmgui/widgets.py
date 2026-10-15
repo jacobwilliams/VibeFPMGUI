@@ -1,7 +1,7 @@
 """Small widgets shared by the window's parts."""
 
 from qtpy.QtCore import QSize
-from qtpy.QtWidgets import QLabel
+from qtpy.QtWidgets import QDialog, QLabel
 
 
 class StatusLabel(QLabel):
@@ -17,3 +17,12 @@ class StatusLabel(QLabel):
     def minimumSizeHint(self) -> QSize:
         hint = super().minimumSizeHint()
         return QSize(min(hint.width(), self.MINIMUM_WIDTH), hint.height())
+
+
+def run_dialog(dialog: QDialog) -> int:
+    """Show a dialog until it's closed, then let it go (a dialog that's a
+    child of the window would otherwise stay, hidden, until the app quits)."""
+    try:
+        return dialog.exec()
+    finally:
+        dialog.deleteLater()

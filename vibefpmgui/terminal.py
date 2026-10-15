@@ -1263,7 +1263,7 @@ class TerminalPanel(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        QTimer.singleShot(0, self.start)  # (the first time the tab is shown: after it's laid out)
+        QTimer.singleShot(0, self, self.start)  # (the first time the tab is shown: after it's laid out)
 
     def refresh_colors(self):
         self.view.set_colors(*terminal_colors(QApplication.palette()))

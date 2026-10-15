@@ -56,8 +56,8 @@ def test_runner_collects_the_command_line(capfd, tmp_path):
 def run_parallel(qtbot, commands, workers, inner=(), stop_after=None):
     from qtpy.QtCore import QProcessEnvironment
 
-    from vibefpmgui.main_window import kill_process_tree
     from vibefpmgui.parallel_tests import ParallelTests
+    from vibefpmgui.processes import kill_process_tree
 
     runner = ParallelTests(commands, workers, str(shutil.os.getcwd()), QProcessEnvironment.systemEnvironment(),
                            list(inner), kill_process_tree)
@@ -249,7 +249,7 @@ def test_main_opens_a_window(project, monkeypatch):
 
 @pytest.mark.parametrize("text", ["", "x"])
 def test_split_runner(text):
-    from vibefpmgui.main_window import split_runner
+    from vibefpmgui.fpm_args import split_runner
 
     args, runner = split_runner(["--runner", "mpirun -np 2", "--flag", text] if text else [])
     assert runner == ("mpirun -np 2" if text else "")

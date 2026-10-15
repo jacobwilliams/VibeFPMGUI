@@ -12,6 +12,8 @@ test = "pytest"                                             # GUI and unit tests
 coverage = "pytest --cov --cov-report=html --cov-report=term"  # the tests, with a code coverage report in web/coverage
 docs = "pdoc -t docs/pdoc-template -o web/api vibefpmgui"   # API docs (HTML) from the docstrings, into the website
 docs-serve = "pdoc -t docs/pdoc-template vibefpmgui"        # the same, live in the browser while you edit
+lint = "ruff check ."                                       # lint the package and the tests (ruff's default rules)
+audit = "bandit -c pyproject.toml -r vibefpmgui"            # security check (bandit; known-acceptable checks: see pyproject.toml)
 
 [dependencies]
 gfortran = "15.*"
@@ -35,6 +37,7 @@ pytest-timeout = ">=2.4.0,<3"
 pytest-cov = ">=7.1.0,<8"
 pyte = ">=0.8.2,<0.9"
 pyspellchecker = ">=0.8.0,<0.9"
+bandit = ">=1.9.4,<2"
 
 [pypi-dependencies]
 fortitude-lint = ">=0.9.2, <0.10"

@@ -142,3 +142,16 @@ def test_another_project_starts_a_new_search(qtbot, window, conflict_project):
     assert panel.case_button.isChecked()  # (the options stay)
     qtbot.wait(400)  # (past the typing pause: no search for the cleared text)
     assert panel._worker is None and not panel._results
+
+
+def test_replace_writes_a_mixed_file_s_most_common_line_end(qtbot, window, project, monkeypatch):
+    """(Replace in Files and Rename used CRLF for a file with any CRLF line,
+    the editor the most common line end: one reader for both now.)"""
+    mixed = project / "test/mixed.f90"
+    mixed.write_bytes(b"program mixed\n  integer :: count\n  count = 1\nend program mixed\r\n")
+    panel = search_for(qtbot, window, "count", word_button=True, deps_check=False)
+    panel.set_replace_visible(True)
+    panel.replace_edit.setText("total")
+    path = mixed.resolve()
+    panel._replace({path: {(m.line, m.column) for m in panel._results[path].matches}})
+    assert mixed.read_bytes() == b"program mixed\n  integer :: total\n  total = 1\nend program mixed\n"

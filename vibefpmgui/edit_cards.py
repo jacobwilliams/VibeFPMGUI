@@ -3,7 +3,7 @@ of the change (made from the file, so it's right whatever the model wrote)
 with Accept and Reject, and Accept All / Reject All below them.
 
 The cards only show `vibefpmgui.ai_edits.Edit` objects and say what the
-user chose; `vibefpmgui.main_window` changes the editor's text.
+user chose; `vibefpmgui.window.ai_chat` changes the editor's text.
 """
 
 from __future__ import annotations

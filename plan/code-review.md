@@ -423,6 +423,24 @@ and normalise the selection once per paint.
 ## 3. Modularity and maintainability
 
 ### 3.1 `MainWindow` and `EditorTab` do too much
+
+> ✅ **`MainWindow` done** (2026-10-14). It's made of one mixin per area in
+> `vibefpmgui/window/` (panels, view, project, packages, editor tabs,
+> editing, language, search, running, output, testing, coverage, ai,
+> ai_chat); `main_window.py` keeps starting, building (`_build_ui`, now a
+> list of `_build_*` steps) and closing it. Mixins rather than separate
+> objects: every method and attribute kept its name, so behaviour and the
+> tests stayed the same. Shared helpers moved to `processes.py`,
+> `fpm_args.py` and `widgets.py`.
+>
+> ✅ **`editor.py` done** (2026-10-14), the same way: `CodeEditor` in
+> `code_editor.py` with mixins for its gutter (`editor_gutter.py`), issue
+> squiggles and hover cards (`editor_issues.py`) and multiple cursors
+> (`multi_cursor.py`); `EditorTab` keeps the file, outline and status, with
+> mixins for the language server (`editor_language.py`) and the checks
+> (`editor_checks.py`). `HoverPopup`, `FindBar` have their own modules;
+> constants and text helpers are in `editor_shared.py`, so the minimap
+> imports them at the top (no circular import: §4).
 `main_window.py` is 3,470 lines; `MainWindow` alone covers:
 - menus and the toolbar;
 - docks and the layout;
@@ -452,11 +470,14 @@ There are natural seams for splitting them:
 | `editor_lsp.py` | `EditorTab`'s hover/definition/implementation/completion/signature/references/rename methods | An `EditorLanguageFeatures` helper object. |
 
 ### 3.2 Duplicated code
-- **The per-project settings key is written out four times.**
+- ~~**The per-project settings key is written out four times.**~~ ✅ One
+  `_project_key(prefix)` in `window/project.py` (2026-10-14, with bandit's B324).
   `hashlib.sha1(str(self.manifest_path).encode()).hexdigest()[:16]`
   appears in `_session_key`, `_config_records`, `_features_key` and
   `_durations_key`. Use one `_project_key(prefix)` helper.
-- **Three file readers with slightly different rules:**
+- ~~**Three file readers with slightly different rules:**~~ ✅ One reader,
+  `source_text.py` (`read_source`, and `search_text` for Search's extra rules);
+  Rename and Replace in Files now pick a mixed file's line end as the editor does.
   - `MainWindow._read_source` (`main_window.py:1813`);
   - `EditorTab._read` (`editor.py:2059`);
   - `result_tree.read_text` (`result_tree.py:88`).
@@ -465,14 +486,20 @@ There are natural seams for splitting them:
   and line-ending handling. A single `read_source(path) -> (text, encoding,
   newline)` in one module would keep Search, Rename and the editor
   consistent.
-- **"The word at the cursor" is implemented three times.**
+- ~~**"The word at the cursor" is implemented three times.**~~ ✅
+  `editor_shared.word_bounds` and `word_start`.
   `EditorTab._name_at_cursor` (`editor.py:1839`), `CodeEditor.word_at`
   (`editor.py:557`) and `EditorTab._name_start` (`1729`) each scan for word
   boundaries with `WORD_RE`. Extract one `word_bounds(text, column)`
   function.
-- **`go_to_definition` and `go_to_implementation` are almost identical**
+- ~~**`go_to_definition` and `go_to_implementation` are almost identical**~~ ✅
+  One `_go_to(request, what)`.
   (`editor.py:1624–1671`): only the request and the message differ.
-- **Fortran comment/string scanning is written three times:**
+- ~~**Fortran comment/string scanning is written three times:**~~ ✅ Both
+  `in_comment_or_string` and `argument_index` use `lsp.code_spans` (the same
+  answers wherever the cursor is in code, checked over 100,000 random lines).
+  Continuation lines and `;` are still not handled (the highlighter's tokens
+  would: a separate change).
   `lsp.in_comment_or_string`, `lsp._code_spans` and `lsp.argument_index`.
   The highlighter's tokens already know where comments and strings are,
   which would also fix the cases these ignore (continuation lines, `;`).
@@ -499,11 +526,15 @@ signal) owned by the window and passed to the editor tabs and panels.
 ### 3.4 Private attributes used across classes
 - ~~`hl._text`: `EditorTab.check_spelling`, `editor.py:2021`.~~ ✅ Now
   `hl.text` and `hl.is_current()`.
-- `monitor._result`: `MainWindow._after_marked`, `main_window.py:2973`.
-- `editor._compiler_markers`: `MainWindow._run_review`,
+- ~~`monitor._result`~~ ✅ `TestMonitor.build_failed`.
+- ~~`editor._compiler_markers`~~ ✅ `EditorTab.compiler_diagnostics()`.
   `main_window.py:3214`.
-- `self.project_tree._apply_marks()`: `main_window.py:797`.
-- `client._client.close()`, the ollama package's internal httpx client:
+- ~~`self.project_tree._apply_marks()`~~ ✅ `ProjectTree.refresh_marks()`.
+- ~~`client._client.close()`~~ ✅ ollama's own `Client.close()` (in 0.6.3, the
+  oldest version allowed). Also made public: `BuildMonitor.percent`,
+  `CodeEditor.update_occurrences` / `update_gutter_width` /
+  `update_extra_selections`, `EditorTab.update_status`, `update_header`.
+  (Was: the ollama package's internal httpx client:
   `ai_review.py:276`. This one can break on any ollama upgrade.
 
 *Suggestion:* expose small public methods or properties for these, and pin

@@ -35,6 +35,7 @@ class ProblemsPanel(QWidget):
     open_requested = Signal(str, int, int, int, int)  # file, line, column, end line, end column
     explain_requested = Signal(object)  # a Problem (right-click → Explain with AI)
     fix_requested = Signal(object, object)  # its file's path and a Problem (right-click → Fix with AI…)
+    apply_fix_requested = Signal(object, object)  # its file's path and a Problem (right-click → Apply Fix)
 
     def __init__(self, settings=None, parent=None):
         super().__init__(parent)
@@ -86,6 +87,12 @@ class ProblemsPanel(QWidget):
         if not isinstance(problem, Problem):
             return None
         menu = QMenu(self)
+        issue = problem.issue
+        if issue is not None and issue.fixable:  # (fortitude's own fix, as its hover card's Apply fix)
+            label = f"Apply Fix: {issue.fix or issue.message}" + ("" if issue.fix_safe else "  (unsafe — check it)")
+            apply = menu.addAction(label, lambda: self.apply_fix_requested.emit(path, problem))
+            apply.setToolTip("Change the code as fortitude suggests (one Undo step)")
+            menu.addSeparator()
         explain = menu.addAction("Explain with AI", lambda: self.explain_requested.emit(problem))
         explain.setEnabled(problem.source in EXPLAINABLE)
         explain.setToolTip("Ask the local AI model what this means here, and how to fix it")

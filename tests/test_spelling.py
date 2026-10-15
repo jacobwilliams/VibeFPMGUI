@@ -148,7 +148,7 @@ def test_gutter_card_leaves_out_spelling(editor):
 def test_easy_to_see_on_a_dark_background(editor):
     from qtpy.QtGui import QColor, QPalette
 
-    from vibefpmgui.editor import DARK_UNDERLINE_COLORS, MARKER_COLORS
+    from vibefpmgui.editor_shared import DARK_UNDERLINE_COLORS, MARKER_COLORS
 
     code = editor.editor
     word = code.document().find("tolerence")

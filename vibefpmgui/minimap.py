@@ -20,6 +20,8 @@ from qtpy.QtCore import QPoint, QPointF, QRectF, QSize, Qt, QTimer
 from qtpy.QtGui import QColor, QPainter, QPalette, QPolygonF
 from qtpy.QtWidgets import QPlainTextEdit, QWidget
 
+from .editor_shared import CHANGE_COLORS, COVERAGE_COLORS, MARKER_COLORS, worst_severity
+
 LINE_HEIGHT = 2.0  # logical pixels per line
 CHAR_WIDTH = 1.0   # logical pixels per character
 WIDTH = 104        # the minimap's width
@@ -32,7 +34,7 @@ CODE_OPACITY = 0.45  # the code's blocks; markers, bars and bands are drawn at f
 
 class Minimap(QWidget):
     def __init__(self, editor, parent=None):
-        """``editor``: the `vibefpmgui.editor.CodeEditor` to show."""
+        """``editor``: the `vibefpmgui.code_editor.CodeEditor` to show."""
         super().__init__(parent)
         self.editor = editor
         self.setFixedWidth(WIDTH)
@@ -171,12 +173,6 @@ class Minimap(QWidget):
                                             LINE_HEIGHT), found)
 
         # Change bars (left edge) and deleted-line marks.
-        from .editor import (
-            CHANGE_COLORS,
-            COVERAGE_COLORS,
-            MARKER_COLORS,
-            worst_severity,
-        )
         if editor.show_coverage and editor.coverage:  # (lines the tests didn't run: under the change bars)
             missed = QColor(COVERAGE_COLORS["missed"])
             for line, count in editor.coverage.items():

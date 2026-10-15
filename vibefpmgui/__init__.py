@@ -50,7 +50,8 @@ menu item says "not found" and the feature is off; without fprettify the
 
 | Module | What it does |
 |---|---|
-| `vibefpmgui.main_window` | The window: build options, toolbar and menus, running fpm, and wiring the panels together |
+| `vibefpmgui.main_window` | The window: starting it, building it in order, closing it, and `main` |
+| `vibefpmgui.window` | The window's parts, one mixin per area: panels, View menu, project, graph, editor tabs, Edit menu, language server, search, running fpm, Output, Test and Run, coverage, AI |
 | `vibefpmgui.dock_snap` | Dragging a panel's edge past its smallest size collapses it, as in VS Code |
 | `vibefpmgui.manifest` | Reading `fpm.toml` files and resolving the dependency tree (no Qt) |
 | `vibefpmgui.graph_view` | The interactive dependency graph (pyqtgraph) |
@@ -69,6 +70,8 @@ menu item says "not found" and the feature is off; without fprettify the
 | `vibefpmgui.run_monitor` | The *Run* tab (the Tests tab with different wording) |
 | `vibefpmgui.test_runner` | The small wrapper given to `fpm test --runner` to mark where each test starts and ends |
 | `vibefpmgui.parallel_tests` | Running tests several at a time, each with its own output |
+| `vibefpmgui.fpm_args` | fpm's command line: link flags, `--runner`, the test wrapper's command |
+| `vibefpmgui.processes` | Ending a process and everything it started |
 | `vibefpmgui.ansi` | Terminal color codes in program output, shown as colors |
 | `vibefpmgui.output_links` | File locations in the output (runtime errors, backtraces, compiler messages) that open the file on a click |
 | `vibefpmgui.terminal` | The *Terminal* tab: your shell in the project's folder, with exactly the app's environment (pyte, drawn by our own widget) |
@@ -77,7 +80,17 @@ menu item says "not found" and the feature is off; without fprettify the
 
 | Module | What it does |
 |---|---|
-| `vibefpmgui.editor` | The editor tab: gutter markers, find/replace, hover popup, outline, saving |
+| `vibefpmgui.editor` | The editor tab: the file (loading, saving, changes on disk), the outline, the status line |
+| `vibefpmgui.editor_language` | The tab's language-server features: hover, definitions, completion, references, rename |
+| `vibefpmgui.editor_checks` | The tab's checks: fortitude, spelling, gremlins; the compiler's, fortls's and the AI's markers |
+| `vibefpmgui.code_editor` | The text widget: keys, mouse, selections, indentation, highlights, its right-click menu |
+| `vibefpmgui.editor_gutter` | The gutter: line numbers, change bars, coverage, gremlins, markers |
+| `vibefpmgui.editor_issues` | Squiggles under issues, and the hover cards over them |
+| `vibefpmgui.multi_cursor` | Several cursors at once |
+| `vibefpmgui.hover_popup` | The editor's hover card |
+| `vibefpmgui.find_bar` | The find and replace bar |
+| `vibefpmgui.editor_shared` | What the editor's modules share: colors, delays, severities, text helpers |
+| `vibefpmgui.source_text` | Reading source files the same way everywhere: encoding, line ends, what Search skips |
 | `vibefpmgui.highlighter` | Pygments syntax highlighting and the *Syntax Colors* styles |
 | `vibefpmgui.themes` | *View → Theme*: the whole window's colors (System, Light, Dark and colorful ones) |
 | `vibefpmgui.lsp` | The client for the fortls language server (hover, definition, completion, references, rename) |
@@ -111,7 +124,7 @@ menu item says "not found" and the feature is off; without fprettify the
 | `vibefpmgui.icons` | Toolbar icons, symbol badges and the app icon, drawn with QPainter |
 | `vibefpmgui.coverage` | Test coverage: gcov's counts collected and read |
 | `vibefpmgui.coverage_panel` | The *Coverage* tab: totals, each file's coverage, its missed lines and functions |
-| `vibefpmgui.widgets` | Small shared widgets (a status line that never widens the window) |
+| `vibefpmgui.widgets` | Small shared widgets (a status line that never widens the window), and running a dialog |
 | `vibefpmgui.background` | Blocking calls (Format, Fix All, asking Ollama) on a pool thread, the result back in the GUI thread |
 | `vibefpmgui.compat` | Things that differ between macOS, Linux and Windows |
 

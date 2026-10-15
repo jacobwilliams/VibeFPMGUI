@@ -1,7 +1,7 @@
 """Popups for the language server: the completion list and argument hints.
 
 Both are tooltip-style windows that never take the keyboard focus, so typing
-continues in the editor; `vibefpmgui.editor.CodeEditor` passes them
+continues in the editor; `vibefpmgui.code_editor.CodeEditor` passes them
 the keys they use (Up/Down/Enter/Tab/Escape for the completion list).
 """
 
