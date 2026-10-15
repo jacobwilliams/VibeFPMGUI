@@ -10,8 +10,12 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   *Terminal* at the bottom with *Output* beside them, the files open in the editor in
   the middle. Drag a panel by its title (or its tab) to the left, right or
   bottom, onto another to stack them as tabs, or out of the window to float
-  it; double-click the title to float it or dock it again. *View → Panels*
-  shows or hides each one, and *Reset Layout* puts them all back. The
+  it; double-click the title to float it or dock it again. Drag a panel's
+  edge past its smallest size to collapse it (at the edge of a side, that
+  whole side collapses, as in VS Code) to a thin grip; drag the grip back
+  out (or double-click it) to open it.
+  *View → Panels* shows or hides each one, and *Reset Layout* puts them all
+  back. The
   layout is remembered.
 * *File → Clear Settings and Quit…* forgets everything the app has saved
   (recent projects, open files, layout, options, View menu choices, your
