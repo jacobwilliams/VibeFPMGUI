@@ -19,8 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from qtpy.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QSize, Qt, QTimer
-from qtpy.QtGui import QPainter, QPalette
+from qtpy.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, QTimer
 from qtpy.QtWidgets import QDockWidget, QMainWindow, QStyle, QTabBar, QWidget
 
 SLACK = 3  # (pixels around a separator still counted as on it)
@@ -42,11 +41,10 @@ class _NoTitle(QWidget):
 
 class Grip(QWidget):
     """What a collapsed panel shows instead of its content: a thin strip
-    with grip dots and the resize cursor; drag it out (or double-click it)
-    to open the panel. (Qt shows neither for a panel this small, and on
-    macOS the separator beside it is a 1-pixel line.) It's the panel's
-    content, not its title bar: with its content hidden, Qt keeps a panel
-    only as long as its title, in a corner."""
+    with the resize cursor; drag it out (or double-click it) to open the
+    panel. (The style draws its grip dots on the separator beside it.)
+    It's the panel's content, not its title bar: with its content hidden,
+    Qt keeps a panel only as long as its title, in a corner."""
 
     def __init__(self, snap: SnapClosed, side: Side):
         super().__init__()
@@ -59,18 +57,6 @@ class Grip(QWidget):
 
     def minimumSizeHint(self):
         return QSize(GRIP, GRIP)
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        color = self.palette().color(QPalette.WindowText)
-        color.setAlpha(110)
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(color)
-        center = QPointF(self.rect().center()) + QPointF(0.5, 0.5)
-        for n in (-1, 0, 1):  # (three dots across the middle, along the strip)
-            step = QPointF(0, n * 5) if self.side.horizontal else QPointF(n * 5, 0)
-            painter.drawEllipse(center + step, 1.2, 1.2)
 
     def _window_pos(self, event) -> QPoint:
         return self.mapTo(self.snap.window, event.position().toPoint())
@@ -105,7 +91,6 @@ class Side:
     minimum: int
     sign: int                      # +1: the mouse moving along the axis makes them bigger
     horizontal: bool               # (the drag's axis: a vertical separator moves sideways)
-    others: list[QWidget]          # what's on the other side (to find the separator once collapsed)
     collapsed: bool = False
     press_size: int = 0            # (during a drag: the size at the press)
     cross: list[int] | None = None  # the docks' sizes along the separator, before collapsing
@@ -178,10 +163,12 @@ class SnapClosed(QObject):
     def _sides_at(self, pos: QPoint) -> list[Side]:
         """The panels on each side of the separator at ``pos`` that could collapse."""
         gap, tab_bars = self._gap(), self._tab_bars()
-        # A collapsed side: its separator is next to what was on its other side.
+        # A collapsed side: its separator is next to its grips. (Not "next to
+        # what's beyond it": the right side's panels are beyond the left side,
+        # and their edges are at the right side's separator too.)
         for side in self.collapsed:
-            if any(w.isVisible() and touching(self._rect(w, tab_bars), pos, side.sign < 0, side.horizontal, gap)
-                   for w in side.others):
+            if any(d.isVisible() and touching(d.geometry(), pos, side.sign > 0, side.horizontal, gap)
+                   for d in side.docks):
                 return [side]
         front = self._front()
         rects = {dock: self._rect(dock, tab_bars) for dock in front}
@@ -209,8 +196,6 @@ class SnapClosed(QObject):
                     if (here in (Qt.LeftDockWidgetArea, Qt.RightDockWidgetArea)) != horizontal:
                         continue
                     docks = [d for d in front if area(d) == here]
-                    # (Its separator, once collapsed, runs along the editor and the other sides.)
-                    others = [central, *(d for d in front if area(d) != here)]
                 group = []
                 for dock in docks:
                     for member in [dock, *self.window.tabifiedDockWidgets(dock)]:
@@ -220,7 +205,7 @@ class SnapClosed(QObject):
                 size = max(span[1] for span in spans) - min(span[0] for span in spans) + 1
                 minimum = max((d.minimumSizeHint().width() if horizontal else d.minimumSizeHint().height())
                               for d in group)
-                sides.append(Side(docks, group, size, max(minimum, 1), sign, horizontal, list(others)))
+                sides.append(Side(docks, group, size, max(minimum, 1), sign, horizontal))
             if sides:
                 return sides
         return []

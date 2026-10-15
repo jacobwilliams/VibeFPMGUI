@@ -195,7 +195,7 @@ def collapse_left(qtbot, window):
 
 
 def test_a_collapsed_panel_shows_a_grip(any_style, qtbot, window):
-    """(Collapsed, a panel showed no grip dots and no resize cursor.)"""
+    """(Collapsed, a panel showed no resize cursor, and was hard to grab.)"""
     from vibefpmgui.dock_snap import Grip
 
     ready(qtbot, window)
@@ -205,13 +205,6 @@ def test_a_collapsed_panel_shows_a_grip(any_style, qtbot, window):
     assert grip.cursor().shape() == Qt.SplitHCursor
     assert grip.height() > 300  # (all along the panel: not squeezed into a corner)
     assert grip.width() < 15 and editor_left(window) < 20
-    image = grip.grab().toImage()
-    ratio = image.devicePixelRatio()
-    background = image.pixel(0, 0)
-    marked = [y / ratio for y in range(image.height())
-              if any(image.pixel(x, y) != background for x in range(image.width()))]
-    assert marked and abs((min(marked) + max(marked)) / 2 - grip.height() / 2) < 3  # (the dots, in the middle)
-    assert max(marked) - min(marked) > 8  # (three of them, along the strip)
 
 
 def test_dragging_the_grip_opens_the_panel(qtbot, window):
@@ -270,3 +263,18 @@ def current_tab(window, title: str) -> str:
         if bar.parent() is window and bar.isVisible() and title in [bar.tabText(i) for i in range(bar.count())]:
             return bar.tabText(bar.currentIndex())
     return ""
+
+
+
+def test_the_other_sides_divider_leaves_a_collapsed_side_alone(qtbot, window):
+    """(With the left side collapsed, dragging the right side's divider
+    opened the left side: its panels are beyond the left side too.)"""
+    ready(qtbot, window)
+    collapse_left(qtbot, window)
+    graph = window.docks["graph"]
+    width = graph.width()
+    edge = graph.geometry().left() - 3
+    y = graph.geometry().center().y()
+    drag(qtbot, window, QPoint(edge, y), QPoint(edge - 20, y), QPoint(edge - 60, y))
+    assert collapsed(window, "files") and collapsed(window, "options")
+    assert abs(graph.width() - (width + 60)) < 10  # (the right side moved instead)
