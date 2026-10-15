@@ -72,6 +72,7 @@ class Problem(NamedTuple):
     message: str
     color: str       # the badge's color
     source: str      # which tool: "build", "fortitude", "fortls", "spelling", "review"
+    issue: object = None  # fortitude's issue (a lint.LintIssue), with its fix if it has one
 
 
 def make_match(line_text: str, line: int, column: int, end_line: int, end_column: int) -> Match:

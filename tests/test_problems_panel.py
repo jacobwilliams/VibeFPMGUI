@@ -146,3 +146,34 @@ def test_hidden_it_waits_until_shown(qtbot, window, editor):
     window.show_panel(panel)
     qtbot.waitUntil(lambda: (1, "error", "build") in rows(panel), timeout=2_000)
     assert built  # (caught up)
+
+
+def test_apply_a_fortitude_fix_from_the_problems(qtbot, window, project):
+    """Right-click a fortitude problem that has a fix → Apply Fix: the same
+    as its hover card's Apply fix (one Undo step)."""
+    from vibefpmgui import lint
+
+    write_files(project, {"src/fix.f90": "program p\n  x = 1\nend program p\n"})
+    editor = open_editor(window, project / "src/fix.f90")
+    fixable = lint.LintIssue(2, 3, 2, 8, "S101", "missing implicit none", "add implicit none", True,
+                             (lint.FixEdit(1, 0, 1, 0, "  implicit none\n"),))
+    plain = lint.LintIssue(3, 1, 3, 4, "C999", "a remark without a fix", "")
+    editor._lint_text = editor.editor.toPlainText()  # (what fortitude checked: still the text)
+    editor._show_lint([fixable, plain])
+    window.show_panel(window.problems_panel)
+    tree = window.problems_panel.tree
+    qtbot.waitUntil(lambda: tree.topLevelItemCount() and tree.topLevelItem(0).childCount() == 2, timeout=5_000)
+
+    def menu_for(badge: str):
+        item = tree.topLevelItem(0)
+        row = next(item.child(i) for i in range(item.childCount())
+                   if item.child(i).data(0, PARTS_ROLE)[2].badge == badge)
+        return window.problems_panel.context_menu(tree.visualItemRect(row).center())
+
+    assert not any(a.text().startswith("Apply Fix") for a in menu_for("C999").actions())  # (no fix: no item)
+    action = next(a for a in menu_for("S101").actions() if a.text().startswith("Apply Fix"))
+    assert action.text() == "Apply Fix: add implicit none"
+    action.trigger()
+    assert editor.editor.toPlainText() == "program p\n  implicit none\n  x = 1\nend program p\n"
+    editor.editor.undo()  # (one step back)
+    assert editor.editor.toPlainText() == "program p\n  x = 1\nend program p\n"

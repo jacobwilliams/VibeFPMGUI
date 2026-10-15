@@ -2745,7 +2745,7 @@ class EditorTab(QWidget):
         for issue in self.editor.lint_issues:
             found.append(Problem(issue.line, max(0, issue.column - 1), issue.end_line, max(0, issue.end_column - 1),
                                  issue.severity, issue.code, issue.message, MARKER_COLORS[issue.severity],
-                                 PROBLEM_SOURCES.get(issue.severity, "fortitude")))
+                                 PROBLEM_SOURCES.get(issue.severity, "fortitude"), issue))
         found.sort(key=lambda p: (p.line, p.column))
         return found
 

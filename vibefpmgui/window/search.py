@@ -38,6 +38,7 @@ class SearchMixin:
         self.problems_panel.explain_requested.connect(
             lambda problem: self._with_editor(lambda e: self.explain_problem(e, problem)))
         self.problems_panel.fix_requested.connect(self.fix_with_ai)
+        self.problems_panel.apply_fix_requested.connect(self._apply_problem_fix)
         # (A burst of changes, e.g. spelling and fortitude answering together: one update.)
         self._problems_timer = QTimer(self)
         self._problems_timer.setSingleShot(True)
@@ -104,6 +105,13 @@ class SearchMixin:
         roots = search_roots(self.graph, project_dir) if project_dir else []
         folder, package = file_labels(editor.path, root_for(editor.path, roots), project_dir)
         self.problems_panel.show_problems(editor.path, editor.problems(), folder, package)
+
+    def _apply_problem_fix(self, path, problem):
+        """Problems → right-click → Apply Fix: fortitude's fix, as its hover
+        card's Apply fix does (in the file's tab, which the panel is for)."""
+        editor = next((e for e in self.editors() if e.path == Path(path)), None)
+        if editor is not None and problem.issue is not None:
+            editor.apply_lint_fix(problem.issue)
 
     def _open_search_match(self, path: str, line: int, column: int, end_line: int, end_column: int,
                            preview: bool = False):
