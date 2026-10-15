@@ -15,7 +15,7 @@ numbers the model copied from the prompt taken out. An edit that matches
 nothing, or more than one place, isn't applied: it never lands anywhere but
 where it says.
 
-Pure text functions (no Qt), used by `vibefpmgui.main_window` and shown by
+Pure text functions (no Qt), used by `vibefpmgui.window.ai_chat` and shown by
 `vibefpmgui.edit_cards`.
 """
 

@@ -338,7 +338,7 @@ def test_model_and_focus_menus(qtbot, window, ollama, monkeypatch):
     assert "(Checking for installed models…)" in [a.text() for a in window.model_menu.actions()]
     labels = model_menu_labels(qtbot, window)
     assert "qwen2.5-coder:7b" in labels and "Other Model…" in labels
-    monkeypatch.setattr("vibefpmgui.main_window.QInputDialog.getText", lambda *a, **k: ("gpt-oss:20b", True))
+    monkeypatch.setattr("vibefpmgui.window.ai.QInputDialog.getText", lambda *a, **k: ("gpt-oss:20b", True))
     window._choose_other_model()
     assert window.ai_model == "gpt-oss:20b" and window.settings.value("ai_model") == "gpt-oss:20b"
     assert "gpt-oss:20b (not downloaded yet)" in model_menu_labels(qtbot, window)

@@ -11,7 +11,7 @@ from qtpy.QtWidgets import QMessageBox
 
 from vibefpmgui import dep_updates as du
 from vibefpmgui import manifest as m
-from vibefpmgui.main_window import commit_web_url, compare_web_url, repo_web_url
+from vibefpmgui.window.packages import commit_web_url, compare_web_url, repo_web_url
 
 URL = "https://github.com/fortran-lang/test-drive"
 SHA = {name: (str(i) * 40)[:40] for i, name in enumerate(["head", "v0.4.0", "v0.5.0", "main", "dev", "v0.6.0rc1"], 1)}

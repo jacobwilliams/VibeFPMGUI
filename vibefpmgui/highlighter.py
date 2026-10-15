@@ -446,9 +446,15 @@ class PygmentsHighlighter(QSyntaxHighlighter):
         start = self.currentBlock().position()
         end = start + len(text)
         lexed = self._text
-        if (not self._busy and lexed and (lexed[start:end] != text or (end < len(lexed) and lexed[end] != "\n"))
-                and self._quick_line(text)):
-            return  # (an edited line, colored on its own until the next lexing)
+        if not self._busy and lexed and (lexed[start:end] != text or (end < len(lexed) and lexed[end] != "\n")):
+            if self._quick_line(text):
+                return  # (an edited line, colored on its own until the next lexing)
+            # Past the lines colored on their own (the whole text replaced, e.g.
+            # by Fix All): the last lexing's colors are for other characters
+            # here. Plain until the next lexing, which then recolors every line
+            # (lines that only moved aren't in the part it would recolor).
+            self._full = True
+            return
         spans, count = self._spans, len(self._spans)
         i = max(bisect_right(self._starts, start) - 1, 0)
         while i < count:  # (by index: slicing the list would copy the rest of it for every line)

@@ -170,6 +170,19 @@ def test_replacing_everything_colors_few_lines_on_their_own(qtbot, edit, monkeyp
     assert formats(edit) == recolor_everything(qtbot, edit)
 
 
+def test_replacing_everything_with_moved_lines_recolors_them(qtbot, edit):
+    """(Fix All Safe Issues, which replaces the whole text: past the lines
+    colored on their own, the rest got the old text's colors at their new
+    positions, and the unchanged lines at the end were never recolored.)"""
+    fixed = SOURCE.replace("! routine 0\n", "!! routine number zero, longer\n", 1).replace(
+        "  real :: x  ! 'not a string'\n", "  real :: x\n", 3)  # (lines near the top change; the rest moves)
+    cursor = QTextCursor(edit.document())
+    cursor.select(QTextCursor.Document)
+    cursor.insertText(fixed)
+    settle(qtbot, edit)
+    assert formats(edit) == recolor_everything(qtbot, edit)
+
+
 def test_leading_blank_lines_dont_shift_the_colors(qtbot):
     """Pygments drops a text's leading line breaks by default: every color
     was then a character off per blank line (argv_module.f90 starts with

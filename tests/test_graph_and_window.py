@@ -133,7 +133,7 @@ def test_package_menu_for_the_project_and_a_path_dependency(conflict_window, mon
             started.append((self.program, self.args, self.env.value("PYTHONPATH")))
             return True
 
-    monkeypatch.setattr("vibefpmgui.main_window.QProcess", FakeProcess)
+    monkeypatch.setattr("vibefpmgui.window.project.QProcess", FakeProcess)
     lib = texts(conflict_window.package_menu("libA"))
     lib["Open as Project in New Window"].trigger()
     program, args, pythonpath = started[0]

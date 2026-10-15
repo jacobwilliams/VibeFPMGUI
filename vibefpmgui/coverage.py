@@ -8,7 +8,7 @@ read them, as JSON, several at a time; `read_gcov` turns that into
 `FileCoverage` objects: the editor's gutter shows covered and missed lines,
 and the *Coverage* panel the totals and each file's numbers.
 
-No Qt here: `vibefpmgui.main_window` runs the collector on a pool thread.
+No Qt here: `vibefpmgui.window.coverage` runs the collector on a pool thread.
 """
 
 from __future__ import annotations

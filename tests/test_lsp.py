@@ -251,7 +251,7 @@ def test_editor_rename(qtbot, lsp_window, project, monkeypatch):
     qtbot.waitUntil(lambda: foo.outline_box.count() == 2, timeout=20_000)
     cursor_at(foo, 5, 15)
     monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("step", True))
-    monkeypatch.setattr("vibefpmgui.main_window.RenamePreviewDialog.exec", lambda self: QDialog.Accepted)
+    monkeypatch.setattr("vibefpmgui.window.language.RenamePreviewDialog.exec", lambda self: QDialog.Accepted)
     lsp_window.rename_action.trigger()
     qtbot.waitUntil(lambda: "subroutine step()" in foo.editor.toPlainText(), timeout=20_000)
     assert "call step()" in (project / "app/main.f90").read_text()  # (not open: saved)
