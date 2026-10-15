@@ -78,7 +78,7 @@ def test_the_highlight_shows_on_every_syntax_style():
     from pygments.styles import get_all_styles, get_style_by_name
     from qtpy.QtGui import QColor
 
-    from vibefpmgui.editor import OCCURRENCE_CONTRAST, occurrence_color
+    from vibefpmgui.editor_shared import OCCURRENCE_CONTRAST, occurrence_color
 
     for name in get_all_styles():
         background = QColor(get_style_by_name(name).background_color)

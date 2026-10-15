@@ -80,7 +80,16 @@ menu item says "not found" and the feature is off; without fprettify the
 
 | Module | What it does |
 |---|---|
-| `vibefpmgui.editor` | The editor tab: gutter markers, find/replace, hover popup, outline, saving |
+| `vibefpmgui.editor` | The editor tab: the file (loading, saving, changes on disk), the outline, the status line |
+| `vibefpmgui.editor_language` | The tab's language-server features: hover, definitions, completion, references, rename |
+| `vibefpmgui.editor_checks` | The tab's checks: fortitude, spelling, gremlins; the compiler's, fortls's and the AI's markers |
+| `vibefpmgui.code_editor` | The text widget: keys, mouse, selections, indentation, highlights, its right-click menu |
+| `vibefpmgui.editor_gutter` | The gutter: line numbers, change bars, coverage, gremlins, markers |
+| `vibefpmgui.editor_issues` | Squiggles under issues, and the hover cards over them |
+| `vibefpmgui.multi_cursor` | Several cursors at once |
+| `vibefpmgui.hover_popup` | The editor's hover card |
+| `vibefpmgui.find_bar` | The find and replace bar |
+| `vibefpmgui.editor_shared` | What the editor's modules share: colors, delays, severities, text helpers |
 | `vibefpmgui.highlighter` | Pygments syntax highlighting and the *Syntax Colors* styles |
 | `vibefpmgui.themes` | *View → Theme*: the whole window's colors (System, Light, Dark and colorful ones) |
 | `vibefpmgui.lsp` | The client for the fortls language server (hover, definition, completion, references, rename) |

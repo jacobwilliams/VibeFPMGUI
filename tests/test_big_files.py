@@ -10,7 +10,7 @@ from qtpy.QtGui import QTextCursor
 from qtpy.QtWidgets import QPlainTextEdit
 
 from vibefpmgui import highlighter as hl
-from vibefpmgui.editor import line_changes
+from vibefpmgui.editor_shared import line_changes
 
 SOURCE = "".join(
     f"! routine {i}\nsubroutine s{i}(x)\n  real :: x  ! 'not a string'\n  x = x + {i}.0\n"

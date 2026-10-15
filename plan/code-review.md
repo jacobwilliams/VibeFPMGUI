@@ -431,7 +431,16 @@ and normalise the selection once per paint.
 > list of `_build_*` steps) and closing it. Mixins rather than separate
 > objects: every method and attribute kept its name, so behaviour and the
 > tests stayed the same. Shared helpers moved to `processes.py`,
-> `fpm_args.py` and `widgets.py`. `EditorTab` is still to do.
+> `fpm_args.py` and `widgets.py`.
+>
+> ✅ **`editor.py` done** (2026-10-14), the same way: `CodeEditor` in
+> `code_editor.py` with mixins for its gutter (`editor_gutter.py`), issue
+> squiggles and hover cards (`editor_issues.py`) and multiple cursors
+> (`multi_cursor.py`); `EditorTab` keeps the file, outline and status, with
+> mixins for the language server (`editor_language.py`) and the checks
+> (`editor_checks.py`). `HoverPopup`, `FindBar` have their own modules;
+> constants and text helpers are in `editor_shared.py`, so the minimap
+> imports them at the top (no circular import: §4).
 `main_window.py` is 3,470 lines; `MainWindow` alone covers:
 - menus and the toolbar;
 - docks and the layout;

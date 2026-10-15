@@ -23,7 +23,9 @@ from .. import highlighter as hl
 from .. import lint, lsp, spelling, themes
 from ..about import FPM_DOCS_URL, AboutDialog
 from ..build_monitor import set_ui_scale
+from ..code_editor import CodeEditor
 from ..editor import EditorTab, monospace_font
+from ..editor_shared import INDENT_WIDTHS
 from ..widgets import run_dialog
 
 
@@ -125,15 +127,15 @@ class ViewMixin:
         self.minimap_action.toggled.connect(self.set_minimap_enabled)
         view_menu.addAction(self.minimap_action)
         self.coverage_action = QAction("Show Coverage in the Editor", self, checkable=True)
-        editor_mod.CodeEditor.show_coverage = self.settings.value("show_coverage", True, type=bool)
-        self.coverage_action.setChecked(editor_mod.CodeEditor.show_coverage)
+        CodeEditor.show_coverage = self.settings.value("show_coverage", True, type=bool)
+        self.coverage_action.setChecked(CodeEditor.show_coverage)
         self.coverage_action.setStatusTip("After a test run with Build options → Coverage: green and red bars in the "
                                           "gutter for the lines the tests ran and didn't")
         self.coverage_action.toggled.connect(self.set_show_coverage)
         view_menu.addAction(self.coverage_action)
         self.matches_action = QAction("Highlight Other Occurrences of the Selection", self, checkable=True)
-        editor_mod.CodeEditor.highlight_matches = self.settings.value("highlight_matches", True, type=bool)
-        self.matches_action.setChecked(editor_mod.CodeEditor.highlight_matches)
+        CodeEditor.highlight_matches = self.settings.value("highlight_matches", True, type=bool)
+        self.matches_action.setChecked(CodeEditor.highlight_matches)
         self.matches_action.setStatusTip("Selecting text in the editor highlights it everywhere else in the file "
                                          "(Match case and Whole words as set in the find bar)")
         self.matches_action.toggled.connect(self.set_highlight_matches)
@@ -148,8 +150,8 @@ class ViewMixin:
         view_menu.addAction(self.word_wrap_action)
         # Indentation: what Tab types, and how wide tabs are shown.
         width = self.settings.value("indent_width", 4, type=int)
-        editor_mod.CodeEditor.indent_width = width if width in editor_mod.INDENT_WIDTHS else 4
-        editor_mod.CodeEditor.use_tabs = self.settings.value("indent_tabs", False, type=bool)
+        CodeEditor.indent_width = width if width in INDENT_WIDTHS else 4
+        CodeEditor.use_tabs = self.settings.value("indent_tabs", False, type=bool)
         self.indent_menu = view_menu.addMenu("Indentation")  # (kept: PySide would let it go)
         self.indent_actions: dict[object, QAction] = {}
         kinds = QActionGroup(self.indent_menu)
@@ -163,7 +165,7 @@ class ViewMixin:
             self.indent_actions[use_tabs] = action
         self.indent_menu.addSeparator()
         widths = QActionGroup(self.indent_menu)
-        for w in editor_mod.INDENT_WIDTHS:
+        for w in INDENT_WIDTHS:
             action = self.indent_menu.addAction(f"Width: {w}")
             action.setCheckable(True)
             action.setStatusTip(f"An indent level is {w} columns (tabs are shown {w} wide too)")
@@ -351,13 +353,13 @@ class ViewMixin:
         self.statusBar().showMessage(f"Editor font: {shown}", 4000)
 
     def set_show_coverage(self, on: bool):
-        editor_mod.CodeEditor.show_coverage = on
+        CodeEditor.show_coverage = on
         self.settings.setValue("show_coverage", on)
         for editor in self.editors():
             editor.editor.refresh_gutter()
 
     def set_highlight_matches(self, on: bool):
-        editor_mod.CodeEditor.highlight_matches = on
+        CodeEditor.highlight_matches = on
         self.settings.setValue("highlight_matches", on)
         for editor in self.editors():
             editor.editor._update_occurrences()
@@ -370,7 +372,7 @@ class ViewMixin:
 
     def set_indentation(self, width: int | None = None, use_tabs: bool | None = None):
         """View → Indentation: spaces or tabs, and the width of an indent level."""
-        cls = editor_mod.CodeEditor
+        cls = CodeEditor
         cls.indent_width = cls.indent_width if width is None else width
         cls.use_tabs = cls.use_tabs if use_tabs is None else use_tabs
         self.settings.setValue("indent_width", cls.indent_width)
@@ -381,7 +383,7 @@ class ViewMixin:
         self._check_indent_actions()
 
     def _check_indent_actions(self):
-        cls = editor_mod.CodeEditor
+        cls = CodeEditor
         for key, action in self.indent_actions.items():
             # (bool keys are spaces/tabs; ints are widths: True == 1 and False == 0 never collide with them)
             action.setChecked(key is cls.use_tabs if isinstance(key, bool) else key == cls.indent_width)
