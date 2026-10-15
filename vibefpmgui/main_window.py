@@ -24,6 +24,7 @@ from qtpy.QtCore import (
     QEvent,
     QFile,
     QObject,
+    QPointF,
     QProcess,
     QProcessEnvironment,
     QSettings,
@@ -41,6 +42,7 @@ from qtpy.QtGui import (
     QFontDatabase,
     QFontMetrics,
     QKeySequence,
+    QMouseEvent,
     QPalette,
     QTextCursor,
 )
@@ -4531,8 +4533,29 @@ class RedockOnDoubleClick(QObject):
             return  # (still held: macOS may still be moving the window)
         self._timer.stop()
         dock, self._dock = self._dock, None
-        if dock is not None and dock.isFloating():
+        if dock is None:
+            return
+        # The button-up macOS kept to itself (moving the window): Qt's drag of
+        # the panel, if it started one, ends. (Left unended, the main window
+        # kept its layout frozen: panels stayed put when the window was
+        # resized, and a collapsed one left empty space.)
+        pos = QPointF(dock.width() / 2, -10)
+        QApplication.sendEvent(dock, QMouseEvent(QEvent.NonClientAreaMouseButtonRelease, pos, dock.mapToGlobal(pos),
+                                                 Qt.LeftButton, Qt.NoButton, Qt.NoModifier))
+        if dock.isFloating():
             dock.setFloating(False)
+        window = dock.parentWidget()
+        front = [dock]
+        if isinstance(window, QMainWindow):
+            # Anything else of the drag's goes too: the layout restored as it is. (Each
+            # other stack's tab in front is put back after: a restore doesn't keep them.)
+            stack = window.tabifiedDockWidgets(dock)
+            front += [d for d in window.findChildren(QDockWidget) if d is not dock and d not in stack
+                      and d.isVisible() and not d.isFloating() and window.rect().intersects(d.geometry())]
+            window.restoreState(window.saveState())
+        for panel in front:
+            panel.raise_()
+            QTimer.singleShot(0, panel.raise_)
 
 
 def repo_web_url(git_url: str) -> str | None:
