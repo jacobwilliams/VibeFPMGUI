@@ -1,18 +1,15 @@
 """Dragging a panel's edge past its smallest size collapses it, as in VS Code.
 
-Qt stops a dock separator at the panels' minimum sizes. `SnapClosed`
-watches separator drags on the main window (they reach the window itself,
-not a child widget): once the mouse is more than half a panel's minimum
-size past where it would stop, the panel collapses to a thin grip (a `Grip`
-in place of its content, no title bar, so no minimum size of its own; the
-tabs behind it hidden, and the one in front when it opens again). Dragging the grip (or the separator beside it) out again past half the
-minimum size opens it; so does double-clicking the grip.
-Next to the editor, or another side's panels, the whole side collapses (the
-left panels, the bottom ones…); between two panels, just the one squeezed,
-with the panels stacked with it (tabs).
+Qt stops a dock separator at the panels' minimum sizes, so `SnapClosed`
+does separator drags itself (they reach the main window, not a child
+widget). Once the mouse is more than half a panel's minimum size past where
+it would stop, the panel collapses to a thin `Grip`; dragging the grip (or
+the separator beside it) back out opens it, and so does double-clicking it.
+At the edge of a side of the window the whole side collapses; between two
+panels, just the squeezed one, with the tabs stacked with it.
 
 A command showing a collapsed panel (a test run showing Tests…), View →
-Panels and Reset Layout open it again too.
+Panels and Reset Layout open it too.
 """
 
 from __future__ import annotations
@@ -24,9 +21,7 @@ from qtpy.QtWidgets import QDockWidget, QMainWindow, QStyle, QTabBar, QWidget
 
 SLACK = 3  # (pixels around a separator still counted as on it)
 SEPARATOR_NAME = "qt_qmainwindow_extended_splitter"  # (Qt's widget over a thin separator)
-
-
-GRIP = 7  # a collapsed panel's thickness: its grip
+GRIP = 7  # a collapsed panel's thickness
 
 
 class _NoTitle(QWidget):
@@ -40,11 +35,9 @@ class _NoTitle(QWidget):
 
 
 class Grip(QWidget):
-    """What a collapsed panel shows instead of its content: a thin strip
-    with the resize cursor; drag it out (or double-click it) to open the
-    panel. (The style draws its grip dots on the separator beside it.)
-    It's the panel's content, not its title bar: with its content hidden,
-    Qt keeps a panel only as long as its title, in a corner."""
+    """A collapsed panel's content: a thin strip with the resize cursor (the
+    style draws the dots on the separator beside it). Not its title bar:
+    with no content, Qt keeps a panel only as big as its title, in a corner."""
 
     def __init__(self, snap: SnapClosed, side: Side):
         super().__init__()
@@ -58,28 +51,16 @@ class Grip(QWidget):
     def minimumSizeHint(self):
         return QSize(GRIP, GRIP)
 
-    def _window_pos(self, event) -> QPoint:
-        return self.mapTo(self.snap.window, event.position().toPoint())
-
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            # The window follows the rest of the drag: the grip goes once the panel opens.
-            self.snap.start_drag([self.side], self._window_pos(event))
-            self.snap.window.grabMouse(self.cursor())
+            # The window takes the rest of the drag: the grip goes once the panel opens.
+            window = self.snap.window
+            self.snap.start_drag([self.side], self.mapTo(window, event.position().toPoint()))
+            window.grabMouse(self.cursor())
         event.accept()  # (not the panel's: it would float it)
 
-    def mouseMoveEvent(self, event):
-        event.accept()
-
-    def mouseReleaseEvent(self, event):
-        self.snap.end_drag()
-        event.accept()
-
     def mouseDoubleClickEvent(self, event):
-        self.snap.end_drag()
-        dock = self.side.docks[0]
-        QTimer.singleShot(0, lambda: self.snap.expand(dock))
-        event.accept()
+        self.snap.expand(self.side.docks[0])
 
 
 @dataclass(eq=False)
@@ -91,7 +72,6 @@ class Side:
     minimum: int
     sign: int                      # +1: the mouse moving along the axis makes them bigger
     horizontal: bool               # (the drag's axis: a vertical separator moves sideways)
-    collapsed: bool = False
     press_size: int = 0            # (during a drag: the size at the press)
     cross: list[int] | None = None  # the docks' sizes along the separator, before collapsing
 
@@ -215,7 +195,6 @@ class SnapClosed(QObject):
         """The panels in front: no content or title, so no minimum size; the
         ones behind them in their stacks: hidden (with one panel left, Qt
         takes the stack's tab bar away, which would keep a strip open)."""
-        side.collapsed = True
         side.cross = [d.height() if side.horizontal else d.width() for d in side.docks]
         for dock in side.group:
             if dock in side.docks:
@@ -227,13 +206,10 @@ class SnapClosed(QObject):
                     content.hide()  # (still the panel's child, put back by _open)
             else:
                 dock.hide()
-        if side not in self.collapsed:
-            self.collapsed.append(side)
+        self.collapsed.append(side)
 
     def _open(self, side: Side):
-        side.collapsed = False
-        if side in self.collapsed:
-            self.collapsed.remove(side)  # (first: showing them below mustn't open it again)
+        self.collapsed.remove(side)  # (first: showing them below mustn't open it again)
         for dock in side.docks:
             grip = dock.widget()
             content = self.contents.pop(dock, None)
@@ -246,13 +222,9 @@ class SnapClosed(QObject):
                 grip.deleteLater()
         for dock in side.group:
             dock.show()  # (back in their places in the stacks)
-        front = list(side.docks)
-
-        def raise_front():  # (the tabs that were in front: again, once Qt has put the others back)
-            for dock in front:
-                dock.raise_()
-        raise_front()
-        QTimer.singleShot(0, raise_front)
+        for dock in side.docks:  # (the tabs that were in front; again once Qt has put the others back)
+            dock.raise_()
+            QTimer.singleShot(0, dock.raise_)
         if side.cross and len(side.docks) > 1:  # (the panels beside each other: as they were)
             self.window.resizeDocks(side.docks, side.cross, Qt.Vertical if side.horizontal else Qt.Horizontal)
 
@@ -274,10 +246,7 @@ class SnapClosed(QObject):
         if side is None:
             return
         self._open(side)
-        if dock not in side.docks:  # (one that was behind a tab: in front now, after _open's raising)
-            side.docks = [dock if dock in self.window.tabifiedDockWidgets(d) else d for d in side.docks]
-            dock.raise_()
-            QTimer.singleShot(0, dock.raise_)
+        QTimer.singleShot(0, dock.raise_)  # (in front: after _open's raising of the tabs that were)
         QTimer.singleShot(0, lambda: self._resize(side, side.size))
 
     def expand_all(self):
@@ -302,7 +271,7 @@ class SnapClosed(QObject):
                     return True
         elif kind == QEvent.MouseMove and self._press is not None:
             if not event.buttons() & Qt.LeftButton:
-                self._press = None
+                self.end_drag()
                 return False
             self._drag_to(event.position().toPoint())
             return True
@@ -316,10 +285,7 @@ class SnapClosed(QObject):
         (in the window)."""
         self._sides, self._press = sides, pos
         for side in sides:
-            side.press_size = GRIP if side.collapsed else side.size
-
-    def dragging(self) -> bool:
-        return self._press is not None
+            side.press_size = GRIP if side in self.collapsed else side.size
 
     def end_drag(self):
         self._press, self._sides = None, []
@@ -331,13 +297,13 @@ class SnapClosed(QObject):
         sizes = []
         for side in self._sides:
             size = side.size_at(moved.x() if side.horizontal else moved.y())
-            small = size < side.minimum / 2
-            if small and not side.collapsed:
+            small, collapsed = size < side.minimum / 2, side in self.collapsed
+            if small and not collapsed:
                 side.size = side.press_size  # (to open at, later)
                 self._collapse(side)
-            elif not small and side.collapsed:
+            elif collapsed and not small:
                 self._open(side)
             sizes.append((side, size))
         # One side sized: the other side of the separator takes the rest.
-        side, size = next(((s, n) for s, n in sizes if s.collapsed), sizes[0])
-        self._resize(side, GRIP if side.collapsed else max(size, side.minimum))
+        side, size = next(((s, n) for s, n in sizes if s in self.collapsed), sizes[0])
+        self._resize(side, GRIP if side in self.collapsed else max(size, side.minimum))
