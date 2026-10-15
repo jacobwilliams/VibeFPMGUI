@@ -89,7 +89,7 @@ class RedockOnDoubleClick(QObject):
             window.restoreState(window.saveState())
         for panel in front:
             panel.raise_()
-            QTimer.singleShot(0, panel.raise_)
+            QTimer.singleShot(0, panel, panel.raise_)
 
 
 class PanelsMixin:
@@ -178,14 +178,14 @@ class PanelsMixin:
     def _panel_shown(self, dock: QDockWidget):
         """View → Panels → a panel: in front of its stack, and on a screen."""
         self._keep_on_screen(dock)
-        QTimer.singleShot(0, dock.raise_)
+        QTimer.singleShot(0, dock, dock.raise_)
 
     def _panel_docked(self, dock: QDockWidget):
         """A floating panel docked again (double-clicking its title): in front
         of its stack. (Otherwise, on macOS, Qt leaves it shown but not given a
         place, outside the window, until the next start.)"""
         if self._docks_ready:
-            QTimer.singleShot(0, dock.raise_)
+            QTimer.singleShot(0, dock, dock.raise_)
 
     def _keep_on_screen(self, dock: QDockWidget):
         """A floating panel shown again where no screen is (e.g. on a monitor
@@ -266,13 +266,13 @@ class PanelsMixin:
         # Choosing the Terminal tab: type there straight away (after the click
         # is done). Not while the window is being built and laid out.
         if shown and self._docks_ready:
-            QTimer.singleShot(0, self.terminal_panel.focus)
+            QTimer.singleShot(0, self.terminal_panel, self.terminal_panel.focus)
 
     def showEvent(self, event):
         super().showEvent(event)
         if not self._docks_ready and not getattr(self, "_layout_restored", False):
-            QTimer.singleShot(0, self._default_sizes)  # (now the window has its size)
-        QTimer.singleShot(0, lambda: setattr(self, "_docks_ready", True))
+            QTimer.singleShot(0, self, self._default_sizes)  # (now the window has its size)
+        QTimer.singleShot(0, self, lambda: setattr(self, "_docks_ready", True))
 
     def _build_terminal(self):
         """The Terminal panel."""

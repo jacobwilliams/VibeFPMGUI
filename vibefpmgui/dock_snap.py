@@ -224,7 +224,7 @@ class SnapClosed(QObject):
             dock.show()  # (back in their places in the stacks)
         for dock in side.docks:  # (the tabs that were in front; again once Qt has put the others back)
             dock.raise_()
-            QTimer.singleShot(0, dock.raise_)
+            QTimer.singleShot(0, dock, dock.raise_)
         if side.cross and len(side.docks) > 1:  # (the panels beside each other: as they were)
             self.window.resizeDocks(side.docks, side.cross, Qt.Vertical if side.horizontal else Qt.Horizontal)
 
@@ -246,8 +246,8 @@ class SnapClosed(QObject):
         if side is None:
             return
         self._open(side)
-        QTimer.singleShot(0, dock.raise_)  # (in front: after _open's raising of the tabs that were)
-        QTimer.singleShot(0, lambda: self._resize(side, side.size))
+        QTimer.singleShot(0, dock, dock.raise_)  # (in front: after _open's raising of the tabs that were)
+        QTimer.singleShot(0, self.window, lambda: self._resize(side, side.size))
 
     def expand_all(self):
         """Open every collapsed panel, at its size (Reset Layout; quitting,

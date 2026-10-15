@@ -612,7 +612,7 @@ class CodeEditor(QPlainTextEdit):
         cr = self.contentsRect()
         self.gutter.setGeometry(QRect(cr.left(), cr.top(), self.gutter_width(), cr.height()))
         if self.lineWrapMode() != QPlainTextEdit.NoWrap:  # (lines re-wrap: highlight their new rows)
-            QTimer.singleShot(0, self._update_extra_selections)
+            QTimer.singleShot(0, self, self._update_extra_selections)
 
     def paint_gutter(self, event):
         pal = self.palette()
@@ -683,7 +683,7 @@ class CodeEditor(QPlainTextEdit):
         one), or scroll sideways."""
         self.setWordWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
         self.setLineWrapMode(QPlainTextEdit.WidgetWidth if on else QPlainTextEdit.NoWrap)
-        QTimer.singleShot(0, self._update_extra_selections)
+        QTimer.singleShot(0, self, self._update_extra_selections)
         self.gutter.update()
         self._update_minimap()
 

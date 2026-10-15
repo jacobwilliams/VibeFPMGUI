@@ -249,7 +249,7 @@ class ProjectMixin:
                 editor.editor.go_to_position(int(f.get("line", 1)), int(f.get("column", 0)))
                 scroll = int(f.get("scroll", 0))
                 # (after the tab's first layout, or the scroll position is clamped)
-                QTimer.singleShot(0, lambda e=editor, v=scroll: e.editor.verticalScrollBar().setValue(v))
+                QTimer.singleShot(0, editor, lambda e=editor, v=scroll: e.editor.verticalScrollBar().setValue(v))
         finally:
             self._session_busy = False
         current = self._open_editor_for(Path(state["current"])) if state.get("current") else None

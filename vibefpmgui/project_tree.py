@@ -743,7 +743,7 @@ class ProjectTree(QWidget):
     def eventFilter(self, obj, event):
         if obj is self.view and event.type() == QEvent.KeyPress and event.key() in NAVIGATION_KEYS:
             self._key_moving = True  # (the view moves the selection now: see _current_changed)
-            QTimer.singleShot(0, lambda: setattr(self, "_key_moving", False))
+            QTimer.singleShot(0, self, lambda: setattr(self, "_key_moving", False))
         return super().eventFilter(obj, event)
 
     def _current_changed(self, current, _previous):

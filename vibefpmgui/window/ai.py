@@ -297,9 +297,9 @@ class AIMixin:
                 self._set_ai_starting(False)
                 self.review_monitor.finish(False, "Could not start the Ollama server.")
             else:
-                QTimer.singleShot(300, poll)
+                QTimer.singleShot(300, self, poll)
 
-        QTimer.singleShot(300, poll)
+        QTimer.singleShot(300, self, poll)
 
     def _check_model(self):
         """Is the model downloaded? (Asked on a pool thread.)"""
@@ -415,11 +415,11 @@ class AIMixin:
     def _ai_done(self, then=None):
         # Let the download thread finish before starting the review thread.
         if then is not None:
-            QTimer.singleShot(100, lambda: self._after_ai_thread(then))
+            QTimer.singleShot(100, self, lambda: self._after_ai_thread(then))
 
     def _after_ai_thread(self, then):
         if self._ai_thread is not None:
-            QTimer.singleShot(100, lambda: self._after_ai_thread(then))
+            QTimer.singleShot(100, self, lambda: self._after_ai_thread(then))
         else:
             then()
 
