@@ -2,7 +2,8 @@
 pyqtgraph: a box per block (its first lines of code), a hexagon per decision,
 a rounded box per loop, pills for start, end and stop; arrows labelled with
 the way taken ("true", "case (1)", "loop"…), a loop's way back curving round
-its right side. Wheel zooms, drag pans, clicking a node opens its lines,
+its right side; a node whose lines are in an included file has a dashed
+border. Wheel zooms, drag pans, clicking a node opens its lines,
 double-clicking the background fits the graph to the view; right-click for
 a menu (open or copy a node's code, center on it, fit, zoom, actual size,
 edge labels on or off, copy or save the graph as an image).
@@ -40,6 +41,7 @@ from qtpy.QtWidgets import (
 
 from . import control_flow as cf
 from .graph_view import LAYERED_TB, _bezier, edge_geometry
+from .source_text import read_source
 
 PADDING = 8
 MAX_FIT_SCALE = 1.3  # (fitting doesn't blow a small graph up beyond 130 %)
@@ -70,10 +72,12 @@ class CfgNode(pg.GraphicsObject):
         self.rect = QRectF(-self.size[0] / 2, -self.size[1] / 2, *self.size)
         self.setZValue(10)
         self.setAcceptHoverEvents(True)
+        self.included = node.path is not None and view.graph is not None and node.path != view.graph.path
         if node.first:
             self.setCursor(Qt.PointingHandCursor)
             lines = f"line {node.first}" if node.first == node.last else f"lines {node.first}–{node.last}"
-            self.setToolTip(f"{lines}: click to open")
+            where = f"{node.path.name} (included), " if self.included else ""
+            self.setToolTip(f"{where}{lines}: click to open")
 
     def boundingRect(self):
         return self.rect.adjusted(-3, -3, 3, 3)
@@ -103,7 +107,10 @@ class CfgNode(pg.GraphicsObject):
         colors = self.view.colors
         fill, border = colors[self.node.kind]
         painter.setRenderHint(QPainter.Antialiasing)
-        painter.setPen(QPen(QColor(border), 2.2 if self.hovered else 1.3))
+        pen = QPen(QColor(border), 2.2 if self.hovered else 1.3)
+        if self.included:
+            pen.setStyle(Qt.DashLine)
+        painter.setPen(pen)
         painter.setBrush(QBrush(QColor(fill)))
         painter.drawPath(self.shape_path())
         painter.setPen(QColor(colors["text"]))
@@ -127,7 +134,7 @@ class CfgNode(pg.GraphicsObject):
     def mouseClickEvent(self, event):
         if event.button() == Qt.LeftButton and self.node.first:
             event.accept()
-            self.view.line_clicked.emit(self.node.first)
+            self.view.open_node(self.node)
 
 
 class EdgeLabel(pg.GraphicsObject):
@@ -154,12 +161,12 @@ class EdgeLabel(pg.GraphicsObject):
 class CfgView(QWidget):
     """A control-flow graph, or a message instead of one."""
 
-    line_clicked = Signal(int)  # the clicked node's first line (1-based)
+    line_clicked = Signal(str, int)  # the clicked node's file and first line (1-based)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.graph: cf.Graph | None = None
-        self.source: list[str] = []  # (the procedure's file's lines, for Copy Code)
+        self.sources: dict[Path, list[str]] = {}  # (files' lines, for Copy Code)
         self.show_labels = True
         self.labels: list[EdgeLabel] = []
         self.menu: QMenu | None = None
@@ -204,8 +211,8 @@ class CfgView(QWidget):
     def show_graph(self, graph: cf.Graph, source: str | None = None, fit: bool = True):
         """Draw ``graph`` (``source``: its file's text, for Copy Code; kept if
         not given); ``fit``: fit it to the view, else keep the view's range."""
-        if source is not None:
-            self.source = source.splitlines()
+        if source is not None or self.graph is None or graph.path != self.graph.path:
+            self.sources = {graph.path: source.splitlines()} if source is not None and graph.path else {}
         view_range = self.vb.viewRange()
         self.graph = graph
         self.vb.clear()
@@ -280,11 +287,22 @@ class CfgView(QWidget):
         point = self.vb.mapSceneToView(scene_pos)
         return next((item for item in self.nodes.values() if item.scene_rect().contains(point)), None)
 
+    def open_node(self, node: cf.Node):
+        path = node.path or (self.graph.path if self.graph else None)
+        self.line_clicked.emit(str(path or ""), node.first)
+
     def node_code(self, node: cf.Node) -> str:
         """The node's lines of code, as they are in the file."""
-        if not node.first or not self.source:
+        path = node.path or (self.graph.path if self.graph else None)
+        if path is not None and path not in self.sources:
+            try:
+                self.sources[path] = read_source(path).text.splitlines()
+            except OSError:
+                self.sources[path] = []
+        source = self.sources.get(path, []) if path is not None else []
+        if not node.first or not source:
             return "\n".join(node.text)
-        lines = self.source[node.first - 1:node.last]
+        lines = source[node.first - 1:node.last]
         indent = min((len(line) - len(line.lstrip()) for line in lines if line.strip()), default=0)
         return "\n".join(line[indent:] for line in lines)
 
@@ -309,7 +327,7 @@ class CfgView(QWidget):
             node = item.node
             if node.first:
                 lines = f"Line {node.first}" if node.first == node.last else f"Lines {node.first}–{node.last}"
-                menu.addAction(f"Open {lines}", lambda: self.line_clicked.emit(node.first))
+                menu.addAction(f"Open {lines}", lambda: self.open_node(node))
                 menu.addAction("Copy Code", lambda: QApplication.clipboard().setText(self.node_code(node)))
             center = item.pos()
             menu.addAction("Center on This", lambda: self.center_on(center))

@@ -25,7 +25,11 @@ Interface bodies are declarations, not procedures.
 The reader works a statement at a time: free and fixed form, comments,
 continuation lines, ``;``, labels and construct names, and strings (whose
 text is never read as code). Preprocessor lines (``#ifdef``…) aren't code
-lines, as in lizard: they choose the code, they aren't part of it.
+lines, as in lizard: they choose the code, they aren't part of it. Included
+files (``#include "…"``, ``include '…'``) are read where they're included,
+as the compiler reads them (lizard doesn't): their code is the including
+procedure's (a procedure's body can be all in one). Their lines are counted
+for the file that includes them; a procedure's length is its own file's lines.
 
 Where lizard's Fortran reader (1.24.1, with the fixes in its Fortran issue)
 counts differently: it counts ``select case`` and ``case default`` too, and
@@ -85,9 +89,10 @@ class Procedure:
 @dataclass
 class FileMetrics:
     path: Path
-    nloc: int = 0             # every line with code in the file (also outside procedures)
+    nloc: int = 0             # every line with code in the file (also outside procedures; with its included files')
     tokens: int = 0
     procedures: list[Procedure] = field(default_factory=list)
+    includes: list[Path] = field(default_factory=list)  # the files it includes (theirs too)
 
     @property
     def average_ccn(self) -> float:
@@ -96,6 +101,70 @@ class FileMetrics:
     @property
     def average_nloc(self) -> float:
         return sum(p.nloc for p in self.procedures) / len(self.procedures) if self.procedures else 0.0
+
+
+# ------------------------------------------------------------------ included files
+INCLUDE_RE = re.compile(r"""^\s*(?:#\s*include\s*["<]([^">]+)[">]|include\s*(['"])(.+?)\2\s*(?:!.*)?$)""",
+                        re.IGNORECASE)
+MAX_INCLUDE_DEPTH = 10
+
+
+@dataclass
+class Source:
+    """Code with its included files read in where they're included."""
+    text: str
+    origins: list[tuple[Path, int]] | None = None  # each line's file and line there (None: no includes)
+    includes: list[Path] = field(default_factory=list)
+
+    def origin(self, line: int, path: Path) -> tuple[Path, int]:
+        """Where ``line`` (1-based, of ``text``) is: its file and line there."""
+        if self.origins is None or not 0 < line <= len(self.origins):
+            return path, line
+        return self.origins[line - 1]
+
+
+def expand_includes(text: str, path: Path | str) -> Source:
+    """``text`` (``path``'s) with each file it includes in place of the line
+    that includes it (looked for beside the including file, then beside
+    ``path``); a file that isn't found stays an include line."""
+    path = Path(path)
+    if "include" not in text.lower():  # (most files: nothing to do)
+        return Source(text)
+    lines: list[str] = []
+    origins: list[tuple[Path, int]] = []
+    includes: list[Path] = []
+
+    def read(code: str, where: Path, depth: int, reading: tuple[Path, ...]):
+        for number, line in enumerate(code.split("\n"), start=1):
+            found = INCLUDE_RE.match(line) if "include" in line.lower() else None
+            name = (found.group(1) or found.group(3)) if found else None
+            target = _find_include(name, where, path) if name else None
+            if target is None or depth >= MAX_INCLUDE_DEPTH or target in reading:
+                lines.append(line)
+                origins.append((where, number))
+                continue
+            try:
+                included = decode(target.read_bytes())[0]
+            except OSError:
+                lines.append(line)
+                origins.append((where, number))
+                continue
+            if target not in includes:
+                includes.append(target)
+            read(included.replace("\r\n", "\n"), target, depth + 1, (*reading, target))
+
+    read(text, path, 0, (path,))
+    if not includes:
+        return Source(text)
+    return Source("\n".join(lines), origins, includes)
+
+
+def _find_include(name: str, where: Path, top: Path) -> Path | None:
+    for folder in dict.fromkeys((where.parent, top.parent)):
+        candidate = folder / name
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 # ------------------------------------------------------------------ statements
@@ -291,7 +360,9 @@ def analyze_text(text: str, path: Path | str = "x.f90") -> FileMetrics:
     """Fortran source's metrics (see the module's docstring)."""
     path = Path(path)
     found = FileMetrics(path)
-    stmts = statements(text, path.suffix.lower() in FIXED_FORM)
+    source = expand_includes(text, path)
+    found.includes = source.includes
+    stmts = statements(source.text, path.suffix.lower() in FIXED_FORM)
     stack: list[_Scope] = []
 
     def unit() -> _Scope | None:
@@ -361,6 +432,11 @@ def analyze_text(text: str, path: Path | str = "x.f90") -> FileMetrics:
             owner.nloc += 1
     found.nloc = len(line_owner)
     found.tokens = sum(st.tokens for st in stmts)
+    if source.origins is not None:  # (the lines of the code as read: back to their own files')
+        for proc in found.procedures:
+            proc.path, start = source.origin(proc.start, path)
+            end_path, end = source.origin(proc.end, path)
+            proc.start, proc.end = start, end if end_path == proc.path else start
     return found
 
 

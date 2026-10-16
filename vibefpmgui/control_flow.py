@@ -13,6 +13,10 @@ reads them) into nodes and edges:
 - ``return`` goes to the *end* node, ``stop`` / ``error stop`` to a *stop*
   node; ``goto`` (computed too) and an arithmetic ``if`` go to their labels.
 
+Included files (``#include``, ``include``) are read where they're included
+(see `vibefpmgui.complexity.expand_includes`); a node's lines are in one
+file, its ``path``.
+
 For a graph with one way in, ``edges - nodes + 2`` is the number of its
 decisions plus 1: its cyclomatic complexity (without the ``.and.`` /
 ``.or.`` that `vibefpmgui.complexity`'s CCN also counts).
@@ -40,6 +44,7 @@ class Node:
     first: int = 0                # its lines (1-based; 0 for start/end)
     last: int = 0
     text: list[str] = field(default_factory=list)  # what's shown: its source lines (or "start", "end"…)
+    path: Path | None = None      # the file its lines are in (an included file's, or the procedure's)
 
 
 @dataclass
@@ -53,6 +58,7 @@ class Edge:
 @dataclass
 class Graph:
     name: str
+    path: Path | None = None      # the procedure's file
     nodes: list[Node] = field(default_factory=list)
     edges: list[Edge] = field(default_factory=list)
 
@@ -153,14 +159,21 @@ def _classify(s: str) -> tuple[str, str]:
 def procedure_statements(text: str, path: Path, start_line: int) -> list[_Statement]:
     """The statements of the procedure that starts at ``start_line``: its
     executable part, after its header, up to its ``end`` or ``contains``
-    (interface blocks, type and enum definitions in it left out: declarations)."""
-    found = cx.statements(text, path.suffix.lower() in cx.FIXED_FORM)
+    (interface blocks, type and enum definitions in it left out: declarations).
+    Its included files are read in: their lines numbered as in ``text`` with
+    them read in (see `vibefpmgui.complexity.Source`)."""
+    path = Path(path)
+    return _statements_of(cx.expand_includes(text, path), path, start_line)
+
+
+def _statements_of(source: cx.Source, path: Path, start_line: int) -> list[_Statement]:
+    found = cx.statements(source.text, path.suffix.lower() in cx.FIXED_FORM)
     out: list[_Statement] = []
     started = False
     declaring = 0  # (inside interface blocks, type or enum definitions: declarations)
     for st in found:
         if not started:
-            started = st.lines[0] == start_line
+            started = source.origin(st.lines[0], path) == (path, start_line)
             continue
         kind, detail = _classify(st.text)
         if kind == "declaration":
@@ -179,10 +192,12 @@ def procedure_statements(text: str, path: Path, start_line: int) -> list[_Statem
 
 # ------------------------------------------------------------------ the graph
 class _Builder:
-    def __init__(self, name: str, source_lines: list[str], fixed: bool = False):
+    def __init__(self, name: str, source_lines: list[str], fixed: bool = False,
+                 file_of=lambda line: None):
         self.graph = Graph(name)
         self.source = source_lines
         self.fixed = fixed
+        self.file_of = file_of  # (a line's file: a block's lines are all in one)
         self.start = self._node(START, text=["start"])
         self.end = self._node(END, text=["end"])
         self.stop_node: int | None = None
@@ -242,7 +257,7 @@ class _Builder:
         """A statement without a branch: into the open block (a new one if
         something else leads in, or it's a jump's target)."""
         node = self.graph.nodes[self.block] if self.block is not None else None
-        if node is None or st.label or preds != [(node.id, "")]:
+        if node is None or st.label or preds != [(node.id, "")] or self.file_of(st.first) != self.file_of(node.first):
             self.block = self._node(BLOCK, st.first, st.last)
             node = self.graph.nodes[self.block]
             self._connect(preds, node.id)
@@ -422,10 +437,18 @@ def _split_one_line(line: str) -> tuple[str, str]:
 def build(text: str, path: Path | str, procedure: cx.Procedure) -> Graph:
     """The control-flow graph of a procedure of ``text`` (the file it's in)."""
     path = Path(path)
-    stmts = procedure_statements(text, path, procedure.start)
-    builder = _Builder(procedure.name, text.split("\n"), path.suffix.lower() in cx.FIXED_FORM)
+    source = cx.expand_includes(text, path)
+    stmts = _statements_of(source, path, procedure.start)
+    builder = _Builder(procedure.name, source.text.split("\n"), path.suffix.lower() in cx.FIXED_FORM,
+                       lambda line: source.origin(line, path)[0])
     _i, exits = builder.sequence(stmts, 0, [(builder.start, "")], set())
-    return builder.finish(exits)
+    graph = builder.finish(exits)
+    graph.path = path
+    for node in graph.nodes:  # (the lines as read: back to their own files')
+        if node.first:
+            node.path, node.first = source.origin(node.first, path)
+            node.last = source.origin(node.last, path)[1]
+    return graph
 
 
 # ------------------------------------------------------------------ the layout

@@ -383,9 +383,9 @@ class ComplexityPanel(QWidget):
                                 "right-click for more")
         self.flow.show_graph(graph, text)
 
-    def _flow_line_clicked(self, line: int):
+    def _flow_line_clicked(self, path: str, line: int):
         if self.flow_shown is not None:
-            self.open_requested.emit(str(self.flow_shown.path), line)
+            self.open_requested.emit(path or str(self.flow_shown.path), line)
 
     def _procedure_tip(self, proc: cx.Procedure, label: str, over: set[str]) -> str:
         lines = [f"<b>{html.escape(proc.qualified)}</b> ({proc.kind})",

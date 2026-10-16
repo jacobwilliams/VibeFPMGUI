@@ -1,6 +1,7 @@
 """The Complexity panel: measuring the project's Fortran files (on a pool
-thread, while the panel is on view), again when one is saved; a file that
-hasn't changed since it was last measured isn't read again.
+thread, while the panel is on view), again when one (or a file one
+includes) is saved; a file that hasn't changed since it was last measured,
+nor have the files it includes, isn't read again.
 """
 
 from __future__ import annotations
@@ -17,20 +18,34 @@ from ..project_tree import fpm_folders
 FORTRAN_GLOBS = ", ".join(f"*{ext}" for ext in sorted(cx.FORTRAN))
 
 
+def _stamp(path: Path) -> tuple[int, int] | None:
+    """A file's (modification time, size); None if it's gone."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return stat.st_mtime_ns, stat.st_size
+
+
+def _key(path: Path, metrics: cx.FileMetrics) -> tuple:
+    return _stamp(path), tuple(_stamp(p) for p in metrics.includes)
+
+
 def measure(roots, dependencies: bool, cache: dict) -> tuple[list[cx.FileMetrics], dict]:
     """Every Fortran file's metrics, and the cache for next time ({path:
-    (modification time, size, metrics)}: an unchanged file isn't read again)."""
+    (key, metrics)}: a file isn't read again while it and the files it
+    includes are unchanged, their modification times and sizes the same)."""
     files, kept = [], {}
     query = Query("", include=FORTRAN_GLOBS, dependencies=dependencies)
     for _root, path in iter_files(roots, query):
-        try:
-            stat = path.stat()
-        except OSError:
+        if _stamp(path) is None:
             continue
-        key = (stat.st_mtime_ns, stat.st_size)
         old = cache.get(path)
-        metrics = old[1] if old is not None and old[0] == key else cx.analyze_file(path)
-        kept[path] = (key, metrics)
+        if old is not None and old[0] == _key(path, old[1]):
+            metrics = old[1]
+        else:
+            metrics = cx.analyze_file(path)
+        kept[path] = (_key(path, metrics), metrics)
         files.append(metrics)
     return files, kept
 
@@ -88,5 +103,7 @@ class ComplexityMixin:
             self.refresh_complexity()
 
     def _complexity_file_saved(self, path: str):
-        if cx.is_fortran(Path(path)):
+        saved = Path(path)
+        if cx.is_fortran(saved) or any(saved.resolve() == p.resolve()
+                                       for f in self.complexity_panel.files for p in f.includes):
             self.refresh_complexity()

@@ -538,7 +538,7 @@ def test_the_panel_shows_the_selected_procedure_s_flow(qtbot, tmp_path):
     opened = []
     panel.open_requested.connect(lambda path, line: opened.append((Path(path).name, line)))
     node = next(item for item in panel.flow.nodes.values() if item.node.first)
-    panel.flow.line_clicked.emit(node.node.first)
+    panel.flow.open_node(node.node)
     assert opened == [("calc.f90", node.node.first)]
     QTest.keyClick(table, Qt.Key_Down)  # (the arrow keys too)
     assert panel.flow_shown.name == "small" and "0 decisions" in panel.flow_title.text()
@@ -564,10 +564,10 @@ def test_the_graph_s_menu(qtbot, tmp_path):
     assert names == ["Open Line 13", "Copy Code", "Center on This", "Fit to View", "Zoom In", "Zoom Out",
                      "Actual Size", "Show Edge Labels", "Copy Image", "Save Image…"]
     clicked = []
-    view.line_clicked.connect(clicked.append)
+    view.line_clicked.connect(lambda path, line: clicked.append((path, line)))
     action = {a.text(): a for a in menu.actions()}
     action["Open Line 13"].trigger()
-    assert clicked == [13]
+    assert clicked == [("x.f90", 13)]
     block = next(item.node for item in view.nodes.values() if item.node.text[0].startswith("a = 0"))
     assert view.node_code(block) == "a = 0"  # (as in the file, its indent off)
     action["Copy Code"].trigger()
@@ -642,3 +642,100 @@ end subroutine s
     assert shown[:2] == ["if (json%exception_thrown .and. allocated(vec))", "deallocate(vec)"]
     assert shown[2] == "if (json%exception_thrown .and. allocated(vec) .and. size(v…"  # (each part: 60 at most)
     assert shown[3] == "call clear(vec, 'a long message here')"
+
+
+# ------------------------------------------------------------ included files
+INCLUDING = """module m
+contains
+subroutine by_path(x, found)
+    integer :: x
+    logical, optional :: found
+#include "body.inc"
+end subroutine by_path
+subroutine plain(x)
+    integer :: x
+    include 'plain.inc'
+end subroutine plain
+end module m
+"""
+INCLUDES = {
+    "src/m.F90": INCLUDING,
+    "src/body.inc": "integer :: p\nif (x > 0) then\n    x = 1\n    return\nend if\n#include \"inner.inc\"\n",
+    "src/inner.inc": "if (present(found) .or. x < 0) found = .true.\n",
+    "src/plain.inc": "do while (x > 0)\n    x = x - 1\nend do\ninclude 'missing.inc'\n",
+}
+
+
+def test_included_files_are_read_where_they_re_included(tmp_path):
+    root = write_files(tmp_path, INCLUDES)
+    source = cx.expand_includes(INCLUDING, root / "src/m.F90")
+    assert [p.name for p in source.includes] == ["body.inc", "inner.inc", "plain.inc"]
+    lines = source.text.split("\n")
+    at = lines.index("if (present(found) .or. x < 0) found = .true.")
+    assert source.origin(at + 1, root / "src/m.F90") == (root / "src/inner.inc", 1)
+    assert "include 'missing.inc'" in lines  # (not found: left as it is)
+    assert cx.expand_includes("x = 1\n", "a.f90").origins is None  # (nothing included)
+
+
+def test_an_include_loop_stops(tmp_path):
+    root = write_files(tmp_path, {"a.inc": "x = 1\ninclude 'b.inc'\n", "b.inc": "y = 2\ninclude 'a.inc'\n"})
+    source = cx.expand_includes("include 'a.inc'\n", root / "main.f90")
+    assert source.text.split("\n")[:4] == ["x = 1", "y = 2", "include 'a.inc'", ""]
+
+
+def test_included_code_is_measured_with_its_procedure(tmp_path):
+    root = write_files(tmp_path, INCLUDES)
+    metrics = cx.analyze_file(root / "src/m.F90")
+    procs = {p.name: p for p in metrics.procedures}
+    by_path, plain = procs["by_path"], procs["plain"]
+    assert by_path.ccn == 4 and plain.ccn == 2  # (if, one-line if, .or.; do while)
+    assert (by_path.path, by_path.start, by_path.end) == (root / "src/m.F90", 3, 7)  # (its own file's lines)
+    assert by_path.nloc > by_path.length - 1  # (the included lines too)
+    assert len(metrics.includes) == 3
+
+
+def test_the_graph_of_an_included_body(qtbot, tmp_path):
+    from vibefpmgui.cfg_view import CfgView
+
+    root = write_files(tmp_path, INCLUDES)
+    path = root / "src/m.F90"
+    proc = next(p for p in cx.analyze_file(path).procedures if p.name == "by_path")
+    graph = cf.build(INCLUDING, path, proc)
+    assert graph.complexity == proc.ccn - 1  # (less the .or.)
+    nodes = {n.text[0]: n for n in graph.nodes if n.first}
+    assert (nodes["if (x > 0) then"].path.name, nodes["if (x > 0) then"].first) == ("body.inc", 2)
+    assert nodes["x = 1"].path.name == "body.inc" and (nodes["x = 1"].first, nodes["x = 1"].last) == (3, 4)
+    assert nodes["if (present(found) .or. x < 0)"].path.name == "inner.inc"
+    view = CfgView()
+    qtbot.addWidget(view)
+    view.show_graph(graph, INCLUDING)
+    item = next(i for i in view.nodes.values() if i.node is nodes["x = 1"])
+    assert item.included and "body.inc (included), lines 3–4" in item.toolTip()
+    clicked = []
+    view.line_clicked.connect(lambda file, line: clicked.append((Path(file).name, line)))
+    view.open_node(item.node)
+    assert clicked == [("body.inc", 3)]
+    assert view.node_code(item.node) == "x = 1\nreturn"  # (from the included file)
+
+
+def test_a_changed_include_is_measured_again(tmp_path, monkeypatch):
+    import os
+
+    from vibefpmgui.project_search import Root
+    from vibefpmgui.window.complexity import measure
+
+    root = write_files(tmp_path, INCLUDES)
+    roots = [Root("m", root, False)]
+    files, cache = measure(roots, False, {})
+    assert next(p for p in files[0].procedures if p.name == "plain").ccn == 2
+    read = []
+    real = cx.analyze_file
+    monkeypatch.setattr(cx, "analyze_file", lambda path: read.append(path.name) or real(path))
+    measure(roots, False, cache)
+    assert read == []  # (nothing changed)
+    inc = root / "src/plain.inc"
+    inc.write_text("if (x > 0) x = 0\n" + inc.read_text())
+    stat = inc.stat()
+    os.utime(inc, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+    files, cache = measure(roots, False, cache)
+    assert read == ["m.F90"] and next(p for p in files[0].procedures if p.name == "plain").ccn == 3

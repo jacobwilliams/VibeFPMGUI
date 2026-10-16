@@ -74,14 +74,17 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   and, above them, each file's totals. Filter by name or file, click a
   procedure to open it, click a file (or move to it with the arrow keys) to
   list only its procedures, its most complex one selected (click it again
-  for all of them). *Include tests* and *Include
+  for all of them). Included files (`#include "…"`, `include '…'`) are
+  read where they're included, so a procedure whose body is in one is
+  measured and drawn whole. *Include tests* and *Include
   dependencies* widen it. It's measured again when a Fortran file is saved
   (only the files that changed are read again). Selecting a procedure
   draws its control-flow graph beside the tables: blocks of code,
   decisions (`if`, `select case`, `where`, computed and arithmetic `goto`
   …), loops with their way back, and `return` / `stop` exits, each arrow
   labelled with the way taken. Wheel to zoom, drag to pan, click a node to
-  open its lines, double-click the background to fit it. Right-click for
+  open its lines (a dashed node's are in an included file), double-click
+  the background to fit it. Right-click for
   more: open or copy a node's code, center on it, fit, zoom, actual size,
   edge labels on or off, copy or save the graph as an image (PNG or SVG).
 * *Git* panel: the project's repository's branch (with its upstream and
