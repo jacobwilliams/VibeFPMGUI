@@ -24,6 +24,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .console import NO_WINDOW
+
 FLAG = "--coverage"  # gfortran's (compile and link)
 FILES_PER_GCOV = 10  # .gcda files given to each gcov run
 
@@ -210,7 +212,7 @@ class Collector:
             process = subprocess.Popen(
                 gcov_command(self.gcov, chunk), cwd=self.build_dir, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, text=True, errors="replace",
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))  # (no console window on Windows)
+                **NO_WINDOW)
         except OSError as error:
             return "", str(error)
         with self._lock:

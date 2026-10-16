@@ -34,6 +34,7 @@ from qtpy.QtWidgets import (
 )
 
 from . import manifest as m
+from .console import NO_WINDOW
 
 PRERELEASE_RE = re.compile(r"(alpha|beta|rc|dev|pre|preview|snapshot|nightly)", re.IGNORECASE)
 LS_REMOTE_TIMEOUT = 30  # seconds per repository
@@ -149,7 +150,8 @@ def ls_remote(url: str) -> dict[str, str]:
         # ("--": a URL from fpm.toml that starts with "-", such as
         # "--upload-pack=<command>", is a URL to git, never an option.)
         out = subprocess.run(["git", "ls-remote", "--", url, "HEAD", "refs/heads/*", "refs/tags/*"],
-                             capture_output=True, text=True, timeout=LS_REMOTE_TIMEOUT, env=env, check=False)
+                             capture_output=True, text=True, timeout=LS_REMOTE_TIMEOUT, env=env, check=False,
+                             **NO_WINDOW)
     except FileNotFoundError:
         raise RuntimeError("git was not found on PATH")
     except subprocess.TimeoutExpired:

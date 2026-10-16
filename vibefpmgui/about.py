@@ -21,6 +21,7 @@ from qtpy.QtWidgets import (
 )
 
 from . import __version__
+from .console import NO_WINDOW
 from .icons import draw_app_icon, recolored_logo
 
 FPM_DOCS_URL = "https://fpm.fortran-lang.org"
@@ -30,7 +31,7 @@ PROJECT_URL = "https://github.com/jacobwilliams/VibeFPMGUI"
 def tool_version(command: list[str], timeout: float = 5) -> str:
     """First useful line of ``<tool> --version`` ("" if it can't be run)."""
     try:
-        out = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
+        out = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False, **NO_WINDOW)
     except (OSError, subprocess.SubprocessError):
         return ""
     text = (out.stdout or out.stderr or "").strip()

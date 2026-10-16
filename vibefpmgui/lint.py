@@ -13,6 +13,8 @@ import subprocess
 from pathlib import Path
 from typing import NamedTuple
 
+from .console import NO_WINDOW
+
 LINT_EXTS = {".f90", ".f95", ".f03", ".f08", ".f18", ".f23"}  # any case, e.g. .F90
 
 
@@ -99,7 +101,7 @@ def fix_text(text: str, path: Path, unsafe: bool = False, timeout: float = 60) -
         args.insert(3, "--unsafe-fixes")
     try:
         out = subprocess.run(args, input=text, capture_output=True, text=True, encoding="utf-8",
-                             errors="replace", cwd=path.parent, timeout=timeout, check=False)
+                             errors="replace", cwd=path.parent, timeout=timeout, check=False, **NO_WINDOW)
     except (OSError, subprocess.SubprocessError) as exc:
         return None, str(exc)
     # (The exit status says whether issues remain, so it isn't an error.)

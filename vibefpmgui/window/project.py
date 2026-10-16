@@ -8,7 +8,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import sys
 import tomllib
 from pathlib import Path
 
@@ -17,6 +16,7 @@ from qtpy.QtGui import QAction, QKeySequence
 from qtpy.QtWidgets import QFileDialog, QMessageBox, QVBoxLayout, QWidget
 
 from .. import manifest as m
+from ..console import gui_python
 from ..editor import EditorTab
 from ..project_tree import ProjectTree
 
@@ -107,7 +107,7 @@ class ProjectMixin:
         this one as it is."""
         manifest = Path(manifest).resolve()
         process = QProcess()
-        process.setProgram(sys.executable)
+        process.setProgram(gui_python())  # (on Windows pythonw: no console window beside it)
         process.setArguments(["-m", "vibefpmgui", "--new-window", str(manifest)])
         process.setWorkingDirectory(str(manifest.parent))
         # Make sure the new process finds this package even when it isn't

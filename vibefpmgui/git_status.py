@@ -18,11 +18,11 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .console import NO_WINDOW
 from .source_text import decode
 
 # Where a change is: what `git status` calls "Changes to be committed",
@@ -102,11 +102,10 @@ def _git(folder: Path, *args: str, limit: int | None = None) -> tuple[int, bytes
     if git is None:
         raise GitError("git isn't installed")
     env = dict(os.environ, GIT_OPTIONAL_LOCKS="0", GIT_TERMINAL_PROMPT="0")
-    flags = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
         try:
             process = subprocess.Popen([git, "-C", str(folder), *args], stdin=subprocess.DEVNULL,
-                                       stdout=out, stderr=err, env=env, **flags)
+                                       stdout=out, stderr=err, env=env, **NO_WINDOW)
         except OSError as error:
             raise GitError(f"couldn't run git: {error}") from None
         try:

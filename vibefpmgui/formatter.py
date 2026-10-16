@@ -14,6 +14,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from .console import NO_WINDOW
 from .lint import LINT_EXTS
 
 FORMAT_EXTS = LINT_EXTS
@@ -37,7 +38,7 @@ def format_text(text: str, path: Path, timeout: float = 60) -> tuple[str | None,
     try:
         out = subprocess.run([program, "-"], input=text, capture_output=True, text=True,
                              encoding="utf-8", errors="replace", cwd=path.parent,
-                             timeout=timeout, env=env, check=False)
+                             timeout=timeout, env=env, check=False, **NO_WINDOW)
     except (OSError, subprocess.SubprocessError) as exc:
         return None, str(exc)
     if out.returncode != 0:

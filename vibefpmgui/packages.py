@@ -32,6 +32,7 @@ from qtpy.QtWidgets import (
 )
 
 from .background import call_in_background
+from .console import NO_WINDOW
 
 LIST_TIMEOUT = 60  # seconds (a first `pixi list` may have to solve the environment)
 
@@ -117,7 +118,7 @@ def python_packages() -> list[Package]:
 
 # ---------------------------------------------------------------- listing
 def _run(args: list[str]) -> str:
-    out = subprocess.run(args, capture_output=True, text=True, timeout=LIST_TIMEOUT, check=False)
+    out = subprocess.run(args, capture_output=True, text=True, timeout=LIST_TIMEOUT, check=False, **NO_WINDOW)
     if out.returncode != 0:
         lines = [line for line in (out.stderr or out.stdout).splitlines() if line.strip()]
         raise RuntimeError(lines[-1] if lines else f"{Path(args[0]).name} exited with code {out.returncode}")

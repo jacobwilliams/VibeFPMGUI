@@ -8,6 +8,8 @@ import subprocess
 
 from qtpy.QtCore import QProcess
 
+from .console import NO_WINDOW
+
 
 def kill_process_tree(process: QProcess):
     """Kill a QProcess *and everything it started* (fpm's compilers, the test
@@ -15,7 +17,7 @@ def kill_process_tree(process: QProcess):
     pid = int(process.processId() or 0)
     if pid > 0:
         if os.name == "nt":
-            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, check=False)
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, check=False, **NO_WINDOW)
         else:
             for child in reversed(_descendants(pid)):  # deepest first
                 try:
