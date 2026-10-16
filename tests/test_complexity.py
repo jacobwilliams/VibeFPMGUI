@@ -629,3 +629,16 @@ C     (a comment)
 """
     shown = [n.text for n in graph_of(fixed, "t.f").nodes if n.first]
     assert shown == [["X = 1 + 2"], ["IF (X .GT. 0 .AND. X .LT. 9)"], ["X = 0"]]
+
+
+def test_a_long_one_line_if_is_split_before_it_s_shortened():
+    """(Cut to 60 characters first, its statement lost its end: "deallocate(…".)"""
+    text = """subroutine s(json, vec)
+    if (json%exception_thrown .and. allocated(vec)) deallocate(vec)
+    if (json%exception_thrown .and. allocated(vec) .and. size(vec) > 1000000) call clear(vec, 'a long message here')
+end subroutine s
+"""
+    shown = [n.text[0] for n in graph_of(text).nodes if n.first]
+    assert shown[:2] == ["if (json%exception_thrown .and. allocated(vec))", "deallocate(vec)"]
+    assert shown[2] == "if (json%exception_thrown .and. allocated(vec) .and. size(v…"  # (each part: 60 at most)
+    assert shown[3] == "call clear(vec, 'a long message here')"

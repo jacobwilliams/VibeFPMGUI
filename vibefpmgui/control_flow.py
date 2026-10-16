@@ -203,9 +203,10 @@ class _Builder:
         for source, label in preds:
             self._edge(source, target, label)
 
-    def _line(self, first: int, last: int = 0) -> str:
+    def _line(self, first: int, last: int = 0, whole: bool = False) -> str:
         """A statement's lines ``first``–``last`` as shown: their code, without
-        comments, continuations joined into one line ("…" if it's too long)."""
+        comments, continuations joined into one line ("…" if it's too long,
+        unless ``whole``)."""
         text = ""
         for number in range(first, max(first, last) + 1):
             if not 0 < number <= len(self.source):
@@ -227,7 +228,7 @@ class _Builder:
                 text = code
             if not self.fixed and text.endswith("&"):
                 text = text[:-1].rstrip()
-        return text if len(text) <= 60 else text[:59] + "…"
+        return text if whole else _shorten(text)
 
     def _decision(self, st: _Statement, preds: list, kind: str = DECISION, shown: str = "") -> int:
         self.block = None
@@ -284,7 +285,7 @@ class _Builder:
             return i + 1, preds  # (out of place: read as nothing)
         if kind == "if_one":
             _condition, inner = st.detail.split("\0", 1)
-            condition_shown, inner_shown = _split_one_line(self._line(st.first, st.last))
+            condition_shown, inner_shown = map(_shorten, _split_one_line(self._line(st.first, st.last, whole=True)))
             node = self._decision(st, preds, shown=condition_shown)
             inner_kind, inner_detail = _classify(inner)
             inner_st = _Statement(inner_kind, inner, "", st.first, st.last, inner_detail, inner_shown)
@@ -387,6 +388,11 @@ class _Builder:
             if label in self.labels:
                 self._edge(source, self.labels[label], name)
         return self.graph
+
+
+def _shorten(text: str, width: int = 60) -> str:
+    """``text`` cut to ``width`` characters, the last one "…" if it was cut."""
+    return text if len(text) <= width else text[:width - 1] + "…"
 
 
 def _without_comment(line: str) -> str:
