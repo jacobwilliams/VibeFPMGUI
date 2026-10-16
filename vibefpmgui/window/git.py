@@ -1,5 +1,5 @@
-"""The Git panel: reading the project's repository's status (on a pool
-thread) when it may have changed, and only while the panel is on view.
+"""The Git panel: reading the project's repository's status (git, on a
+pool thread) when it may have changed, and only while the panel is on view.
 
 It may have changed when the project is opened or reloaded, a file is
 saved, the app becomes active again after a while away (git used in a
@@ -23,8 +23,8 @@ from ..git_panel import GitPanel
 def _read(path: Path) -> tuple[gs.RepoStatus | None, str]:
     """(status, error message)."""
     try:
-        return gs.read_status_apart(path), ""
-    except Exception as error:  # noqa: BLE001 - shown in the panel (pygit2 raises several kinds)
+        return gs.read_status(path), ""
+    except (gs.GitError, OSError) as error:
         return None, str(error) or type(error).__name__
 
 
@@ -52,7 +52,8 @@ class GitMixin:
             panel.show_message("Open a project in a git repository to see its changes here.")
             return
         if not gs.available():
-            panel.show_message("The Git panel needs pygit2 (pixi add pygit2, or pip install pygit2).")
+            panel.show_message("The Git panel needs git: install it (https://git-scm.com) and make sure "
+                               "it's on the PATH, then click Refresh.")
             return
         if not self.panel_in_front(panel):
             self._git_stale = True

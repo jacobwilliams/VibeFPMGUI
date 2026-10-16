@@ -12,7 +12,7 @@ from conftest import open_editor, write_files
 from vibefpmgui import diff_view as dv
 from vibefpmgui import git_status as gs
 
-pytestmark = pytest.mark.skipif(shutil.which("git") is None or not gs.available(), reason="git and pygit2 needed")
+pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git needed")
 
 
 def git(root: Path, *args: str) -> str:
@@ -159,14 +159,15 @@ def test_the_panel_lists_the_changes_and_shows_a_diff(qtbot, tmp_path):
     groups = [panel.files.topLevelItem(i).text(0) for i in range(panel.files.topLevelItemCount())]
     assert groups == ["Changes (1)", "Untracked (1)"]
     assert panel.selected() == gs.Change("a.f90", gs.CHANGED, "modified")  # (the first file, shown)
-    assert "staged → working tree" in panel.diff_title.text()
+    qtbot.waitUntil(lambda: "staged → working tree" in panel.diff_title.text(), timeout=5_000)  # (read meanwhile)
     assert panel.diff.new_pane.toPlainText() == "program a\n  print *, 1\nend program a"
     assert panel.diff.new_pane.rows.kinds == [dv.SAME, dv.ADDED, dv.SAME]
     panel.diff.open_requested.emit(2)
     assert opened == [("a.f90", 2)]
     untracked = panel.files.topLevelItem(1).child(0)
     panel.files.setCurrentItem(untracked)
-    assert untracked.data(0, CHANGE_ROLE).path == "new.txt" and "new file" in panel.diff_title.text()
+    assert untracked.data(0, CHANGE_ROLE).path == "new.txt" and "reading" in panel.diff_title.text()
+    qtbot.waitUntil(lambda: "new file" in panel.diff_title.text(), timeout=5_000)
     panel.show_status(gs.read_status(root))  # (again: the same file stays selected)
     assert panel.selected().path == "new.txt"
 
@@ -188,17 +189,54 @@ def test_the_window_s_git_panel(qtbot, window, project):
     assert window.dockWidgetArea(window.docks["git"]) is not None
 
 
-def test_the_status_read_apart_is_the_same(tmp_path):
-    """(pygit2 holds Python's lock while it reads: the window reads it in a process of its own.)"""
-    root = make_repo(tmp_path / "repo", {"src/a.f90": "program a\nend program a\n", "b.txt": "b\n"})
-    (root / "src/a.f90").write_text("program a\n  print *, 1\nend program a\n")
-    (root / "new é.txt").write_text("n\n")  # (a name that isn't ASCII)
-    apart = gs.read_status_apart(root)
-    assert apart == gs.read_status(root) and {c.path for c in apart.changes} == {"src/a.f90", "new é.txt"}
-    assert gs.read_status_apart(tmp_path / "elsewhere") is None or gs.find_repository(tmp_path) is None
-    (root / ".git" / "HEAD").write_text("nonsense")  # (a broken repository: its error, as a RuntimeError)
-    with pytest.raises(RuntimeError):
-        gs.read_status_apart(root)
+def test_renames_and_awkward_names(tmp_path):
+    root = make_repo(tmp_path / "repo", {"old name.f90": "program a\nend program a\n", "keep.txt": "k\n"})
+    git(root, "mv", "old name.f90", "new é.f90")  # (a staged rename: a space, a letter that isn't ASCII)
+    (root / "keep.txt").write_text("changed\n")
+    (root / "dir with space").mkdir()
+    (root / "dir with space" / "u ü.txt").write_text("u\n")
+    changes = {(c.path, c.area): c for c in gs.read_status(root).changes}
+    renamed = changes["new é.f90", gs.STAGED]
+    assert (renamed.kind, renamed.letter, renamed.old_path) == ("renamed", "R", "old name.f90")
+    assert gs.versions(root, renamed)[:2] == ("program a\nend program a\n",) * 2  # (before: under its old name)
+    assert ("keep.txt", gs.CHANGED) in changes and ("dir with space/u ü.txt", gs.UNTRACKED) in changes
+
+
+def test_parse_the_status():
+    output = b"\0".join([
+        b"# branch.oid 0123456789abcdef", b"# branch.head main", b"# branch.upstream origin/main",
+        b"# branch.ab +2 -3",
+        b"1 MM N... 100644 100644 100644 aaa bbb src/a b.f90",
+        b"2 R. N... 100644 100644 100644 aaa aaa R100 new.f90", b"old.f90",
+        b"1 .D N... 100644 100644 000000 aaa aaa gone.txt",
+        b"1 .T N... 100644 100644 120000 aaa aaa link",
+        b"u UU N... 100644 100644 100644 100644 a b c both.txt",
+        b"? untracked file.txt", b""])
+    status = gs.parse_status(Path("/repo"), output)
+    assert (status.branch, status.head, status.upstream, status.ahead, status.behind) == \
+        ("main", "0123456", "origin/main", 2, 3)
+    assert [(c.path, c.area, c.kind, c.old_path) for c in status.changes] == [
+        ("both.txt", gs.CONFLICT, "conflict", None), ("gone.txt", gs.CHANGED, "deleted", None),
+        ("link", gs.CHANGED, "typechange", None), ("new.f90", gs.STAGED, "renamed", "old.f90"),
+        ("src/a b.f90", gs.STAGED, "modified", None), ("src/a b.f90", gs.CHANGED, "modified", None),
+        ("untracked file.txt", gs.UNTRACKED, "untracked", None)]
+    detached = gs.parse_status(Path("/repo"), b"# branch.oid (initial)\0# branch.head (detached)\0")
+    assert detached.head is None and detached.branch is None
+
+
+def test_a_broken_repository_says_why(tmp_path):
+    root = make_repo(tmp_path / "repo", {"a.txt": "a\n"})
+    (root / ".git" / "index").write_bytes(b"not an index")
+    with pytest.raises(gs.GitError, match="index"):
+        gs.read_status(root)
+
+
+def test_without_git_the_panel_says_so(qtbot, window, monkeypatch):
+    monkeypatch.setattr(gs.shutil, "which", lambda name: None)
+    window.show_panel(window.git_panel)
+    window.refresh_git()
+    assert "needs git" in window.git_panel.empty.text() and window.git_panel.empty.isVisibleTo(window.git_panel)
+    assert gs.find_repository(Path.cwd()) is None
 
 
 def test_one_read_at_a_time_and_not_on_every_activation(qtbot, window, project, monkeypatch):
@@ -208,8 +246,8 @@ def test_one_read_at_a_time_and_not_on_every_activation(qtbot, window, project, 
 
     git(project, "init", "-q")
     reads = []
-    real = gs.read_status_apart
-    monkeypatch.setattr(gs, "read_status_apart", lambda path: reads.append(path) or real(path))
+    real = gs.read_status
+    monkeypatch.setattr(gs, "read_status", lambda path: reads.append(path) or real(path))
     window.show_panel(window.git_panel)
     qtbot.waitUntil(lambda: not window._git_reading, timeout=5_000)
     reads.clear()

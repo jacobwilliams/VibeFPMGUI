@@ -1,7 +1,8 @@
 """The *Git* tab: the project's repository's status (its branch, and the
 changed files: staged, not staged, untracked, in conflict), and the diff of
 the selected file (see `vibefpmgui.git_status`, `vibefpmgui.diff_view`).
-Double-clicking a line of the diff opens the file there.
+Double-clicking a line of the diff opens the file there. A file's versions
+are read (git) on a pool thread.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from qtpy.QtWidgets import (
 )
 
 from . import git_status as gs
+from .background import call_in_background
 from .build_monitor import PALETTES, TitleIcon, app_is_light, panel_stylesheet
 from .diff_view import DiffView
 from .widgets import StatusLabel
@@ -41,6 +43,7 @@ class GitPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.status: gs.RepoStatus | None = None
+        self._showing: tuple[Path, gs.Change] | None = None  # (the change whose versions are being read)
         self.icon_for = None  # a file's QIcon, as in Project files (set by the window)
         self.is_light = True
         self.palette_colors = PALETTES["light"]
@@ -129,6 +132,7 @@ class GitPanel(QWidget):
     def show_message(self, message: str):
         """Nothing to list: why."""
         self.status = None
+        self._showing = None
         self.subtitle.setText("")
         self.empty.setText(message)
         self.empty.show()
@@ -176,6 +180,7 @@ class GitPanel(QWidget):
             self.empty.setText(f"No changes in {status.root.name} (on {status.summary()}).")
             self.empty.show()
             self.splitter.hide()
+            self._showing = None
             self.diff.clear()
             return
         self.empty.hide()
@@ -200,7 +205,27 @@ class GitPanel(QWidget):
         change = item.data(0, CHANGE_ROLE) if item is not None else None
         if change is None or self.status is None:
             return
-        old, new, old_label, new_label = gs.versions(self.status.root, change)
+        root = self.status.root
+        self._showing = (root, change)
+        self.diff_title.setText(f"<b>{change.path}</b> · reading…")
+        call_in_background(lambda: self._versions(root, change),
+                           lambda result: self._show_versions(root, change, result), self)
+
+    @staticmethod
+    def _versions(root: Path, change: gs.Change):
+        try:
+            return gs.versions(root, change)
+        except (gs.GitError, OSError) as error:
+            return str(error)
+
+    def _show_versions(self, root: Path, change: gs.Change, result):
+        if self._showing != (root, change):
+            return  # (another file chosen meanwhile)
+        if isinstance(result, str):
+            self.diff_title.setText(f"<b>{change.path}</b> · couldn't read it: {result}")
+            self.diff.clear()
+            return
+        old, new, old_label, new_label = result
         if gs.BINARY in (old, new):
             self.diff_title.setText(f"<b>{change.path}</b> · binary or very big: no diff shown")
             self.diff.clear()

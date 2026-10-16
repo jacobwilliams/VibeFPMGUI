@@ -93,8 +93,9 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   (or *Unified*), syntax-colored, with unchanged stretches folded;
   double-click a line to open the file there. It refreshes when a file is
   saved, the project is reloaded, or the app is used again after another
-  (git in a terminal), and with *Refresh*. Read with
-  [pygit2](https://www.pygit2.org) (part of the pixi environment).
+  (git in a terminal), and with *Refresh*. Read with the
+  [git](https://git-scm.com) program, which must be installed (on the
+  PATH); without it the panel says so.
 * Test coverage: tick *Build options → Coverage* (gfortran) and run Test.
   fpm builds with `--coverage` (a build of its own), the tests' counts are
   read with gcov (which comes with gfortran) after the run, and the

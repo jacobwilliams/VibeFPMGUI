@@ -91,7 +91,7 @@ menu item says "not found" and the feature is off; without fprettify the
 | `vibefpmgui.find_bar` | The find and replace bar |
 | `vibefpmgui.editor_shared` | What the editor's modules share: colors, delays, severities, text helpers |
 | `vibefpmgui.source_text` | Reading source files the same way everywhere: encoding, line ends, what Search skips |
-| `vibefpmgui.git_status` | A repository's status and the versions of a changed file (pygit2; no Qt) |
+| `vibefpmgui.git_status` | A repository's status and the versions of a changed file (the git program; no Qt) |
 | `vibefpmgui.git_panel` | The *Git* tab: the branch, the changed files, and the selected one's diff |
 | `vibefpmgui.diff_view` | Two versions of a file side by side or unified: aligning them, folding unchanged lines |
 | `vibefpmgui.complexity` | Fortran code complexity, lizard's metrics (CCN, NLOC, tokens, parameters, length, depth); no Qt |
