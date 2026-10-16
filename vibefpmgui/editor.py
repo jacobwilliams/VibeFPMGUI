@@ -194,7 +194,10 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
         self.disk_bar.hide()
         layout.addWidget(self.disk_bar)
         # The text, with the minimap at its right.
-        self.minimap = Minimap(self.editor)
+        # (A child of the tab from the start: shown without a parent, even
+        # until the layout below takes it, it was a window of its own for a
+        # moment, which Windows showed as a window flashing up.)
+        self.minimap = Minimap(self.editor, self)
         self.editor.minimap = self.minimap
         self.minimap.setVisible(self.minimap_enabled)
         self.editor.set_word_wrap(self.word_wrap)

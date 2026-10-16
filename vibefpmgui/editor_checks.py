@@ -20,15 +20,21 @@ class EditorChecksMixin:
 
     def set_lint_enabled(self, on: bool):
         if on:
-            self.lint()
+            self.lint(force=True)
         else:
             self._lint_timer.stop()
             self._show_lint([])
 
-    def lint(self):
-        """Run fortitude on the current text (in the background)."""
+    def lint(self, force: bool = False):
+        """Run fortitude on the current text (in the background), unless it
+        has checked this text of this file already (or is checking it):
+        opening a file asked twice, and recoloring the syntax counts as a
+        change of the text too; ``force``: all the same."""
         if not self.can_lint():
             self._show_lint([])
+            return
+        key = (self.path, self.editor.toPlainText())
+        if not force and key == getattr(self, "_lint_key", None):
             return
         if self._lint_process is not None:
             self._lint_again = True
@@ -40,6 +46,7 @@ class EditorChecksMixin:
         process.finished.connect(self._lint_process_finished)
         process.errorOccurred.connect(self._lint_process_error)
         self._lint_process = process
+        self._lint_key = key
         process.start(lint.executable(), lint.command(self.path))
         # (The text itself, not the document's revision: recoloring the
         # syntax also counts as a revision.)
