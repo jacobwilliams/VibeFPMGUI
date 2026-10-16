@@ -252,12 +252,19 @@ def panel_stylesheet(object_name: str, pal: dict) -> str:
         {n} QLabel {{ color: {pal['text']}; background: transparent; }}
         {n} QTableWidget {{ background: {pal['bg']}; border: none; }}
         {n} QHeaderView {{ background: {pal['bg']}; }}
+        {n} QAbstractScrollArea::corner {{ background: transparent; border: none; }}
         {n} QScrollBar:vertical {{ background: transparent; width: 8px; margin: 2px; }}
         {n} QScrollBar::handle:vertical {{ background: {pal['track']}; border-radius: 3px;
             min-height: 24px; }}
         {n} QScrollBar::handle:vertical:hover {{ background: {pal['muted']}; }}
+        {n} QScrollBar:horizontal {{ background: transparent; height: 8px; margin: 2px; }}
+        {n} QScrollBar::handle:horizontal {{ background: {pal['track']}; border-radius: 3px;
+            min-width: 24px; }}
+        {n} QScrollBar::handle:horizontal:hover {{ background: {pal['muted']}; }}
         {n} QScrollBar::add-line, {n} QScrollBar::sub-line,
         {n} QScrollBar::add-page, {n} QScrollBar::sub-page {{ background: none; height: 0; }}
+        {n} QScrollBar::add-line:horizontal, {n} QScrollBar::sub-line:horizontal,
+        {n} QScrollBar::add-page:horizontal, {n} QScrollBar::sub-page:horizontal {{ width: 0; }}
         {n} QHeaderView::section {{
             background: {pal['bg']}; color: {pal['muted']}; border: none;
             border-bottom: 1px solid {pal['line']}; padding: 6px 12px;

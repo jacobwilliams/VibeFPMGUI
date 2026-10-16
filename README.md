@@ -71,8 +71,10 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   reader of its own: CCN (cyclomatic complexity), lines of code, tokens,
   parameters, length and nesting depth, most complex first, the values over
   lizard's thresholds (CCN 15, length 1000, parameters 100, depth 5) in red;
-  and each file's totals. Filter by name or file, click a procedure to open
-  it, click a file to list only its procedures. *Include tests* and *Include
+  and, above them, each file's totals. Filter by name or file, click a
+  procedure to open it, click a file (or move to it with the arrow keys) to
+  list only its procedures, its most complex one selected (click it again
+  for all of them). *Include tests* and *Include
   dependencies* widen it. It's measured again when a Fortran file is saved
   (only the files that changed are read again). Selecting a procedure
   draws its control-flow graph beside the tables: blocks of code,

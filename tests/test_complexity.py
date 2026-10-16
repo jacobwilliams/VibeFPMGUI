@@ -332,9 +332,31 @@ def test_the_arrow_keys_choose_a_file_too(qtbot, tmp_path):
     assert panel.filter_edit.text() == ""
 
 
-def test_the_file_comes_first_and_shrinks(qtbot, tmp_path):
-    from qtpy.QtWidgets import QHeaderView
+def test_a_chosen_file_s_procedures_and_flow(qtbot, tmp_path):
+    from vibefpmgui.complexity_panel import FILE_COLUMN, NAME_COLUMN
 
+    panel, _root = panel_with(qtbot, tmp_path)
+    panel.tests_check.setChecked(True)
+    assert panel.splitter.widget(0) is panel.file_table and panel.splitter.widget(1) is panel.procedures
+    procs, files = panel.procedures, panel.file_table
+    procs.setCurrentCell(next(r for r in range(procs.rowCount()) if procs.item(r, 1).text() == "small"),
+                         NAME_COLUMN)
+    assert panel.flow_shown.name == "small"
+    row_of = {files.item(r, 0).text(): r for r in range(files.rowCount())}
+    files.setCurrentCell(row_of["test/check.f90"], 0)  # (another file: its first procedure, and its graph)
+    assert rows(panel) == [("check", "2")] and procs.isColumnHidden(FILE_COLUMN)
+    assert procs.currentRow() == 0 and panel.flow_shown.name == "check"
+    files.setCurrentCell(row_of["src/calc.f90"], 0)
+    assert panel.flow_shown.name == "big" and panel.chosen_file() == "src/calc.f90"
+    panel.refresh_palette()  # (refilled, as after a save: still that file, still that procedure)
+    assert panel.chosen_file() == "src/calc.f90" and procs.isColumnHidden(FILE_COLUMN)
+    assert panel.flow_shown.name == "big" and procs.item(procs.currentRow(), NAME_COLUMN).text() == "big"
+    panel.filter_edit.setText("c")  # (typed: a filter, not a file; the file column back)
+    assert panel.chosen_file() is None and not procs.isColumnHidden(FILE_COLUMN)
+    assert panel.flow_shown.name == "big"  # (still listed: still shown)
+
+
+def test_the_columns_fit_their_contents_and_scroll(qtbot, tmp_path):
     from vibefpmgui.complexity_panel import FILE_COLUMN, NAME_COLUMN
 
     panel, _root = panel_with(qtbot, tmp_path)
@@ -342,19 +364,21 @@ def test_the_file_comes_first_and_shrinks(qtbot, tmp_path):
     assert table.horizontalHeaderItem(0).text() == "FILE" and table.horizontalHeaderItem(1).text() == "PROCEDURE"
     assert (FILE_COLUMN, NAME_COLUMN) == (0, 1) and table.item(0, 0).text() == "src/calc.f90"
     header = table.horizontalHeader()
-    assert header.sectionResizeMode(NAME_COLUMN) == QHeaderView.ResizeToContents
-    panel.resize(2400, 500)
+    file_width = table.fontMetrics().horizontalAdvance("src/calc.f90")
+    panel.resize(1600, 500)
     panel.show()
     qtbot.waitExposed(panel)
-    wide = header.sectionSize(FILE_COLUMN)
-    panel.resize(1000, 500)
+    widths = [header.sectionSize(i) for i in range(header.count())]
+    assert widths[FILE_COLUMN] > file_width  # (the whole path)
+    panel.resize(500, 500)  # (narrow: the same widths, scrolling sideways; the file not squeezed out)
     qtbot.wait(20)
-    assert header.sectionSize(FILE_COLUMN) < wide and header.sectionSize(NAME_COLUMN) > 0
-    viewport = table.viewport().width()
-    assert header.length() <= viewport or header.sectionSize(FILE_COLUMN) == 60  # (no scrolling while it can shrink)
-    panel.resize(2400, 500)
-    qtbot.wait(20)
-    assert header.sectionSize(FILE_COLUMN) >= wide - 2 and header.length() <= table.viewport().width() + 1
+    assert [header.sectionSize(i) for i in range(header.count())] == widths
+    assert header.length() > table.viewport().width() and table.horizontalScrollBar().maximum() > 0
+    # Room for the sort arrow only in the sorted column ("CCN", then "NLOC").
+    ccn, nloc = 2, 3
+    sorted_ccn = header.sectionSize(ccn)
+    header.setSortIndicator(nloc, Qt.DescendingOrder)
+    assert header.sectionSize(ccn) < sorted_ccn and header.sectionSize(nloc) > widths[nloc]
 
 
 # ------------------------------------------------------------ control flow

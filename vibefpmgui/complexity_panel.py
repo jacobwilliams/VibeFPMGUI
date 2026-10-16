@@ -3,8 +3,8 @@
 length and nesting depth, the values over lizard's thresholds in red; each
 file's totals; and the selected procedure's control-flow graph (see
 `vibefpmgui.control_flow`, `vibefpmgui.cfg_view`). Click a procedure to open
-it; click a file to list only its procedures; click a node of the graph to
-open its lines.
+it; click a file to list only its procedures (its first one selected and
+drawn); click a node of the graph to open its lines.
 """
 
 from __future__ import annotations
@@ -40,8 +40,8 @@ from .widgets import StatusLabel
 
 OVER = "#e03131"  # a value over its threshold
 PROCEDURE_COLUMNS = ("FILE", "PROCEDURE", "CCN", "NLOC", "TOKENS", "PARAMS", "LENGTH", "DEPTH")
-FILE_COLUMN, NAME_COLUMN = 0, 1  # (in the procedures' table: the file's column stretches, and shrinks)
-MIN_FILE_WIDTH = 60
+FILE_COLUMN, NAME_COLUMN = 0, 1  # (in the procedures' table)
+MAX_TEXT_WIDTH = 320  # a file's or procedure's column at most (wider: drag it; a long path elided at its start)
 FILE_COLUMNS = ("FILE", "NLOC", "PROCEDURES", "AVG CCN", "MAX CCN", "OVER")
 COLUMN_TIPS = {
     "CCN": "Cyclomatic complexity: 1 + its decisions (if, else if, loops, case, type is, where, .and., .or.)",
@@ -57,7 +57,8 @@ PROCEDURE_ROLE = Qt.UserRole + 1  # a procedure's row: its complexity.Procedure
 
 
 class ComplexityPanel(QWidget):
-    """The procedures (top), the files (bottom), and their totals."""
+    """The files (top), their procedures (below), their totals, and the
+    selected procedure's control-flow graph (beside them)."""
 
     open_requested = Signal(str, int)  # file, line
     refresh_requested = Signal()
@@ -98,6 +99,7 @@ class ComplexityPanel(QWidget):
         self.filter_edit = QLineEdit()
         self.filter_edit.setPlaceholderText("Filter by procedure or file")
         self.filter_edit.setClearButtonEnabled(True)
+        self.filter_edit.setMinimumWidth(160)  # (narrow: the totals beside it are cut off, not the filter)
         self.filter_edit.textChanged.connect(self._fill_procedures)
         self.totals = StatusLabel()
         totals_row = QHBoxLayout()
@@ -105,26 +107,21 @@ class ComplexityPanel(QWidget):
         totals_row.addWidget(self.filter_edit, 1)
         totals_row.addWidget(self.totals)
 
-        self.procedures = self._table(PROCEDURE_COLUMNS, stretch=-1)
-        self.procedures.setTextElideMode(Qt.ElideLeft)  # (a path, shrunk: the end of its file name still shows)
-        # The file's column takes what the others leave, and gives it up first
-        # when the panel narrows (Qt's Stretch never goes below its text's width).
-        self.procedures.horizontalHeader().setSectionResizeMode(FILE_COLUMN, QHeaderView.Interactive)
-        self.procedures.viewport().installEventFilter(self)  # (the viewport: it has its new width by then)
+        self.procedures = self._table(PROCEDURE_COLUMNS)
         self.procedures.horizontalHeader().setSortIndicator(2, Qt.DescendingOrder)  # (the most complex first)
         self.procedures.cellClicked.connect(self._procedure_clicked)
-        self.file_table = self._table(FILE_COLUMNS, stretch=0)
+        self.file_table = self._table(FILE_COLUMNS)
         self.file_table.horizontalHeader().setSortIndicator(3, Qt.DescendingOrder)
         # A file chosen (clicked, or with the arrow keys): only its procedures;
         # the chosen file clicked again: all of them.
         self.file_table.currentCellChanged.connect(self._file_chosen)
         self.file_table.cellClicked.connect(self._file_clicked)
         self._file_just_chosen = False
-        self.splitter = QSplitter(Qt.Vertical)
-        self.splitter.addWidget(self.procedures)
+        self.splitter = QSplitter(Qt.Vertical)  # (the files above their procedures)
         self.splitter.addWidget(self.file_table)
-        self.splitter.setStretchFactor(0, 3)
-        self.splitter.setStretchFactor(1, 1)
+        self.splitter.addWidget(self.procedures)
+        self.splitter.setStretchFactor(0, 1)
+        self.splitter.setStretchFactor(1, 3)
         # The selected procedure's control flow, beside the tables.
         self.flow_title = StatusLabel()
         self.flow = CfgView()
@@ -157,7 +154,9 @@ class ComplexityPanel(QWidget):
         self.refresh_fonts()
         self.show_message("Open a project to see the complexity of its Fortran code here.")
 
-    def _table(self, columns: tuple[str, ...], stretch: int) -> QTableWidget:
+    def _table(self, columns: tuple[str, ...]) -> QTableWidget:
+        """A table whose columns are as wide as their contents, scrolling
+        sideways if the panel is narrower (not squeezing the first column)."""
         table = QTableWidget(0, len(columns))
         table.setHorizontalHeaderLabels(list(columns))
         for i, name in enumerate(columns):
@@ -170,28 +169,36 @@ class ComplexityPanel(QWidget):
         table.setSelectionMode(QAbstractItemView.SingleSelection)
         table.setSortingEnabled(True)
         table.setWordWrap(False)
+        table.setTextElideMode(Qt.ElideLeft)  # (a long path: the end of its file name still shows)
+        table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         hh = table.horizontalHeader()
         hh.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        for i in range(len(columns)):
-            hh.setSectionResizeMode(i, QHeaderView.Stretch if i == stretch else QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(QHeaderView.Interactive)
+        hh.setStretchLastSection(False)
+        hh.sortIndicatorChanged.connect(lambda *_: self._fit_columns(table))
         return table
 
-    def eventFilter(self, obj, event):
-        if obj is self.procedures.viewport() and event.type() == event.Type.Resize:
-            self._fit_file_column()
-        return False
-
-    def _fit_file_column(self):
-        """The file's column: the width the other columns leave (at least a little)."""
-        header = self.procedures.horizontalHeader()
-        others = sum(header.sectionSize(i) for i in range(header.count()) if i != FILE_COLUMN)
-        header.resizeSection(FILE_COLUMN, max(MIN_FILE_WIDTH, self.procedures.viewport().width() - others))
+    @staticmethod
+    def _fit_columns(table: QTableWidget):
+        """Each column as wide as its values and its title, room for the sort
+        arrow only in the sorted one (Qt leaves room for it in every title)."""
+        header = table.horizontalHeader()
+        header.setSortIndicatorShown(False)
+        table.resizeColumnsToContents()
+        header.setSortIndicatorShown(True)
+        column = header.sortIndicatorSection()
+        if 0 <= column < header.count():
+            header.resizeSection(column, max(header.sectionSize(column), header.sectionSizeHint(column)))
+        for column in range(header.count()):
+            if header.sectionSize(column) > MAX_TEXT_WIDTH:
+                header.resizeSection(column, MAX_TEXT_WIDTH)
 
     # ------------------------------------------------------------ styling
     def refresh_palette(self):
         self.is_light = app_is_light()
         self.palette_colors = pal = PALETTES["light" if self.is_light else "dark"]
-        self.setStyleSheet(panel_stylesheet(self.objectName(), pal))
+        self.setStyleSheet(panel_stylesheet(self.objectName(), pal)
+                           + f"#{self.objectName()} QHeaderView::section {{ padding: 6px 8px; }}")
         self.title_icon.draw(pal["text"], self.title)
         for label in (self.subtitle, self.empty, self.totals, self.flow_title):
             label.setStyleSheet(f"color: {pal['muted']};")
@@ -265,15 +272,28 @@ class ComplexityPanel(QWidget):
         self._fill_files(files)
         self._fill_procedures()
 
+    def chosen_file(self) -> str | None:
+        """The file chosen in the files' table (its label), if the filter is
+        still that file's."""
+        row = self.file_table.currentRow()
+        item = self.file_table.item(row, 0) if row >= 0 else None
+        label = item.data(Qt.UserRole) if item is not None else None
+        return label if label and label == self.filter_edit.text() else None
+
     def _fill_procedures(self):
         needle = self.filter_edit.text().strip().lower()
+        chosen = self.chosen_file()
         rows = []
         for f in self.shown_files():
             label = self.label(f.path)
             for proc in f.procedures:
-                if needle and needle not in proc.qualified.lower() and needle not in label.lower():
+                if chosen is not None:
+                    if label != chosen:  # (only that file's: not another path it's a part of)
+                        continue
+                elif needle and needle not in proc.qualified.lower() and needle not in label.lower():
                     continue
                 rows.append((proc, label))
+        self.procedures.setColumnHidden(FILE_COLUMN, chosen is not None)  # (one file: no need to say which)
         table = self.procedures
         table.blockSignals(True)  # (refilling isn't choosing a procedure: see the end)
         table.setSortingEnabled(False)
@@ -304,8 +324,7 @@ class ComplexityPanel(QWidget):
                 cell.setToolTip(tip)
                 table.setItem(row, column, cell)
         table.setSortingEnabled(True)
-        table.resizeColumnsToContents()
-        self._fit_file_column()
+        self._fit_columns(table)
         table.blockSignals(False)
         self._keep_flow()
 
@@ -322,13 +341,17 @@ class ComplexityPanel(QWidget):
         return None
 
     def _keep_flow(self):
-        """After the tables are filled again (a save, a filter): the procedure
-        shown stays selected, its graph drawn again from its file (it may have
-        changed); gone, the graph goes too."""
+        """After the tables are filled again (a save, a filter, a file chosen):
+        the procedure shown stays selected, its graph drawn again from its file
+        (it may have changed); filtered out, or a file just chosen, the first
+        procedure listed is selected and shown instead; gone from the project,
+        the graph goes too."""
         shown = self.flow_shown
-        if shown is None:
+        row = self._row_of(shown.path, shown.qualified) if shown is not None else None
+        if row is None and self.procedures.rowCount() and (shown is not None or self.chosen_file()):
+            row = 0  # (filtered out, or a file chosen: its most complex procedure)
+        if row is None and shown is None:
             return
-        row = self._row_of(shown.path, shown.qualified)
         if row is None:
             if not any(p.path == shown.path and p.qualified == shown.qualified
                        for f in self.files for p in f.procedures):
@@ -375,6 +398,7 @@ class ComplexityPanel(QWidget):
 
     def _fill_files(self, files: list[cx.FileMetrics]):
         table = self.file_table
+        chosen = self.chosen_file()
         table.blockSignals(True)  # (refilling isn't choosing a file)
         table.setSortingEnabled(False)
         table.setRowCount(len(files))
@@ -395,6 +419,11 @@ class ComplexityPanel(QWidget):
                 cell.setToolTip(f"{html.escape(str(f.path))}<br>Click to list only its procedures")
                 table.setItem(row, column, cell)
         table.setSortingEnabled(True)
+        self._fit_columns(table)
+        table.setCurrentCell(-1, -1)
+        for row in range(table.rowCount()):  # (still chosen: a save refills the tables)
+            if table.item(row, 0).data(Qt.UserRole) == chosen:
+                table.setCurrentCell(row, 0)
         table.blockSignals(False)
 
     def _procedure_clicked(self, row: int, _column: int):
