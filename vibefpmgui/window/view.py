@@ -309,6 +309,8 @@ class ViewMixin:
             self.terminal_panel.set_font(code)
         if hasattr(self, "git_panel"):
             self.git_panel.set_code_font(code)
+        if hasattr(self, "complexity_panel"):
+            self.complexity_panel.set_code_font(code)
         self.command_toolbar.setIconSize(QSize(round(22 * factor), round(22 * factor)))
         self.build_monitor.refresh_fonts()
         self.test_monitor.refresh_fonts()

@@ -42,6 +42,7 @@ class ComplexityMixin:
         """The Complexity panel."""
         self.complexity_panel = panel = ComplexityPanel()
         panel.icon_for = self.project_tree.icon_for
+        panel.set_code_font(self._mono_font(editor=True))
         panel.tests_check.setChecked(self.settings.value("complexity_tests", False, type=bool))
         panel.tests_check.toggled.connect(lambda on: self.settings.setValue("complexity_tests", on))
         panel.dependencies_check.setChecked(self.settings.value("complexity_dependencies", False, type=bool))

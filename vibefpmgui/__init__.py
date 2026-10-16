@@ -96,6 +96,8 @@ menu item says "not found" and the feature is off; without fprettify the
 | `vibefpmgui.diff_view` | Two versions of a file side by side or unified: aligning them, folding unchanged lines |
 | `vibefpmgui.complexity` | Fortran code complexity, lizard's metrics (CCN, NLOC, tokens, parameters, length, depth); no Qt |
 | `vibefpmgui.complexity_panel` | The *Complexity* tab: each procedure's metrics and each file's totals |
+| `vibefpmgui.control_flow` | A procedure's control-flow graph (blocks, decisions, loops, exits) and its layered layout; no Qt |
+| `vibefpmgui.cfg_view` | Drawing a control-flow graph (pyqtgraph) |
 | `vibefpmgui.highlighter` | Pygments syntax highlighting and the *Syntax Colors* styles |
 | `vibefpmgui.themes` | *View → Theme*: the whole window's colors (System, Light, Dark and colorful ones) |
 | `vibefpmgui.lsp` | The client for the fortls language server (hover, definition, completion, references, rename) |

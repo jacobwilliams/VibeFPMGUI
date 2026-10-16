@@ -74,7 +74,12 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   and each file's totals. Filter by name or file, click a procedure to open
   it, click a file to list only its procedures. *Include tests* and *Include
   dependencies* widen it. It's measured again when a Fortran file is saved
-  (only the files that changed are read again).
+  (only the files that changed are read again). Selecting a procedure
+  draws its control-flow graph beside the tables: blocks of code,
+  decisions (`if`, `select case`, `where`, computed and arithmetic `goto`
+  …), loops with their way back, and `return` / `stop` exits, each arrow
+  labelled with the way taken. Wheel to zoom, drag to pan, click a node to
+  open its lines.
 * *Git* panel: the project's repository's branch (with its upstream and
   how many commits ahead or behind), and its changed files: staged, not
   staged, untracked, in conflict. Select a file to see its diff, side by side

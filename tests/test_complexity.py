@@ -343,15 +343,180 @@ def test_the_file_comes_first_and_shrinks(qtbot, tmp_path):
     assert (FILE_COLUMN, NAME_COLUMN) == (0, 1) and table.item(0, 0).text() == "src/calc.f90"
     header = table.horizontalHeader()
     assert header.sectionResizeMode(NAME_COLUMN) == QHeaderView.ResizeToContents
-    panel.resize(1000, 500)
+    panel.resize(2400, 500)
     panel.show()
     qtbot.waitExposed(panel)
     wide = header.sectionSize(FILE_COLUMN)
-    panel.resize(500, 500)
+    panel.resize(1000, 500)
     qtbot.wait(20)
     assert header.sectionSize(FILE_COLUMN) < wide and header.sectionSize(NAME_COLUMN) > 0
     viewport = table.viewport().width()
     assert header.length() <= viewport or header.sectionSize(FILE_COLUMN) == 60  # (no scrolling while it can shrink)
-    panel.resize(1000, 500)
+    panel.resize(2400, 500)
     qtbot.wait(20)
     assert header.sectionSize(FILE_COLUMN) >= wide - 2 and header.length() <= table.viewport().width() + 1
+
+
+# ------------------------------------------------------------ control flow
+from vibefpmgui import control_flow as cf
+
+
+def graph_of(text: str, path: str = "x.f90", index: int = 0) -> cf.Graph:
+    proc = cx.analyze_text(text, path).procedures[index]
+    return cf.build(text, path, proc)
+
+
+def edges(graph: cf.Graph) -> set[tuple[str, str, str]]:
+    """(source's first text, target's first text, label) of every edge."""
+    text = {n.id: n.text[0] for n in graph.nodes}
+    return {(text[e.source], text[e.target], e.label) for e in graph.edges}
+
+
+FLOW = """subroutine s(a, n)
+    integer, intent(inout) :: a, n   ! (declarations: not in the graph)
+    integer :: i
+    a = 0
+    if (a > 0) then
+        a = 1
+    else if (a < 0) then
+        a = 2
+    end if
+    if (n == 0) return   ! done
+    do i = 1, n
+        if (i == 2) cycle
+        select case (i)
+        case (1)
+            a = 1
+        case (5)
+            exit
+        end select
+    end do
+    if (a < 0) error stop 'bad: if (x) then'
+end subroutine s
+"""
+
+
+def test_the_control_flow_graph():
+    g = graph_of(FLOW)
+    kinds = [n.kind for n in g.nodes]
+    assert kinds.count(cf.START) == kinds.count(cf.END) == kinds.count(cf.STOP) == 1
+    assert kinds.count(cf.LOOP) == 1 and kinds.count(cf.DECISION) == 6
+    assert all("integer" not in line for n in g.nodes for line in n.text)  # (declarations)
+    found = edges(g)
+    assert ("if (a > 0) then", "a = 1", "true") in found
+    assert ("if (a > 0) then", "else if (a < 0) then", "false") in found
+    assert ("else if (a < 0) then", "if (n == 0)", "false") in found  # (no else: on)
+    assert ("if (n == 0)", "return", "true") in found and ("return", "end", "") in found
+    assert ("do i = 1, n", "if (i == 2)", "loop") in found
+    assert ("cycle", "do i = 1, n", "") in found  # (cycle: back to the loop)
+    assert ("select case (i)", "a = 1", "case (1)") in found
+    assert ("select case (i)", "do i = 1, n", "default") in found  # (no case default: back round)
+    assert ("exit", "if (a < 0)", "") in found and ("do i = 1, n", "if (a < 0)", "done") in found
+    assert ("error stop 'bad: if (x) then'", "stop", "") in found
+    proc = cx.analyze_text(FLOW).procedures[0]
+    assert g.complexity == proc.ccn == 9
+
+
+def test_legacy_control_flow():
+    text = """      SUBROUTINE TP(MODE, X)
+      DOUBLE PRECISION X(5)
+      GOTO (1, 2, 2), MODE
+      X(1) = 0
+    1 DO 10 I = 1, 5
+      DO 10 J = 1, 2
+   10 X(I) = X(I) + J
+      IF (X(1)) 20, 30, 30
+   20 RETURN
+   30 STOP
+    2 CONTINUE
+      END
+"""
+    g = graph_of(text, "legacy.f")
+    found = edges(g)
+    assert ("GOTO (1, 2, 2), MODE", "1 DO 10 I = 1, 5", "1") in found
+    assert ("GOTO (1, 2, 2), MODE", "2 CONTINUE", "2, 3") in found  # (a label twice: one edge)
+    assert ("GOTO (1, 2, 2), MODE", "X(1) = 0", "else") in found
+    assert ("DO 10 J = 1, 2", "IF (X(1)) 20, 30, 30", "done") not in found  # (the inner loop: back to the outer)
+    assert ("1 DO 10 I = 1, 5", "IF (X(1)) 20, 30, 30", "done") in found
+    assert ("IF (X(1)) 20, 30, 30", "20 RETURN", "<0") in found
+    assert ("IF (X(1)) 20, 30, 30", "30 STOP", "=0, >0") in found
+    proc = cx.analyze_text(text, "legacy.f").procedures[0]
+    assert g.complexity == proc.ccn
+
+
+def test_an_endless_do_and_a_type_in_a_program():
+    text = """program p
+    type :: pair
+        integer :: a, b
+    end type pair
+    integer :: n
+    n = 0
+    do
+        n = n + 1
+        if (n > 3) exit
+    end do
+end program p
+"""
+    g = graph_of(text)
+    found = edges(g)
+    assert not any(label == "done" for _s, _t, label in found)  # (endless: out only by its exit)
+    assert ("n = 0", "do", "") in found and ("exit", "end", "") in found
+    assert g.complexity == cx.analyze_text(text).procedures[0].ccn == 2
+
+
+def test_the_layout():
+    g = graph_of(FLOW)
+    sizes = {n.id: (120.0, 30.0) for n in g.nodes}
+    places = cf.layout(g, sizes)
+    assert set(places.positions) == {n.id for n in g.nodes}
+    back = {(g.nodes[e.source].text[0], g.nodes[e.target].text[0]) for e in g.edges if e.back}
+    assert back == {("cycle", "do i = 1, n"), ("a = 1", "do i = 1, n"), ("select case (i)", "do i = 1, n")}
+    end = next(n.id for n in g.nodes if n.kind == cf.END)
+    assert places.positions[end][1] == max(y for _x, y in places.positions.values())  # (at the bottom)
+    for index, route in places.routes.items():  # (a long edge: a point in each layer it crosses)
+        e = g.edges[index]
+        top, bottom = places.positions[e.source][1], places.positions[e.target][1]
+        assert route and all(top < y < bottom for _x, y in route)
+
+
+def test_the_graph_s_complexity_is_the_ccn_everywhere():
+    """For every procedure of the demo: edges - nodes + 2 counts the same
+    decisions as the CCN (which also counts .and. / .or.)."""
+    root = Path(__file__).resolve().parents[1] / "examples/demo"
+    checked = 0
+    for path in sorted(root.rglob("*")):
+        if not cx.is_fortran(path) or "build" in path.parts:
+            continue
+        text = path.read_text()
+        for proc in cx.analyze_text(text, path).procedures:
+            stmts = cf.procedure_statements(text, path, proc.start)
+            logical = sum(len(cx.LOGICAL_RE.findall(st.text)) for st in stmts)
+            assert cf.build(text, path, proc).complexity == proc.ccn - logical, proc.qualified
+            checked += 1
+    assert checked > 20
+
+
+def test_the_panel_shows_the_selected_procedure_s_flow(qtbot, tmp_path):
+    from qtpy.QtTest import QTest
+
+    from vibefpmgui.complexity_panel import NAME_COLUMN
+
+    panel, _root = panel_with(qtbot, tmp_path)
+    panel.resize(1400, 600)
+    panel.show()
+    qtbot.waitExposed(panel)
+    table = panel.procedures
+    assert panel.flow_shown is None
+    table.setFocus()
+    table.setCurrentCell(0, NAME_COLUMN)  # ("big": the most complex first)
+    assert panel.flow_shown.name == "big" and "big" in panel.flow_title.text()
+    assert "16 decisions" in panel.flow_title.text() and len(panel.flow.nodes) > 20
+    opened = []
+    panel.open_requested.connect(lambda path, line: opened.append((Path(path).name, line)))
+    node = next(item for item in panel.flow.nodes.values() if item.node.first)
+    panel.flow.line_clicked.emit(node.node.first)
+    assert opened == [("calc.f90", node.node.first)]
+    QTest.keyClick(table, Qt.Key_Down)  # (the arrow keys too)
+    assert panel.flow_shown.name == "small" and "0 decisions" in panel.flow_title.text()
+    panel.filter_edit.setText("smal")  # (refilled: the same procedure stays shown)
+    assert panel.flow_shown.name == "small" and table.currentRow() == 0

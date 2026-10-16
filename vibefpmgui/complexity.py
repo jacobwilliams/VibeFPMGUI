@@ -4,11 +4,13 @@ measured by a reader of Fortran's own (no Qt).
 Per procedure (subroutines, functions, module procedures, a main program):
 
 - **CCN**, the cyclomatic complexity: 1, plus 1 for each decision: ``if``
-  (a one-line one too), ``else if``, each loop (``do``, ``do while``,
-  ``do concurrent``, ``forall``), each ``case (…)`` (not ``case default``),
+  (a one-line one too), ``else if``, each loop (``do`` with a loop control,
+  ``do while``, ``do concurrent``, ``forall``: not an endless ``do``, whose
+  way out is an ``exit`` under an ``if``), each ``case (…)`` (not ``case default``),
   each ``type is`` / ``class is`` / ``rank (…)`` guard, each masked ``where``
-  / ``elsewhere``, and each ``.and.`` / ``.or.``. An arithmetic ``if`` (three
-  ways) counts 2.
+  / ``elsewhere``, and each ``.and.`` / ``.or.``. An arithmetic ``if`` counts
+  one less than its different labels (up to 2), a computed ``goto`` as many
+  as its different labels (it can also go on).
 - **NLOC**: its lines with code (not blank, not only a comment).
 - **Tokens**: its code's tokens (names, numbers, strings, operators).
 - **Parameters**: its dummy arguments.
@@ -28,7 +30,7 @@ lines, as in lizard: they choose the code, they aren't part of it.
 Where lizard's Fortran reader (1.24.1, with the fixes in its Fortran issue)
 counts differently: it counts ``select case`` and ``case default`` too, and
 the preprocessor's ``#if`` family; it doesn't count ``else if`` written with
-a space, ``where``, ``forall`` or ``type is``. It reports interface bodies
+a space, ``where``, ``forall`` or ``type is``, and counts an endless ``do``. It reports interface bodies
 (declarations) as functions but not a main program, ends a host procedure
 where its internal procedures start, and misses procedures ended by a bare
 ``END`` after another one (fixed form).
@@ -432,14 +434,17 @@ def _decisions(s: str, st: Statement, scope: _Scope) -> int:
             opened("if")
             return 1
         if re.match(r"^\d+\s*,\s*\d+\s*,\s*\d+$", after):
-            return 2  # (an arithmetic if: three ways)
+            return len(set(re.findall(r"\d+", after))) - 1  # (an arithmetic if: up to three ways)
         return 1 + (_decisions(after, st, scope) if after else 0)  # (a one-line if, and its statement)
     if re.match(r"^else\s*if\s*\(", s):
         return 1
+    found = re.match(r"^go\s*to\s*\(([\d\s,]+)\)", s)
+    if found:  # (a computed goto: to each label, or on: one way more than its labels)
+        return len(set(re.findall(r"\d+", found.group(1))))
     found = DO_RE.match(s)
     if found:
         opened("do", found.group(1) or "")
-        return 1
+        return 0 if s.strip() == "do" else 1  # (an endless "do" decides nothing: its exits' ifs do)
     if re.match(r"^(where|forall)\s*\(", s):
         rest = s[_close_paren(s, s.index("(")):].strip()
         if not rest:

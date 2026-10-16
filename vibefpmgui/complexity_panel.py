@@ -1,8 +1,10 @@
 """The *Complexity* tab: each procedure's complexity, as lizard measures it
 (see `vibefpmgui.complexity`): CCN, lines of code, tokens, parameters,
-length and nesting depth, the values over lizard's thresholds in red; and
-each file's totals. Click a procedure to open it; click a file to list only
-its procedures.
+length and nesting depth, the values over lizard's thresholds in red; each
+file's totals; and the selected procedure's control-flow graph (see
+`vibefpmgui.control_flow`, `vibefpmgui.cfg_view`). Click a procedure to open
+it; click a file to list only its procedures; click a node of the graph to
+open its lines.
 """
 
 from __future__ import annotations
@@ -28,9 +30,12 @@ from qtpy.QtWidgets import (
 )
 
 from . import complexity as cx
+from . import control_flow as cf
 from .build_monitor import PALETTES, TitleIcon, app_is_light, panel_stylesheet
+from .cfg_view import CfgView
 from .coverage_panel import NumberItem
 from .icons import symbol_icon
+from .source_text import read_source
 from .widgets import StatusLabel
 
 OVER = "#e03131"  # a value over its threshold
@@ -48,6 +53,7 @@ COLUMN_TIPS = {
     "OVER": "Procedures with a value over its threshold",
 }
 METRIC_OF_COLUMN = {"CCN": "ccn", "PARAMS": "params", "LENGTH": "length", "DEPTH": "depth"}
+PROCEDURE_ROLE = Qt.UserRole + 1  # a procedure's row: its complexity.Procedure
 
 
 class ComplexityPanel(QWidget):
@@ -119,6 +125,23 @@ class ComplexityPanel(QWidget):
         self.splitter.addWidget(self.file_table)
         self.splitter.setStretchFactor(0, 3)
         self.splitter.setStretchFactor(1, 1)
+        # The selected procedure's control flow, beside the tables.
+        self.flow_title = StatusLabel()
+        self.flow = CfgView()
+        self.flow.line_clicked.connect(self._flow_line_clicked)
+        self.flow_shown: cx.Procedure | None = None
+        flow_box = QWidget()
+        flow_layout = QVBoxLayout(flow_box)
+        flow_layout.setContentsMargins(0, 0, 0, 0)
+        flow_layout.setSpacing(4)
+        flow_layout.addWidget(self.flow_title)
+        flow_layout.addWidget(self.flow, 1)
+        self.body = QSplitter(Qt.Horizontal)
+        self.body.addWidget(self.splitter)
+        self.body.addWidget(flow_box)
+        self.body.setStretchFactor(0, 3)
+        self.body.setStretchFactor(1, 2)
+        self.procedures.currentCellChanged.connect(lambda row, *_: self._show_flow(row))
 
         self.empty = QLabel()
         self.empty.setAlignment(Qt.AlignCenter)
@@ -129,7 +152,7 @@ class ComplexityPanel(QWidget):
         layout.setSpacing(8)
         layout.addLayout(header)
         layout.addLayout(totals_row)
-        layout.addWidget(self.splitter, 1)
+        layout.addWidget(self.body, 1)
         layout.addWidget(self.empty, 1)
         self.refresh_fonts()
         self.show_message("Open a project to see the complexity of its Fortran code here.")
@@ -170,8 +193,9 @@ class ComplexityPanel(QWidget):
         self.palette_colors = pal = PALETTES["light" if self.is_light else "dark"]
         self.setStyleSheet(panel_stylesheet(self.objectName(), pal))
         self.title_icon.draw(pal["text"], self.title)
-        for label in (self.subtitle, self.empty, self.totals):
+        for label in (self.subtitle, self.empty, self.totals, self.flow_title):
             label.setStyleSheet(f"color: {pal['muted']};")
+        self.flow.set_dark(not self.is_light)
         self._fill()
 
     def refresh_fonts(self):
@@ -186,7 +210,7 @@ class ComplexityPanel(QWidget):
         """Nothing to list: why, or what's happening."""
         self.empty.setText(message)
         self.empty.show()
-        self.splitter.hide()
+        self.body.hide()
         self.filter_edit.setEnabled(False)
         self.totals.setText("")
 
@@ -224,7 +248,7 @@ class ComplexityPanel(QWidget):
                 self.show_message("No Fortran files in this project.")
             return
         self.empty.hide()
-        self.splitter.show()
+        self.body.show()
         self.filter_edit.setEnabled(True)
         self.subtitle.setText(" · ".join(part for part in (self.description, f"{len(files)} files") if part))
         procedures = [p for f in files for p in f.procedures]
@@ -251,6 +275,7 @@ class ComplexityPanel(QWidget):
                     continue
                 rows.append((proc, label))
         table = self.procedures
+        table.blockSignals(True)  # (refilling isn't choosing a procedure: see the end)
         table.setSortingEnabled(False)
         table.setRowCount(len(rows))
         muted = QColor(self.palette_colors["muted"])
@@ -262,6 +287,7 @@ class ComplexityPanel(QWidget):
             file_cell.setForeground(QBrush(muted))
             for cell in (file_cell, name):
                 cell.setData(Qt.UserRole, (str(proc.path), proc.start))
+                cell.setData(PROCEDURE_ROLE, proc)
             cells = [file_cell, name]
             for column in PROCEDURE_COLUMNS[2:]:
                 value = {"CCN": proc.ccn, "NLOC": proc.nloc, "TOKENS": proc.tokens, "PARAMS": proc.params,
@@ -280,6 +306,62 @@ class ComplexityPanel(QWidget):
         table.setSortingEnabled(True)
         table.resizeColumnsToContents()
         self._fit_file_column()
+        table.blockSignals(False)
+        self._keep_flow()
+
+    # ------------------------------------------------------------ control flow
+    def set_code_font(self, font: QFont):
+        """The graph's font (the editor's)."""
+        self.flow.set_code_font(font)
+
+    def _row_of(self, path: Path, qualified: str) -> int | None:
+        for row in range(self.procedures.rowCount()):
+            proc = self.procedures.item(row, NAME_COLUMN).data(PROCEDURE_ROLE)
+            if proc.path == path and proc.qualified == qualified:
+                return row
+        return None
+
+    def _keep_flow(self):
+        """After the tables are filled again (a save, a filter): the procedure
+        shown stays selected, its graph drawn again from its file (it may have
+        changed); gone, the graph goes too."""
+        shown = self.flow_shown
+        if shown is None:
+            return
+        row = self._row_of(shown.path, shown.qualified)
+        if row is None:
+            if not any(p.path == shown.path and p.qualified == shown.qualified
+                       for f in self.files for p in f.procedures):
+                self.flow_shown = None
+                self.flow_title.setText("")
+                self.flow.show_message("Select a procedure to see its control flow.")
+            return
+        self.procedures.blockSignals(True)
+        self.procedures.setCurrentCell(row, NAME_COLUMN)
+        self.procedures.blockSignals(False)
+        self._show_flow(row, again=True)
+
+    def _show_flow(self, row: int, again: bool = False):
+        """The control-flow graph of the procedure in ``row``."""
+        item = self.procedures.item(row, NAME_COLUMN) if row >= 0 else None
+        proc = item.data(PROCEDURE_ROLE) if item is not None else None
+        if proc is None or (not again and proc is self.flow_shown):
+            return
+        self.flow_shown = proc
+        try:
+            text = read_source(proc.path).text
+        except OSError as error:
+            self.flow.show_message(f"Couldn't read {proc.path.name}: {error}")
+            return
+        graph = cf.build(text, proc.path, proc)
+        decisions = graph.complexity - 1
+        self.flow_title.setText(f"<b>{html.escape(proc.name)}</b> · lines {proc.start}–{proc.end} · "
+                                f"{decisions} decision{'s' * (decisions != 1)} · click a node to open it")
+        self.flow.show_graph(graph)
+
+    def _flow_line_clicked(self, line: int):
+        if self.flow_shown is not None:
+            self.open_requested.emit(str(self.flow_shown.path), line)
 
     def _procedure_tip(self, proc: cx.Procedure, label: str, over: set[str]) -> str:
         lines = [f"<b>{html.escape(proc.qualified)}</b> ({proc.kind})",
