@@ -739,3 +739,30 @@ def test_a_changed_include_is_measured_again(tmp_path, monkeypatch):
     os.utime(inc, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
     files, cache = measure(roots, False, cache)
     assert read == ["m.F90"] and next(p for p in files[0].procedures if p.name == "plain").ccn == 3
+
+
+def test_only_the_changed_files_rows_are_made_again(qtbot, tmp_path):
+    """(A big project's thousands of rows were all made again at every save.)"""
+    from vibefpmgui.complexity_panel import NAME_COLUMN
+
+    panel, root = panel_with(qtbot, tmp_path)
+    panel.tests_check.setChecked(True)
+    procs = panel.procedures
+    check_cell = next(procs.item(r, NAME_COLUMN) for r in range(procs.rowCount())
+                     if procs.item(r, NAME_COLUMN).text() == "check")
+    procs.setCurrentCell(next(r for r in range(procs.rowCount()) if procs.item(r, NAME_COLUMN).text() == "small"),
+                         NAME_COLUMN)
+    assert panel.flow_shown.name == "small"
+    calc = root / "src/calc.f90"
+    calc.write_text(calc.read_text().replace("subroutine small()\n", "subroutine small()\n    if (.true.) x = 1\n"))
+    files = [cx.analyze_file(calc) if f.path == calc else f for f in panel.files]  # (the others: as they were)
+    panel.show_metrics(files, root, [root / "test"], [], "later")
+    assert ("small", "2") in rows(panel) and ("check", "2") in rows(panel)
+    assert any(procs.item(r, NAME_COLUMN) is check_cell for r in range(procs.rowCount()))  # (its row: kept)
+    assert [rows(panel)[i][1] for i in range(3)] == sorted((r[1] for r in rows(panel)), key=int, reverse=True)
+    assert panel.flow_shown.name == "small" and "1 decision" in panel.flow_title.text()  # (still shown: anew)
+    assert procs.item(procs.currentRow(), NAME_COLUMN).text() == "small"
+    assert panel.subtitle.text() == "later · 2 files"
+    shown = panel.file_table.item(0, 0)
+    panel.show_metrics(files, root, [root / "test"], [], "later")  # (nothing changed: nothing made again)
+    assert panel.file_table.item(0, 0) is shown

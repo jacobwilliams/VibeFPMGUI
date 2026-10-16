@@ -54,6 +54,8 @@ COLUMN_TIPS = {
 }
 METRIC_OF_COLUMN = {"CCN": "ccn", "PARAMS": "params", "LENGTH": "length", "DEPTH": "depth"}
 PROCEDURE_ROLE = Qt.UserRole + 1  # a procedure's row: its complexity.Procedure
+FILE_ROLE = Qt.UserRole + 2  # a row's file (its FileMetrics' path: a procedure in an included file's is the includer's)
+MAX_CHANGED_FILES = 50  # more files changed than this: the tables filled again, not their rows replaced
 
 
 class ComplexityPanel(QWidget):
@@ -66,6 +68,8 @@ class ComplexityPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.files: list[cx.FileMetrics] = []
+        self._labels: dict[Path, str] = {}  # (a file's label, worked out once: see label)
+        self._is_test: dict[Path, bool] = {}
         self.project_dir: Path | None = None
         self.test_dirs: list[Path] = []
         self.dependency_dirs: list[Path] = []
@@ -224,23 +228,51 @@ class ComplexityPanel(QWidget):
     def show_metrics(self, files: list[cx.FileMetrics], project_dir: Path, test_dirs: list[Path] | None = None,
                      dependency_dirs: list[Path] | None = None, description: str = ""):
         """Every measured file's metrics (the project's tests and the
-        dependencies' are listed only with their boxes ticked)."""
+        dependencies' are listed only with their boxes ticked). A file not
+        measured again is the same FileMetrics as before: when only a few
+        have changed (a save), only their rows are replaced (a big project's
+        thousands of rows, all made again, held the window up at every save)."""
+        place = (project_dir.resolve(), [Path(d).resolve() for d in test_dirs or []],
+                 [Path(d).resolve() for d in dependency_dirs or []])
+        old = {f.path: f for f in self.files}
+        same = (place == (self.project_dir, self.test_dirs, self.dependency_dirs) and self.body.isVisibleTo(self)
+                and len(old) == len(files) and all(f.path in old for f in files))
+        changed = [f for f in files if old.get(f.path) is not f] if same else None
         self.files = files
-        self.project_dir = project_dir.resolve()
-        self.test_dirs = [Path(d).resolve() for d in test_dirs or []]
-        self.dependency_dirs = [Path(d).resolve() for d in dependency_dirs or []]
+        if place != (self.project_dir, self.test_dirs, self.dependency_dirs):
+            self._labels.clear()
+            self._is_test.clear()
+        self.project_dir, self.test_dirs, self.dependency_dirs = place
         self.description = description
+        if changed is not None and len(changed) <= MAX_CHANGED_FILES:
+            self._update_totals(self.shown_files())
+            if changed:
+                self._replace_files(changed)
+            return
         self._fill()
 
     def shown_files(self) -> list[cx.FileMetrics]:
         """The files listed: the project's own, with its tests if ticked
         (the dependencies' are only measured when their box is ticked)."""
-        def is_test(path: Path) -> bool:
-            return any(path.is_relative_to(d) for d in self.test_dirs)
-        return [f for f in self.files if self.tests_check.isChecked() or not is_test(f.path.resolve())]
+        if self.tests_check.isChecked():
+            return list(self.files)
+        return [f for f in self.files if not self._test_file(f.path)]
+
+    def _test_file(self, path: Path) -> bool:
+        found = self._is_test.get(path)
+        if found is None:
+            resolved = path.resolve()
+            found = self._is_test[path] = any(resolved.is_relative_to(d) for d in self.test_dirs)
+        return found
 
     def label(self, path: Path) -> str:
         """A file's name as listed: its path in the project (or in its dependency)."""
+        label = self._labels.get(path)
+        if label is None:
+            label = self._labels[path] = self._label(path)
+        return label
+
+    def _label(self, path: Path) -> str:
         path = path.resolve()
         for top in (*self.dependency_dirs, self.project_dir):
             if top is not None and path.is_relative_to(top):
@@ -257,6 +289,11 @@ class ComplexityPanel(QWidget):
         self.empty.hide()
         self.body.show()
         self.filter_edit.setEnabled(True)
+        self._update_totals(files)
+        self._fill_files(files)
+        self._fill_procedures()
+
+    def _update_totals(self, files: list[cx.FileMetrics]):
         self.subtitle.setText(" · ".join(part for part in (self.description, f"{len(files)} files") if part))
         procedures = [p for f in files for p in f.procedures]
         over = [p for p in procedures if p.warnings(self.thresholds)]
@@ -269,8 +306,6 @@ class ComplexityPanel(QWidget):
                                else "none over a threshold"))
         self.totals.setToolTip("Thresholds (lizard's): " + ", ".join(
             f"{key.upper() if key == 'ccn' else key} {value}" for key, value in self.thresholds.items()))
-        self._fill_files(files)
-        self._fill_procedures()
 
     def chosen_file(self) -> str | None:
         """The file chosen in the files' table (its label), if the filter is
@@ -280,52 +315,94 @@ class ComplexityPanel(QWidget):
         label = item.data(Qt.UserRole) if item is not None else None
         return label if label and label == self.filter_edit.text() else None
 
-    def _fill_procedures(self):
+    def _listed(self, files: list[cx.FileMetrics]) -> list[tuple[cx.FileMetrics, cx.Procedure, str]]:
+        """(file, procedure, file's label) of the files' procedures the filter
+        lets through (a file chosen: only that file's)."""
         needle = self.filter_edit.text().strip().lower()
         chosen = self.chosen_file()
         rows = []
-        for f in self.shown_files():
+        for f in files:
             label = self.label(f.path)
+            if chosen is not None and label != chosen:  # (only that file's: not another path it's a part of)
+                continue
             for proc in f.procedures:
-                if chosen is not None:
-                    if label != chosen:  # (only that file's: not another path it's a part of)
-                        continue
-                elif needle and needle not in proc.qualified.lower() and needle not in label.lower():
+                if chosen is None and needle and needle not in proc.qualified.lower() and needle not in label.lower():
                     continue
-                rows.append((proc, label))
-        self.procedures.setColumnHidden(FILE_COLUMN, chosen is not None)  # (one file: no need to say which)
+                rows.append((f, proc, label))
+        return rows
+
+    def _fill_procedures(self):
+        rows = self._listed(self.shown_files())
+        self.procedures.setColumnHidden(FILE_COLUMN, self.chosen_file() is not None)  # (one file: no need to say which)
         table = self.procedures
         table.blockSignals(True)  # (refilling isn't choosing a procedure: see the end)
         table.setSortingEnabled(False)
         table.setRowCount(len(rows))
-        muted = QColor(self.palette_colors["muted"])
-        for row, (proc, label) in enumerate(rows):
-            over = set(proc.warnings(self.thresholds))
-            name = QTableWidgetItem(proc.name)
-            name.setIcon(symbol_icon(proc.kind))
-            file_cell = QTableWidgetItem(label)
-            file_cell.setForeground(QBrush(muted))
-            for cell in (file_cell, name):
-                cell.setData(Qt.UserRole, (str(proc.path), proc.start))
-                cell.setData(PROCEDURE_ROLE, proc)
-            cells = [file_cell, name]
-            for column in PROCEDURE_COLUMNS[2:]:
-                value = {"CCN": proc.ccn, "NLOC": proc.nloc, "TOKENS": proc.tokens, "PARAMS": proc.params,
-                         "LENGTH": proc.length, "DEPTH": proc.depth}[column]
-                cell = NumberItem(f"{value:,}", value)
-                if METRIC_OF_COLUMN.get(column) in over:
-                    cell.setForeground(QBrush(QColor(OVER)))
-                    bold = QFont(table.font())
-                    bold.setWeight(QFont.Bold)
-                    cell.setFont(bold)
-                cells.append(cell)
-            tip = self._procedure_tip(proc, label, over)
-            for column, cell in enumerate(cells):
-                cell.setToolTip(tip)
+        for row, listed in enumerate(rows):
+            for column, cell in enumerate(self._procedure_cells(*listed)):
                 table.setItem(row, column, cell)
         table.setSortingEnabled(True)
         self._fit_columns(table)
         table.blockSignals(False)
+        self._keep_flow()
+
+    def _procedure_cells(self, f: cx.FileMetrics, proc: cx.Procedure, label: str) -> list[QTableWidgetItem]:
+        """A procedure's row."""
+        over = set(proc.warnings(self.thresholds))
+        name = QTableWidgetItem(proc.name)
+        name.setIcon(symbol_icon(proc.kind))
+        name.setData(FILE_ROLE, f.path)
+        file_cell = QTableWidgetItem(label)
+        file_cell.setForeground(QBrush(QColor(self.palette_colors["muted"])))
+        for cell in (file_cell, name):
+            cell.setData(Qt.UserRole, (str(proc.path), proc.start))
+            cell.setData(PROCEDURE_ROLE, proc)
+        cells = [file_cell, name]
+        for column in PROCEDURE_COLUMNS[2:]:
+            value = {"CCN": proc.ccn, "NLOC": proc.nloc, "TOKENS": proc.tokens, "PARAMS": proc.params,
+                     "LENGTH": proc.length, "DEPTH": proc.depth}[column]
+            cell = NumberItem(f"{value:,}", value)
+            if METRIC_OF_COLUMN.get(column) in over:
+                cell.setForeground(QBrush(QColor(OVER)))
+                bold = QFont(self.procedures.font())
+                bold.setWeight(QFont.Bold)
+                cell.setFont(bold)
+            cells.append(cell)
+        tip = self._procedure_tip(proc, label, over)
+        for cell in cells:
+            cell.setToolTip(tip)
+        return cells
+
+    def _replace_files(self, changed: list[cx.FileMetrics]):
+        """The rows of files measured again (and only theirs) made again."""
+        paths = {f.path for f in changed}
+        shown = [f for f in self.shown_files() if f.path in paths]
+        table = self.procedures
+        table.blockSignals(True)  # (as in _fill_procedures)
+        table.setSortingEnabled(False)
+        for row in reversed(range(table.rowCount())):
+            if table.item(row, NAME_COLUMN).data(FILE_ROLE) in paths:
+                table.removeRow(row)
+        for listed in self._listed(shown):
+            row = table.rowCount()
+            table.insertRow(row)
+            for column, cell in enumerate(self._procedure_cells(*listed)):
+                table.setItem(row, column, cell)
+        table.setSortingEnabled(True)  # (sorted again: in Qt, all at once)
+        self._fit_columns(table)
+        table.blockSignals(False)
+        files = self.file_table
+        files.blockSignals(True)
+        files.setSortingEnabled(False)
+        by_path = {f.path: f for f in shown}
+        for row in range(files.rowCount()):
+            f = by_path.get(files.item(row, 0).data(FILE_ROLE))
+            if f is not None:
+                for column, cell in enumerate(self._file_cells(f)):
+                    files.setItem(row, column, cell)
+        files.setSortingEnabled(True)
+        self._fit_columns(files)
+        files.blockSignals(False)
         self._keep_flow()
 
     # ------------------------------------------------------------ control flow
@@ -403,20 +480,7 @@ class ComplexityPanel(QWidget):
         table.setSortingEnabled(False)
         table.setRowCount(len(files))
         for row, f in enumerate(files):
-            label = self.label(f.path)
-            name = QTableWidgetItem(label)
-            if self.icon_for is not None:
-                name.setIcon(self.icon_for(f.path))
-            name.setData(Qt.UserRole, label)
-            over = sum(1 for p in f.procedures if p.warnings(self.thresholds))
-            highest = max((p.ccn for p in f.procedures), default=0)
-            cells = [name, NumberItem(f"{f.nloc:,}", f.nloc), NumberItem(str(len(f.procedures)), len(f.procedures)),
-                     NumberItem(f"{f.average_ccn:.1f}", f.average_ccn), NumberItem(str(highest), highest),
-                     NumberItem(str(over), over)]
-            if over:
-                cells[-1].setForeground(QBrush(QColor(OVER)))
-            for column, cell in enumerate(cells):
-                cell.setToolTip(f"{html.escape(str(f.path))}<br>Click to list only its procedures")
+            for column, cell in enumerate(self._file_cells(f)):
                 table.setItem(row, column, cell)
         table.setSortingEnabled(True)
         self._fit_columns(table)
@@ -425,6 +489,25 @@ class ComplexityPanel(QWidget):
             if table.item(row, 0).data(Qt.UserRole) == chosen:
                 table.setCurrentCell(row, 0)
         table.blockSignals(False)
+
+    def _file_cells(self, f: cx.FileMetrics) -> list[QTableWidgetItem]:
+        """A file's row."""
+        label = self.label(f.path)
+        name = QTableWidgetItem(label)
+        if self.icon_for is not None:
+            name.setIcon(self.icon_for(f.path))
+        name.setData(Qt.UserRole, label)
+        name.setData(FILE_ROLE, f.path)
+        over = sum(1 for p in f.procedures if p.warnings(self.thresholds))
+        highest = max((p.ccn for p in f.procedures), default=0)
+        cells = [name, NumberItem(f"{f.nloc:,}", f.nloc), NumberItem(str(len(f.procedures)), len(f.procedures)),
+                 NumberItem(f"{f.average_ccn:.1f}", f.average_ccn), NumberItem(str(highest), highest),
+                 NumberItem(str(over), over)]
+        if over:
+            cells[-1].setForeground(QBrush(QColor(OVER)))
+        for cell in cells:
+            cell.setToolTip(f"{html.escape(str(f.path))}<br>Click to list only its procedures")
+        return cells
 
     def _procedure_clicked(self, row: int, _column: int):
         item = self.procedures.item(row, NAME_COLUMN)

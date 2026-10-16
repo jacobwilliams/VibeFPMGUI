@@ -77,3 +77,11 @@ def test_quick_for_a_big_build(tmp_path):
     for i in range(400):  # (every file of a 400-file build finishing)
         assert finder.find(f"file{i}.f90", [tmp_path / "src" / f"file{i}.f90"], since)
     assert time.monotonic() - started < 2.0
+
+
+def test_unknown_paths_with_underscores_in_their_names(tmp_path):
+    folder = make_build(tmp_path, configs=1, files=5)
+    for name in ("src_my_mod.f90.o.log", "lib_my_mod.f90.o.log", "src_other_mod.f90.o.log", "src_mod.f90.o.log"):
+        (folder / name).write_text("")
+    found = LogFinder(tmp_path).find("my_mod.f90", [], time.time() - 60)  # (by its name's tail: "mod.f90.o.log")
+    assert sorted(log.name for _t, log in found) == ["lib_my_mod.f90.o.log", "src_my_mod.f90.o.log"]

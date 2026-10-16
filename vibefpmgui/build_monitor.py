@@ -624,7 +624,8 @@ class LogFinder:
         self._root = project_dir.resolve()
         self.build = project_dir / "build"
         self._folders: tuple[tuple, list[Path]] = ((), [])  # (what they were listed from, the folders)
-        self._listings: dict[Path, tuple[int, list[str]]] = {}  # folder -> (its mtime, its log names)
+        self._listings: dict[Path, tuple[int, dict[str, list[str]]]] = {}  # folder -> (its mtime, its logs by tail)
+        self._resolved: dict[Path, Path] = {}  # (a source's path, resolved once)
         self.listed = 0  # folders listed (for the tests)
 
     def folders(self) -> list[Path]:
@@ -648,8 +649,11 @@ class LogFinder:
         """The log names fpm would give a file with this name and these paths."""
         names = [f"{name}.o.log"]
         for path in paths:
+            resolved = self._resolved.get(path)
+            if resolved is None:
+                resolved = self._resolved[path] = Path(path).resolve()
             try:
-                rel = os.path.relpath(Path(path).resolve(), self._root)
+                rel = os.path.relpath(resolved, self._root)
             except ValueError:  # (Windows: another drive)
                 continue
             names.append(rel.replace("\\", "_").replace("/", "_") + ".o.log")
@@ -660,14 +664,16 @@ class LogFinder:
         since ``since`` (the build's start)."""
         folders = self.folders()
         found = []
+        log_names = self.log_names(name, paths)
         for folder in folders:
-            for log_name in self.log_names(name, paths):
+            for log_name in log_names:
                 found += self._if_new(folder / log_name, since)
         if found:
             return found
+        own = f"{name}.o.log"
         for folder in folders:  # (not found by its path, or that isn't known: any log of that file name)
-            for log_name in self._listing(folder):
-                if log_name == f"{name}.o.log" or log_name.endswith(f"_{name}.o.log"):
+            for log_name in self._listing(folder).get(_tail(own), ()):
+                if log_name == own or log_name.endswith(f"_{own}"):
                     found += self._if_new(folder / log_name, since)
         return found
 
@@ -679,20 +685,32 @@ class LogFinder:
             return []
         return [(mtime, log)] if mtime >= since else []
 
-    def _listing(self, folder: Path) -> list[str]:
+    def _listing(self, folder: Path) -> dict[str, list[str]]:
+        """The folder's logs, by their names' tails (see `_tail`): a file's
+        are under its own name's tail, so they're found without going
+        through every log of a big build."""
         try:
             mtime = folder.stat().st_mtime_ns
         except OSError:
-            return []
+            return {}
         cached = self._listings.get(folder)
         if cached is None or cached[0] != mtime:
             self.listed += 1
+            by_tail: dict[str, list[str]] = {}
             try:
-                names = [e.name for e in os.scandir(folder) if e.name.endswith(".o.log")]
+                for entry in os.scandir(folder):
+                    if entry.name.endswith(".o.log"):
+                        by_tail.setdefault(_tail(entry.name), []).append(entry.name)
             except OSError:
-                names = []
-            cached = self._listings[folder] = (mtime, names)
+                pass
+            cached = self._listings[folder] = (mtime, by_tail)
         return cached[1]
+
+
+def _tail(log_name: str) -> str:
+    """A log's name after its last "_" (fpm's "src_sub_name.f90.o.log" →
+    "name.f90.o.log"): "a_b.f90.o.log" and "src_a_b.f90.o.log" share theirs."""
+    return log_name.rsplit("_", 1)[-1]
 
 
 class TitleIcon(QLabel):
@@ -825,6 +843,7 @@ class BuildMonitor(SortableTable, QWidget):
         self.empty.setWordWrap(True)
         layout.addWidget(self.empty, 1)
 
+        self._header_pending = False  # (see _header_later)
         # Drives the spinner, the live times and the finish flash.
         self._timer = QTimer(self)
         self._timer.setInterval(50)
@@ -946,7 +965,7 @@ class BuildMonitor(SortableTable, QWidget):
                                      else WARNING if target.warnings else DONE)
             else:
                 self._add(name)
-            self.update_header()
+            self._header_later()
             return
 
         match = FAILED_OBJECT_RE.search(line)
@@ -954,7 +973,7 @@ class BuildMonitor(SortableTable, QWidget):
             target = self._find_object(match.group(1))
             if target:
                 self._mark_failed(target)
-            self.update_header()
+            self._header_later()
             return
 
         if UP_TO_DATE_RE.search(line):
@@ -1027,7 +1046,7 @@ class BuildMonitor(SortableTable, QWidget):
             if target.status in (DONE, WARNING):
                 self._set_status(target, WARNING)
         self._update_tooltip(target)
-        self.update_header()
+        self._header_later()
 
     # ------------------------------------------------------------- helpers
     def _find(self, name: str, running: bool) -> Target | None:
@@ -1161,7 +1180,16 @@ class BuildMonitor(SortableTable, QWidget):
             counts[t.status] += 1
         return counts
 
+    def _header_later(self):
+        """The header brought up to date once the lines that have come in are
+        all read (not after each: a big build's thousands of lines each
+        counting every row and laying out the header's text held the window)."""
+        if not self._header_pending:
+            self._header_pending = True
+            QTimer.singleShot(0, self, self.update_header)
+
     def update_header(self):
+        self._header_pending = False
         pal = self.palette_colors
         parts = [self.description] if self.description else []
         if self.peak_parallel > 1:

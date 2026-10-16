@@ -237,6 +237,7 @@ class ProjectTree(QWidget):
         self.graph: m.DependencyGraph | None = None
         self._items: dict[str, QStandardItem] = {}  # path -> file/dir item
         self._marks: dict[str, str] = {}            # path -> "error" / "warning"
+        self._real_dirs: dict[str, str] = {}        # folder -> its resolved path (see _real)
         self._icons = QFileIconProvider()
         self._folder_icon = self._icons.icon(QFileIconProvider.Folder)
         self._icon_cache: dict = {}
@@ -315,6 +316,7 @@ class ProjectTree(QWidget):
         selected = self._selected_path() if keep_state else None
         self.model.clear()
         self._items.clear()
+        self._real_dirs.clear()
         self._all_loaded = None
         if self.project_dir is None:
             self._update_empty()
@@ -569,7 +571,7 @@ class ProjectTree(QWidget):
     # -------------------------------------------------- build results marks
     def set_marks(self, marks: dict[str, str]):
         """Color files by the last build: {path: "error" | "warning"}."""
-        self._marks = {str(Path(p).resolve()): v for p, v in marks.items()}
+        self._marks = {self._real(os.path.abspath(p)): v for p, v in marks.items()}
         self.refresh_marks()
 
     def refresh_marks(self):
@@ -577,11 +579,22 @@ class ProjectTree(QWidget):
             if item.data(KIND_ROLE) == "file" or item.data(HIDDEN_ROLE) or item.data(IGNORED_ROLE):
                 self._mark_item(path, item)
 
+    def _real(self, path: str) -> str:
+        """A file's path with its folder resolved (as a build's file paths are:
+        its package's folder resolved, then the file in it). The folder is
+        resolved once: resolving each of a big project's files, again after
+        every build, held the window (slowest on Windows)."""
+        folder, name = os.path.split(path)
+        real = self._real_dirs.get(folder)
+        if real is None:
+            real = self._real_dirs[folder] = str(Path(folder).resolve())
+        return os.path.join(real, name)
+
     def _mark_item(self, path: str, item: QStandardItem):
         if item.data(HIDDEN_ROLE):
             item.setForeground(self._grey())  # greyed entries stay grey
             return
-        mark = self._marks.get(str(Path(path).resolve())) if self._marks else None
+        mark = self._marks.get(self._real(path)) if self._marks else None
         ignored = item.data(IGNORED_ROLE)
         if mark:
             item.setForeground(QColor(FILE_COLORS[mark]))
