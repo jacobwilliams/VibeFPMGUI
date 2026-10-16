@@ -2,13 +2,17 @@
 pyqtgraph: a box per block (its first lines of code), a hexagon per decision,
 a rounded box per loop, pills for start, end and stop; arrows labelled with
 the way taken ("true", "case (1)", "loop"…), a loop's way back curving round
-its right side. Wheel zooms, drag pans, clicking a node opens its lines.
+its right side. Wheel zooms, drag pans, clicking a node opens its lines,
+double-clicking the background fits the graph to the view; right-click for
+a menu (open or copy a node's code, center on it, fit, zoom, actual size,
+edge labels on or off, copy or save the graph as an image).
 """
 
 from __future__ import annotations
 
 import math
 from itertools import pairwise
+from pathlib import Path
 
 import numpy as np
 import pyqtgraph as pg
@@ -18,17 +22,28 @@ from qtpy.QtGui import (
     QColor,
     QFont,
     QFontMetricsF,
+    QImage,
     QPainter,
     QPainterPath,
     QPen,
     QPolygonF,
 )
-from qtpy.QtWidgets import QLabel, QStackedLayout, QWidget
+from qtpy.QtWidgets import (
+    QApplication,
+    QFileDialog,
+    QLabel,
+    QMenu,
+    QMessageBox,
+    QStackedLayout,
+    QWidget,
+)
 
 from . import control_flow as cf
 from .graph_view import LAYERED_TB, _bezier, edge_geometry
 
 PADDING = 8
+MAX_FIT_SCALE = 1.3  # (fitting doesn't blow a small graph up beyond 130 %)
+IMAGE_SCALE = 2  # (an image's pixels per unit of the graph)
 COLORS = {
     "light": {"background": "#ffffff", "text": "#1f2328", "edge": "#8b949e", "label": "#57606a",
               cf.BLOCK: ("#f6f8fa", "#d0d7de"), cf.DECISION: ("#fff4e5", "#e8a317"), cf.LOOP: ("#e7f5ff", "#4c6ef5"),
@@ -115,6 +130,27 @@ class CfgNode(pg.GraphicsObject):
             self.view.line_clicked.emit(self.node.first)
 
 
+class EdgeLabel(pg.GraphicsObject):
+    """An edge's label, in the graph's units (so it zooms and exports with
+    the graph); ``right``: its right edge at its place, not its left."""
+
+    def __init__(self, text: str, font: QFont, color: str, right: bool):
+        super().__init__()
+        self.text, self.font, self.color = text, font, color
+        metrics = QFontMetricsF(font)
+        width = metrics.horizontalAdvance(text)
+        self.rect = QRectF(-width if right else 0, 0, width, metrics.height())
+        self.setZValue(3)
+
+    def boundingRect(self):
+        return self.rect
+
+    def paint(self, painter: QPainter, option, widget=None):
+        painter.setPen(QColor(self.color))
+        painter.setFont(self.font)
+        painter.drawText(self.rect, Qt.AlignLeft | Qt.AlignVCenter, self.text)
+
+
 class CfgView(QWidget):
     """A control-flow graph, or a message instead of one."""
 
@@ -123,6 +159,10 @@ class CfgView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.graph: cf.Graph | None = None
+        self.source: list[str] = []  # (the procedure's file's lines, for Copy Code)
+        self.show_labels = True
+        self.labels: list[EdgeLabel] = []
+        self.menu: QMenu | None = None
         self.code_font = QFont()
         self.colors = COLORS["light"]
         self.nodes: dict[int, CfgNode] = {}
@@ -133,6 +173,7 @@ class CfgView(QWidget):
         self.vb.invertY(True)
         self.vb.setMenuEnabled(False)
         self.plot.setBackground(self.colors["background"])
+        self.plot.scene().sigMouseClicked.connect(self._scene_clicked)
         self.message = QLabel()
         self.message.setAlignment(Qt.AlignCenter)
         self.message.setWordWrap(True)
@@ -151,7 +192,7 @@ class CfgView(QWidget):
         self.colors = COLORS["dark" if dark else "light"]
         self.plot.setBackground(self.colors["background"])
         if self.graph is not None:
-            self.show_graph(self.graph)
+            self.show_graph(self.graph, fit=False)
 
     def show_message(self, text: str):
         self.graph = None
@@ -160,9 +201,15 @@ class CfgView(QWidget):
         self.message.setText(text)
         self.stack.setCurrentWidget(self.message)
 
-    def show_graph(self, graph: cf.Graph):
+    def show_graph(self, graph: cf.Graph, source: str | None = None, fit: bool = True):
+        """Draw ``graph`` (``source``: its file's text, for Copy Code; kept if
+        not given); ``fit``: fit it to the view, else keep the view's range."""
+        if source is not None:
+            self.source = source.splitlines()
+        view_range = self.vb.viewRange()
         self.graph = graph
         self.vb.clear()
+        self.labels = []
         self.nodes = {n.id: CfgNode(self, n) for n in graph.nodes}
         places = cf.layout(graph, {i: item.size for i, item in self.nodes.items()})
         for i, item in self.nodes.items():
@@ -175,14 +222,164 @@ class CfgView(QWidget):
             source, target = self.nodes[edge.source], self.nodes[edge.target]
             if edge.back:
                 backs += 1
-                points, direction = _back_edge(source.scene_rect(), target.scene_rect(), right_edge + 18 * backs)
+                points, direction = _back_edge(source.scene_rect(), target.scene_rect(), right_edge + 18 * backs,
+                                               8 + 4 * (backs % 3))
             elif index in places.routes:
                 points, direction = _routed(source.scene_rect(), target.scene_rect(), places.routes[index])
             else:
                 points, direction = edge_geometry(source.scene_rect(), target.scene_rect(), LAYERED_TB, True)
             self._add_edge(points, direction, edge.label)
         self.stack.setCurrentWidget(self.plot)
-        self.vb.autoRange(padding=0.04)
+        if fit:
+            self.fit()
+        else:
+            self.vb.setRange(xRange=view_range[0], yRange=view_range[1], padding=0)
+
+    # ------------------------------------------------------------ the view
+    def bounds(self) -> QRectF:
+        """The graph's extent, in its own units."""
+        rect = QRectF()
+        for item in self.nodes.values():
+            rect = rect.united(item.mapRectToView(item.boundingRect()))
+        for item in self.vb.addedItems:
+            if isinstance(item, pg.PlotCurveItem) or (isinstance(item, EdgeLabel) and item.isVisible()):
+                rect = rect.united(item.mapRectToView(item.boundingRect()))
+        return rect
+
+    def fit(self):
+        """The whole graph in view (a small one at most 130 %)."""
+        if not self.nodes:
+            return
+        rect = self.bounds()
+        self.vb.setRange(rect=rect, padding=0.04)
+        px = self.vb.viewPixelSize()[0]
+        if 0 < px < 1 / MAX_FIT_SCALE:
+            factor = 1 / (MAX_FIT_SCALE * px)
+            self.vb.scaleBy((factor, factor), center=rect.center())
+
+    def zoom(self, factor: float, center: QPointF | None = None):
+        """Zoom in (``factor`` > 1) or out about ``center`` (the view's)."""
+        self.vb.scaleBy((1 / factor, 1 / factor), center=center if center is not None else self.vb.viewRect().center())
+
+    def actual_size(self, center: QPointF | None = None):
+        """100 %: a unit of the graph a pixel (its text the code's size)."""
+        px = self.vb.viewPixelSize()[0]
+        if px > 0:
+            self.zoom(px, center)
+
+    def center_on(self, point: QPointF):
+        here = self.vb.viewRect().center()
+        self.vb.translateBy(x=point.x() - here.x(), y=point.y() - here.y())
+
+    def set_show_labels(self, on: bool):
+        self.show_labels = on
+        for label in self.labels:
+            label.setVisible(on)
+
+    def node_at(self, scene_pos: QPointF) -> CfgNode | None:
+        point = self.vb.mapSceneToView(scene_pos)
+        return next((item for item in self.nodes.values() if item.scene_rect().contains(point)), None)
+
+    def node_code(self, node: cf.Node) -> str:
+        """The node's lines of code, as they are in the file."""
+        if not node.first or not self.source:
+            return "\n".join(node.text)
+        lines = self.source[node.first - 1:node.last]
+        indent = min((len(line) - len(line.lstrip()) for line in lines if line.strip()), default=0)
+        return "\n".join(line[indent:] for line in lines)
+
+    # ------------------------------------------------------------ the menu
+    def _scene_clicked(self, event):
+        if self.graph is None:
+            return
+        if event.button() == Qt.RightButton:
+            event.accept()
+            self.menu = self.context_menu(event.scenePos())
+            self.menu.popup(event.screenPos().toPoint())
+        elif event.button() == Qt.LeftButton and event.double() and self.node_at(event.scenePos()) is None:
+            self.fit()
+
+    def context_menu(self, scene_pos: QPointF) -> QMenu:
+        """The menu for a right-click at ``scene_pos``: a node's actions
+        first, if it's on one, then the view's."""
+        menu = QMenu(self)
+        point = self.vb.mapSceneToView(scene_pos)
+        item = self.node_at(scene_pos)
+        if item is not None:
+            node = item.node
+            if node.first:
+                lines = f"Line {node.first}" if node.first == node.last else f"Lines {node.first}–{node.last}"
+                menu.addAction(f"Open {lines}", lambda: self.line_clicked.emit(node.first))
+                menu.addAction("Copy Code", lambda: QApplication.clipboard().setText(self.node_code(node)))
+            center = item.pos()
+            menu.addAction("Center on This", lambda: self.center_on(center))
+            menu.addSeparator()
+        menu.addAction("Fit to View", self.fit)
+        menu.addAction("Zoom In", lambda: self.zoom(1.25, point))
+        menu.addAction("Zoom Out", lambda: self.zoom(0.8, point))
+        menu.addAction("Actual Size", lambda: self.actual_size(point))
+        menu.addSeparator()
+        labels = menu.addAction("Show Edge Labels")
+        labels.setCheckable(True)
+        labels.setChecked(self.show_labels)
+        labels.toggled.connect(self.set_show_labels)
+        menu.addSeparator()
+        menu.addAction("Copy Image", lambda: QApplication.clipboard().setImage(self.image()))
+        menu.addAction("Save Image…", self.save_image)
+        return menu
+
+    # ------------------------------------------------------------ images
+    def _render(self, paint_device, size) -> None:
+        """Draw the whole graph (fitted, the view put back after) onto
+        ``paint_device`` of ``size``."""
+        view_range = self.vb.viewRange()
+        self.vb.setRange(rect=self.bounds(), padding=0)
+        try:
+            bounds = self.bounds().adjusted(-6, -6, 6, 6)
+            source = self.vb.mapViewToScene(bounds).boundingRect()
+            target = QRectF(0, 0, size.width(), size.height())
+            painter = QPainter(paint_device)
+            painter.setRenderHint(QPainter.Antialiasing)
+            painter.fillRect(target, QColor(self.colors["background"]))
+            self.plot.scene().render(painter, target, source)
+            painter.end()
+        finally:
+            self.vb.setRange(xRange=view_range[0], yRange=view_range[1], padding=0)
+
+    def _image_size(self):
+        return self.bounds().adjusted(-6, -6, 6, 6).size() * IMAGE_SCALE
+
+    def image(self) -> QImage:
+        """The whole graph as an image (2 pixels per unit)."""
+        size = self._image_size().toSize()
+        image = QImage(size, QImage.Format_ARGB32)
+        self._render(image, size)
+        return image
+
+    def export_image(self, filename: str) -> bool:
+        """Save the whole graph as PNG/JPG, or SVG if the name ends in .svg."""
+        try:
+            if filename.lower().endswith(".svg"):
+                from qtpy.QtSvg import QSvgGenerator
+
+                size = self._image_size() / IMAGE_SCALE
+                svg = QSvgGenerator()
+                svg.setFileName(filename)
+                svg.setSize(size.toSize())
+                svg.setViewBox(QRectF(0, 0, size.width(), size.height()))
+                svg.setTitle(self.graph.name if self.graph else "control flow")
+                self._render(svg, size)
+                return Path(filename).exists()
+            return self.image().save(filename)
+        except Exception:  # noqa: BLE001 - report failure to the caller
+            return False
+
+    def save_image(self):
+        name = (self.graph.name if self.graph else "control-flow") + ".png"
+        filename, _ = QFileDialog.getSaveFileName(self, "Save control-flow graph", name,
+                                                  "PNG image (*.png);;SVG image (*.svg)")
+        if filename and not self.export_image(filename):
+            QMessageBox.warning(self, "Save failed", f"Could not write {filename}")
 
     def _add_edge(self, points: np.ndarray, direction, label: str):
         color = QColor(self.colors["edge"])
@@ -197,12 +394,12 @@ class CfgView(QWidget):
         if label:
             font = QFont(self.code_font)
             font.setPointSizeF(max(font.pointSizeF() - 1, 6))
-            text = pg.TextItem(label if len(label) <= 28 else label[:27] + "…", color=self.colors["label"],
-                               anchor=(0, 0))
-            text.setFont(font)
             at = points[min(len(points) - 1, max(2, len(points) // 4))]
-            text.setPos(at[0] + 3, at[1])
-            text.setZValue(3)
+            left = points[-1, 0] < points[0, 0] - 1  # (heading left: the label on its left)
+            text = EdgeLabel(label if len(label) <= 28 else label[:27] + "…", font, self.colors["label"], left)
+            text.setPos(at[0] + (-4 if left else 4), at[1])
+            text.setVisible(self.show_labels)
+            self.labels.append(text)
             self.vb.addItem(text)
 
 
@@ -220,10 +417,11 @@ def _routed(source: QRectF, target: QRectF, waypoints: list[tuple[float, float]]
     return points, (d[0], d[1])
 
 
-def _back_edge(source: QRectF, target: QRectF, x: float):
-    """A loop's way back: out of the source's right side, up along ``x``, into
-    the target's right side."""
-    p0 = QPointF(source.right(), source.center().y())
-    p3 = QPointF(target.right(), target.center().y())
-    points = np.array([[p0.x(), p0.y()], [x, p0.y()], [x, p3.y()], [p3.x(), p3.y()]])
-    return points, (p3.x() - x, 0.0)
+def _back_edge(source: QRectF, target: QRectF, x: float, drop: float):
+    """A loop's way back: down out of the source's bottom by ``drop`` (into
+    the gap below its layer, clear of the nodes beside it), right to ``x``,
+    up, and into the target's right side."""
+    cx, below = source.center().x(), source.bottom() + drop
+    ty = target.center().y()
+    points = np.array([[cx, source.bottom()], [cx, below], [x, below], [x, ty], [target.right(), ty]])
+    return points, (target.right() - x, 0.0)

@@ -79,7 +79,9 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   decisions (`if`, `select case`, `where`, computed and arithmetic `goto`
   …), loops with their way back, and `return` / `stop` exits, each arrow
   labelled with the way taken. Wheel to zoom, drag to pan, click a node to
-  open its lines.
+  open its lines, double-click the background to fit it. Right-click for
+  more: open or copy a node's code, center on it, fit, zoom, actual size,
+  edge labels on or off, copy or save the graph as an image (PNG or SVG).
 * *Git* panel: the project's repository's branch (with its upstream and
   how many commits ahead or behind), and its changed files: staged, not
   staged, untracked, in conflict. Select a file to see its diff, side by side

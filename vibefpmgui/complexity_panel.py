@@ -356,8 +356,9 @@ class ComplexityPanel(QWidget):
         graph = cf.build(text, proc.path, proc)
         decisions = graph.complexity - 1
         self.flow_title.setText(f"<b>{html.escape(proc.name)}</b> · lines {proc.start}–{proc.end} · "
-                                f"{decisions} decision{'s' * (decisions != 1)} · click a node to open it")
-        self.flow.show_graph(graph)
+                                f"{decisions} decision{'s' * (decisions != 1)} · click a node to open it, "
+                                "right-click for more")
+        self.flow.show_graph(graph, text)
 
     def _flow_line_clicked(self, line: int):
         if self.flow_shown is not None:

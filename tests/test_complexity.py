@@ -520,3 +520,62 @@ def test_the_panel_shows_the_selected_procedure_s_flow(qtbot, tmp_path):
     assert panel.flow_shown.name == "small" and "0 decisions" in panel.flow_title.text()
     panel.filter_edit.setText("smal")  # (refilled: the same procedure stays shown)
     assert panel.flow_shown.name == "small" and table.currentRow() == 0
+
+
+def test_the_graph_s_menu(qtbot, tmp_path):
+    from qtpy.QtWidgets import QApplication
+
+    from vibefpmgui.cfg_view import CfgView
+
+    view = CfgView()
+    qtbot.addWidget(view)
+    view.resize(500, 700)
+    view.show()
+    qtbot.waitExposed(view)
+    text = "\n" * 2 + FLOW  # (the procedure from line 3)
+    view.show_graph(graph_of(text), text)
+    loop = next(item for item in view.nodes.values() if item.node.kind == cf.LOOP)
+    menu = view.context_menu(view.vb.mapViewToScene(loop.pos()))
+    names = [a.text() for a in menu.actions() if a.text()]
+    assert names == ["Open Line 13", "Copy Code", "Center on This", "Fit to View", "Zoom In", "Zoom Out",
+                     "Actual Size", "Show Edge Labels", "Copy Image", "Save Image…"]
+    clicked = []
+    view.line_clicked.connect(clicked.append)
+    action = {a.text(): a for a in menu.actions()}
+    action["Open Line 13"].trigger()
+    assert clicked == [13]
+    block = next(item.node for item in view.nodes.values() if item.node.text[0].startswith("a = 0"))
+    assert view.node_code(block) == "a = 0"  # (as in the file, its indent off)
+    action["Copy Code"].trigger()
+    assert QApplication.clipboard().text() == "do i = 1, n"
+    action["Show Edge Labels"].trigger()
+    assert not view.show_labels and not any(label.isVisible() for label in view.labels)
+    # The background's menu: the view's actions only.
+    corner = view.vb.mapViewToScene(view.bounds().topLeft())
+    assert next(a.text() for a in view.context_menu(corner).actions() if a.text()) == "Fit to View"
+    # Zooming; actual size; fitting again.
+    fitted = view.vb.viewPixelSize()[0]
+    action["Zoom In"].trigger()
+    assert view.vb.viewPixelSize()[0] < fitted
+    action["Actual Size"].trigger()
+    assert abs(view.vb.viewPixelSize()[0] - 1) < 1e-6
+    action["Fit to View"].trigger()
+    assert abs(view.vb.viewPixelSize()[0] - fitted) < 1e-6
+    # Images: the whole graph, whatever is in view; the view kept.
+    view.zoom(4)
+    shown = view.vb.viewRange()
+    image = view.image()
+    assert image.width() > view.bounds().width() and view.vb.viewRange() == shown
+    assert view.export_image(str(tmp_path / "flow.png")) and view.export_image(str(tmp_path / "flow.svg"))
+    assert "<svg" in (tmp_path / "flow.svg").read_text()
+
+
+def test_back_edges_pass_below_their_layer():
+    from qtpy.QtCore import QRectF
+
+    from vibefpmgui.cfg_view import _back_edge
+
+    source, target = QRectF(0, 100, 80, 30), QRectF(0, 0, 80, 30)
+    points, _ = _back_edge(source, target, 200, 10)
+    assert points[1][1] == points[2][1] == 140  # (across in the gap under the source)
+    assert points[-1].tolist() == [80, 15]  # (into the target's right side)
