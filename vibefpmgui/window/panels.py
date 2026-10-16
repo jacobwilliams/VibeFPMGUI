@@ -100,6 +100,8 @@ class PanelsMixin:
         self.no_file_hint = QLabel("Open a file from <b>Project files</b>, or with "
                                    "<b>File → Open File in Editor…</b>")
         self.no_file_hint.setAlignment(Qt.AlignCenter)
+        self.no_file_hint.setWordWrap(True)  # (narrow: the panels beside it can be wider)
+        self.no_file_hint.setContentsMargins(12, 0, 12, 0)
         self.no_file_hint.setStyleSheet("color: gray;")
         self.central = QStackedWidget()
         self.central.addWidget(self.no_file_hint)
