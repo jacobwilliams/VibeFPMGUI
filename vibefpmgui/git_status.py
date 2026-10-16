@@ -3,12 +3,19 @@ file to compare (with pygit2, libgit2's Python bindings: no git process,
 and no command line built from what's in the repository).
 
 No Qt: `vibefpmgui.git_panel` shows it, `vibefpmgui.window.git` reads it on
-a pool thread.
+a pool thread, in a process of its own (`read_status_apart`: pygit2 holds
+Python's lock while libgit2 reads the status, so the window would wait for
+it all the same; seconds for a big project on Windows).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .source_text import decode
@@ -188,3 +195,53 @@ def versions(root: Path, change: Change) -> tuple[str | None, str | None, str, s
     else:
         old, new, labels = committed(), on_disk(), ("last commit", "working tree")
     return _text(old), _text(new), *labels
+
+
+# ------------------------------------------------------------------ apart
+def read_status_apart(path: Path, timeout: float = 120) -> RepoStatus | None:
+    """`read_status` in a Python process of its own (run with ``-m``): while
+    it reads, this process only waits, without Python's lock, so the window
+    goes on. Raises RuntimeError with its message if it fails."""
+    env = dict(os.environ)
+    package_parent = str(Path(__file__).resolve().parents[1])  # (vibefpmgui importable, wherever it's run from)
+    env["PYTHONPATH"] = os.pathsep.join(p for p in (package_parent, env.get("PYTHONPATH", "")) if p)
+    flags = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
+    # Its output goes to files, not pipes, and only it is waited for: a pipe is
+    # only done when every process holding it has closed it, and a process
+    # started meanwhile by another thread (the Terminal's shell, fortls, fpm)
+    # could hold it too (inherited, on Windows), for as long as it runs.
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        process = subprocess.Popen([sys.executable, "-m", "vibefpmgui.git_status", str(path)],
+                                   stdin=subprocess.DEVNULL, stdout=out, stderr=err, env=env, **flags)
+        try:
+            code = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            raise RuntimeError(f"reading the status took over {timeout:.0f} s") from None
+        out.seek(0)
+        err.seek(0)
+        output, errors = out.read(), err.read()
+    if code != 0:
+        lines = errors.decode("utf-8", "replace").strip().splitlines()
+        raise RuntimeError(lines[-1] if lines else f"the status reader stopped ({code})")
+    data = json.loads(output.decode("utf-8"))
+    if data is None:
+        return None
+    data["root"] = Path(data["root"])
+    data["changes"] = [Change(**c) for c in data["changes"]]
+    return RepoStatus(**data)
+
+
+def _print_status(path: str):
+    """(``python -m vibefpmgui.git_status PATH``: the status as JSON.)"""
+    status = read_status(Path(path))
+    data = None
+    if status is not None:
+        data = asdict(status)
+        data["root"] = str(status.root)
+    sys.stdout.buffer.write(json.dumps(data).encode("utf-8"))
+
+
+if __name__ == "__main__":
+    _print_status(sys.argv[1])

@@ -186,3 +186,43 @@ def test_the_window_s_git_panel(qtbot, window, project):
     qtbot.waitUntil(lambda: panel.status is not None and bool(panel.status.changes), timeout=5_000)
     assert [c.path for c in panel.status.changes] == ["src/foo.f90"]
     assert window.dockWidgetArea(window.docks["git"]) is not None
+
+
+def test_the_status_read_apart_is_the_same(tmp_path):
+    """(pygit2 holds Python's lock while it reads: the window reads it in a process of its own.)"""
+    root = make_repo(tmp_path / "repo", {"src/a.f90": "program a\nend program a\n", "b.txt": "b\n"})
+    (root / "src/a.f90").write_text("program a\n  print *, 1\nend program a\n")
+    (root / "new é.txt").write_text("n\n")  # (a name that isn't ASCII)
+    apart = gs.read_status_apart(root)
+    assert apart == gs.read_status(root) and {c.path for c in apart.changes} == {"src/a.f90", "new é.txt"}
+    assert gs.read_status_apart(tmp_path / "elsewhere") is None or gs.find_repository(tmp_path) is None
+    (root / ".git" / "HEAD").write_text("nonsense")  # (a broken repository: its error, as a RuntimeError)
+    with pytest.raises(RuntimeError):
+        gs.read_status_apart(root)
+
+
+def test_one_read_at_a_time_and_not_on_every_activation(qtbot, window, project, monkeypatch):
+    from qtpy.QtCore import Qt
+
+    import vibefpmgui.window.git as window_git
+
+    git(project, "init", "-q")
+    reads = []
+    real = gs.read_status_apart
+    monkeypatch.setattr(gs, "read_status_apart", lambda path: reads.append(path) or real(path))
+    window.show_panel(window.git_panel)
+    qtbot.waitUntil(lambda: not window._git_reading, timeout=5_000)
+    reads.clear()
+    for _ in range(5):  # (asked five times while reading: read once more after, not five times)
+        window.refresh_git()
+    qtbot.waitUntil(lambda: not window._git_reading and len(reads) == 2, timeout=10_000)
+    qtbot.wait(100)
+    assert len(reads) == 2 and window.git_panel.status is not None
+    reads.clear()
+    window._app_state_changed(Qt.ApplicationInactive)  # (a moment away: a popup, a focus change)
+    window._app_state_changed(Qt.ApplicationActive)
+    assert reads == [] and not window._git_reading
+    window._app_state_changed(Qt.ApplicationInactive)
+    window._inactive_since -= window_git.GitMixin.AWAY_SECONDS  # (a while away)
+    window._app_state_changed(Qt.ApplicationActive)
+    qtbot.waitUntil(lambda: len(reads) == 1 and not window._git_reading, timeout=5_000)
