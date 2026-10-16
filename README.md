@@ -184,7 +184,11 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   the setting. Files keep their line endings (LF or CRLF, shown in the
   status line; a file with both says "mixed" and is saved with its most
   common one); *Edit → Convert Line Endings* changes the whole file to Unix
-  (LF) or Windows (CRLF) ones, saved with the next Save. Multiple cursors: ⌥/Alt-click adds a
+  (LF) or Windows (CRLF) ones, saved with the next Save. Trailing spaces
+  and tabs are trimmed when a file is saved (*Edit → Trim Trailing
+  Whitespace on Save*, on by default; not Markdown or patch files, where
+  they mean something); *Edit → Trim Trailing Whitespace* trims them now
+  (Undo reverts). Multiple cursors: ⌥/Alt-click adds a
   cursor (again to remove it); ⌘⇧/Ctrl+Shift-click adds one on every line
   from the cursor to the clicked line: in the same column, or, clicked in
   another column, with each line selected between the two columns (a box

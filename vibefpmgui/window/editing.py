@@ -134,6 +134,16 @@ class EditingMixin:
         self.fix_all_action.setStatusTip("Also apply fortitude's unsafe fixes, which can change what the "
                                          "code does: check them before saving; Undo reverts")
         menu.addSeparator()
+        self.trim_action = editor_action("Trim Trailing Whitespace", "", self.trim_trailing_whitespace)
+        self.trim_action.setStatusTip("Remove the spaces and tabs at the ends of the lines of the file in the "
+                                      "editor (Undo reverts)")
+        self.trim_on_save_action = QAction("Trim Trailing Whitespace on Save", self, checkable=True)
+        EditorTab.trim_on_save = self.settings.value("trim_on_save", True, type=bool)
+        self.trim_on_save_action.setChecked(EditorTab.trim_on_save)
+        self.trim_on_save_action.setStatusTip("Remove the spaces and tabs at the ends of the lines whenever a "
+                                              "file is saved (not Markdown or patch files, where they matter)")
+        self.trim_on_save_action.toggled.connect(self.set_trim_on_save)
+        menu.addAction(self.trim_on_save_action)
         self.line_endings_menu = menu.addMenu("Convert Line Endings")  # (kept: PySide would let it go)
         self.line_ending_actions: dict[str, QAction] = {}
         for newline, text, tip in (("\n", "To Unix Line Endings (LF)", "macOS and Linux"),
@@ -144,6 +154,15 @@ class EditingMixin:
             action.triggered.connect(lambda _=False, n=newline: self.convert_line_endings(n))
             self.line_ending_actions[newline] = action
         self.line_endings_menu.aboutToShow.connect(self._check_line_endings)
+
+    def trim_trailing_whitespace(self, editor: EditorTab):
+        trimmed = editor.trim_trailing_whitespace()
+        lines = f"{trimmed} line{'s' * (trimmed != 1)}" if trimmed else "no lines"
+        self.statusBar().showMessage(f"{editor.path.name}: trailing whitespace trimmed from {lines}", 4000)
+
+    def set_trim_on_save(self, on: bool):
+        EditorTab.trim_on_save = on
+        self.settings.setValue("trim_on_save", on)
 
     def _graph_in_use(self) -> bool:
         """Find goes to the graph's search box: the graph panel has the focus,
@@ -176,6 +195,7 @@ class EditingMixin:
         for action in (self.fix_safe_action, self.fix_all_action):
             action.setEnabled(editor is not None and editor.can_lint())
         self.line_endings_menu.setEnabled(editor is not None)
+        self.trim_action.setEnabled(editor is not None)
         for action in (self.definition_action, self.implementation_action, self.references_action,
                        self.rename_action, self.complete_action):
             action.setEnabled(editor is not None and editor.lsp is not None)

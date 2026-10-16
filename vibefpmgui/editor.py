@@ -55,6 +55,11 @@ from .minimap import Minimap
 from .source_text import read_source
 from .widgets import StatusLabel
 
+# Files whose trailing whitespace means something (Markdown: a line break;
+# a patch: a context line's), not trimmed on save (Edit → Trim Trailing
+# Whitespace still trims them).
+TRIM_KEEPS = {".md", ".markdown", ".diff", ".patch"}
+
 
 class _OutlineDelegate(QStyledItemDelegate):
     """Draws the outline's entries with the badge and name together,
@@ -98,6 +103,7 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
     gremlins_enabled = True  # View → Show Gremlins (non-ASCII and invisible characters)
     minimap_enabled = True  # View → Show Minimap
     word_wrap = False       # View → Word Wrap
+    trim_on_save = True     # Edit → Trim Trailing Whitespace on Save
 
     dirty_changed = Signal(bool)
     saved = Signal(str)
@@ -321,7 +327,31 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
         self.update_status()
         return True
 
+    def trim_trailing_whitespace(self) -> int:
+        """Edit → Trim Trailing Whitespace: the spaces and tabs at the ends of
+        the lines removed (one step to undo); how many lines had them."""
+        document = self.editor.document()
+        cursor = QTextCursor(document)
+        trimmed = 0
+        block = document.firstBlock()
+        while block.isValid():
+            text = block.text()
+            end = len(text.rstrip())
+            if end < len(text):
+                if not trimmed:
+                    cursor.beginEditBlock()
+                cursor.setPosition(block.position() + end)
+                cursor.setPosition(block.position() + len(text), QTextCursor.KeepAnchor)
+                cursor.removeSelectedText()
+                trimmed += 1
+            block = block.next()
+        if trimmed:
+            cursor.endEditBlock()
+        return trimmed
+
     def save(self) -> bool:
+        if self.trim_on_save and self.path.suffix.lower() not in TRIM_KEEPS:
+            self.trim_trailing_whitespace()
         text = self.editor.toPlainText()
         try:
             data = text.replace("\n", self.newline).encode(self.encoding)
