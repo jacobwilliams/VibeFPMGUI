@@ -579,3 +579,29 @@ def test_back_edges_pass_below_their_layer():
     points, _ = _back_edge(source, target, 200, 10)
     assert points[1][1] == points[2][1] == 140  # (across in the gap under the source)
     assert points[-1].tolist() == [80, 15]  # (into the target's right side)
+
+
+def test_continued_lines_are_shown_joined():
+    text = """subroutine s(me, n)
+    initialized = allocated(me%row_ptr) .and. &
+                      allocated(me%col_ind) .and. &   ! (a comment)
+                      allocated(me%values)
+    if (initialized .and. &
+        n > 0) x = 1
+    call f(a, &
+           & b)
+end subroutine s
+"""
+    shown = [n.text for n in graph_of(text).nodes if n.first]
+    assert shown == [["initialized = allocated(me%row_ptr) .and. allocated(me%col_…"],  # (too long: "…")
+                     ["if (initialized .and. n > 0)"], ["x = 1"], ["call f(a, b)"]]
+    fixed = """      SUBROUTINE T(X)
+      X = 1 +
+C     (a comment)
+     &    2
+      IF (X .GT. 0 .AND.
+     &    X .LT. 9) X = 0
+      END
+"""
+    shown = [n.text for n in graph_of(fixed, "t.f").nodes if n.first]
+    assert shown == [["X = 1 + 2"], ["IF (X .GT. 0 .AND. X .LT. 9)"], ["X = 0"]]

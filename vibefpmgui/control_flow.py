@@ -179,9 +179,10 @@ def procedure_statements(text: str, path: Path, start_line: int) -> list[_Statem
 
 # ------------------------------------------------------------------ the graph
 class _Builder:
-    def __init__(self, name: str, source_lines: list[str]):
+    def __init__(self, name: str, source_lines: list[str], fixed: bool = False):
         self.graph = Graph(name)
         self.source = source_lines
+        self.fixed = fixed
         self.start = self._node(START, text=["start"])
         self.end = self._node(END, text=["end"])
         self.stop_node: int | None = None
@@ -202,14 +203,35 @@ class _Builder:
         for source, label in preds:
             self._edge(source, target, label)
 
-    def _line(self, number: int) -> str:
-        """A line of the source as shown: its code, without its comment."""
-        text = _without_comment(self.source[number - 1]).strip() if 0 < number <= len(self.source) else ""
-        return text if len(text) <= 60 else text[:57] + "…"
+    def _line(self, first: int, last: int = 0) -> str:
+        """A statement's lines ``first``–``last`` as shown: their code, without
+        comments, continuations joined into one line ("…" if it's too long)."""
+        text = ""
+        for number in range(first, max(first, last) + 1):
+            if not 0 < number <= len(self.source):
+                break
+            line = self.source[number - 1]
+            if number > first:
+                if self.fixed:
+                    if line[:1] in ("c", "C", "*", "!", "d", "D") or len(line) < 6:
+                        continue  # (a comment line between)
+                    line = line[6:]
+                elif not _without_comment(line).strip() or line.lstrip().startswith("#"):
+                    continue
+            code = _without_comment(line).strip()
+            if number > first and code.startswith("&"):
+                text = text + code[1:].lstrip() if text.endswith(("(", "[")) else text + " " + code[1:].lstrip()
+            elif number > first:
+                text = text + " " + code
+            else:
+                text = code
+            if not self.fixed and text.endswith("&"):
+                text = text[:-1].rstrip()
+        return text if len(text) <= 60 else text[:59] + "…"
 
     def _decision(self, st: _Statement, preds: list, kind: str = DECISION, shown: str = "") -> int:
         self.block = None
-        node = self._node(kind, st.first, st.last, [shown or self._line(st.first)])
+        node = self._node(kind, st.first, st.last, [shown or self._line(st.first, st.last)])
         self._connect(preds, node)
         if st.label:
             self.labels[st.label] = node
@@ -227,7 +249,7 @@ class _Builder:
                 self.labels[st.label] = node.id
         node.last = st.last
         if len(node.text) < MAX_STATEMENTS_SHOWN:
-            node.text.append(st.shown or self._line(st.first))
+            node.text.append(st.shown or self._line(st.first, st.last))
         elif node.text[-1] != "…":
             node.text.append("…")
         return [(node.id, "")]
@@ -262,7 +284,7 @@ class _Builder:
             return i + 1, preds  # (out of place: read as nothing)
         if kind == "if_one":
             _condition, inner = st.detail.split("\0", 1)
-            condition_shown, inner_shown = _split_one_line(self._line(st.first))
+            condition_shown, inner_shown = _split_one_line(self._line(st.first, st.last))
             node = self._decision(st, preds, shown=condition_shown)
             inner_kind, inner_detail = _classify(inner)
             inner_st = _Statement(inner_kind, inner, "", st.first, st.last, inner_detail, inner_shown)
@@ -299,7 +321,7 @@ class _Builder:
             while i < len(stmts) and stmts[i].kind in ("case", "case_default"):
                 guard = stmts[i]
                 has_default |= guard.kind == "case_default"
-                label = self._line(guard.first)
+                label = self._line(guard.first, guard.last)
                 self.block = None
                 i, branch = self.sequence(stmts, i + 1, [(node, label)], {"case", "case_default", "end_select"})
                 out += branch
@@ -395,7 +417,7 @@ def build(text: str, path: Path | str, procedure: cx.Procedure) -> Graph:
     """The control-flow graph of a procedure of ``text`` (the file it's in)."""
     path = Path(path)
     stmts = procedure_statements(text, path, procedure.start)
-    builder = _Builder(procedure.name, text.split("\n"))
+    builder = _Builder(procedure.name, text.split("\n"), path.suffix.lower() in cx.FIXED_FORM)
     _i, exits = builder.sequence(stmts, 0, [(builder.start, "")], set())
     return builder.finish(exits)
 
