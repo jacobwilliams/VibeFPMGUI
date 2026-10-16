@@ -318,6 +318,7 @@ class ProjectMixin:
         self._update_language_server()
         self.refresh_build_outputs()
         self.refresh_git()
+        self.refresh_complexity()
         self._set_project_enabled(True)
         self._load_features_and_profiles()
         missing = sum(1 for p in self.graph.packages.values() if p.kind == m.MISSING)

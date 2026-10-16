@@ -94,6 +94,8 @@ menu item says "not found" and the feature is off; without fprettify the
 | `vibefpmgui.git_status` | A repository's status and the versions of a changed file (pygit2; no Qt) |
 | `vibefpmgui.git_panel` | The *Git* tab: the branch, the changed files, and the selected one's diff |
 | `vibefpmgui.diff_view` | Two versions of a file side by side or unified: aligning them, folding unchanged lines |
+| `vibefpmgui.complexity` | Fortran code complexity, lizard's metrics (CCN, NLOC, tokens, parameters, length, depth); no Qt |
+| `vibefpmgui.complexity_panel` | The *Complexity* tab: each procedure's metrics and each file's totals |
 | `vibefpmgui.highlighter` | Pygments syntax highlighting and the *Syntax Colors* styles |
 | `vibefpmgui.themes` | *View → Theme*: the whole window's colors (System, Light, Dark and colorful ones) |
 | `vibefpmgui.lsp` | The client for the fortls language server (hover, definition, completion, references, rename) |

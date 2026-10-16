@@ -27,6 +27,7 @@ from .parallel_tests import ParallelTests
 from .window.ai import AIMixin
 from .window.ai_chat import AIChatMixin
 from .window.build_outputs import BuildOutputsMixin
+from .window.complexity import ComplexityMixin
 from .window.coverage import CoverageMixin
 from .window.editing import EditingMixin
 from .window.editor_tabs import EditorTabsMixin
@@ -44,7 +45,7 @@ from .window.view import ViewMixin
 
 class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
                  EditorTabsMixin, EditingMixin, LanguageMixin, SearchMixin, GitMixin,
-                 RunningMixin, BuildOutputsMixin, OutputMixin, TestingMixin, CoverageMixin,
+                 RunningMixin, BuildOutputsMixin, OutputMixin, TestingMixin, CoverageMixin, ComplexityMixin,
                  AIMixin, AIChatMixin,
                  QMainWindow):
     """The window. Each part of it is a mixin in `vibefpmgui.window`; this
@@ -120,6 +121,7 @@ class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
         self._build_search_panels()
         self._build_terminal()
         self._build_git_panel()
+        self._build_complexity_panel()
         self._link_file_lists()
         self._build_central()
         self._build_docks(options, files_box, graph_tab, console_box)
@@ -137,7 +139,7 @@ class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
         self._layout_restored = layout is not None and self.restoreState(layout, self.LAYOUT_VERSION)
         # A layout saved before a panel existed: the panel goes in the stack of
         # the one it's next to by default.
-        for name, beside in (("coverage", "tests"), ("git", "search")):
+        for name, beside in (("coverage", "tests"), ("git", "search"), ("complexity", "coverage")):
             dock = self.docks[name]
             if self._layout_restored and self.dockWidgetArea(dock) == Qt.NoDockWidgetArea:
                 self.addDockWidget(Qt.BottomDockWidgetArea, dock)

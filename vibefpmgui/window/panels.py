@@ -130,6 +130,7 @@ class PanelsMixin:
             ("graph", "Dependency graph", graph_tab), ("outputs", "Build outputs", self.outputs_view),
             ("build", "Build", self.build_monitor), ("tests", "Tests", self.test_monitor),
             ("run", "Run", self.run_monitor), ("coverage", "Coverage", self.coverage_panel),
+            ("complexity", "Complexity", self.complexity_panel),
             ("problems", "Problems", self.problems_panel),
             ("review", "Review", self.review_monitor),
             ("references", "References", self.references_panel), ("search", "Search", self.search_panel),
@@ -142,6 +143,7 @@ class PanelsMixin:
         self.docks["terminal"].visibilityChanged.connect(self._terminal_dock_shown)
         self.docks["problems"].visibilityChanged.connect(self._problems_shown)
         self.docks["git"].visibilityChanged.connect(self._git_panel_shown)
+        self.docks["complexity"].visibilityChanged.connect(self._complexity_panel_shown)
         self.docks["graph"].visibilityChanged.connect(self._update_editor_actions)  # (Find: the graph's search)
         self.default_layout()
         # Dragging a panel's edge past its smallest size collapses it (see dock_snap).
@@ -216,7 +218,7 @@ class PanelsMixin:
         self.addDockWidget(Qt.BottomDockWidgetArea, d["build"])
         # (Output beside Build first: split next to a stacked panel, it would be stacked too.)
         self.splitDockWidget(d["build"], d["output"], Qt.Horizontal)
-        for name in ("tests", "run", "coverage", "problems", "review", "references", "search", "git", "terminal"):
+        for name in ("tests", "run", "coverage", "complexity", "problems", "review", "references", "search", "git", "terminal"):
             self.tabifyDockWidget(d["build"], d[name])
         for dock in d.values():
             dock.setFloating(False)  # (after it's placed: a floating one stays floating otherwise)

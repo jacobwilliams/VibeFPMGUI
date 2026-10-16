@@ -201,6 +201,19 @@ def _coverage(p: QPainter, c: QColor):
     p.drawRect(QRectF(13.5, 14.5, 3.5, 3))
 
 
+def _complexity(p: QPainter, c: QColor):
+    """A decision (a diamond) and its two ways."""
+    p.setPen(_pen(c, 1.8))
+    p.setBrush(Qt.NoBrush)
+    p.drawPolygon([QPointF(12, 3), QPointF(17, 8), QPointF(12, 13), QPointF(7, 8)])
+    p.drawLine(QPointF(7, 8), QPointF(5, 8))
+    p.drawLine(QPointF(5, 8), QPointF(5, 16.5))
+    p.drawLine(QPointF(17, 8), QPointF(19, 8))
+    p.drawLine(QPointF(19, 8), QPointF(19, 16.5))
+    p.drawRoundedRect(QRectF(2.5, 16.5, 5, 4.5), 1.2, 1.2)
+    p.drawRoundedRect(QRectF(16.5, 16.5, 5, 4.5), 1.2, 1.2)
+
+
 def _git(p: QPainter, c: QColor):
     """A branch: two commits on a line, and one branching off it."""
     p.setPen(_pen(c, 1.9))
@@ -219,6 +232,7 @@ DRAWERS = {
     "test": _flask,
     "coverage": _coverage,
     "git": _git,
+    "complexity": _complexity,
     "update": _download,
     "clean": _broom,
     "clean-all": _trash,

@@ -66,6 +66,15 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   runs weight the bar by expected time and estimate the time left. Click a
   test to see only its output. A `--runner` you put in *Extra args* (e.g.
   `mpirun -np 4`) still wraps each test.
+* *Complexity* panel: each procedure's complexity, as
+  [lizard](https://github.com/terryyin/lizard) measures it, with a Fortran
+  reader of its own: CCN (cyclomatic complexity), lines of code, tokens,
+  parameters, length and nesting depth, most complex first, the values over
+  lizard's thresholds (CCN 15, length 1000, parameters 100, depth 5) in red;
+  and each file's totals. Filter by name or file, click a procedure to open
+  it, click a file to list only its procedures. *Include tests* and *Include
+  dependencies* widen it. It's measured again when a Fortran file is saved
+  (only the files that changed are read again).
 * *Git* panel: the project's repository's branch (with its upstream and
   how many commits ahead or behind), and its changed files: staged, not
   staged, untracked, in conflict. Select a file to see its diff, side by side
