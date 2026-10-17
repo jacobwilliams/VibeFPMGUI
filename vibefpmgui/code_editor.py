@@ -317,7 +317,14 @@ class CodeEditor(EditorGutterMixin, EditorIssuesMixin, MultiCursorMixin, LineEdi
         through at every cursor move, and a big file's thousands of issues
         made typing, and replacing its text, take seconds. Scrolling makes
         those of the lines coming into view. ``rebuild``: the markers,
-        issues or gremlins changed (or the colors, or the line wrapping)."""
+        issues or gremlins changed (or the colors, or the line wrapping).
+
+        Not while the text is being replaced (``setPlainText``, as a file
+        changed on disk is reloaded): emptying the document can narrow the
+        gutter and so scroll, calling this with no valid line anywhere, and a
+        cursor made from one crashed Qt. It's called again once the text is in."""
+        if not self.textCursor().block().isValid():
+            return
         if rebuild:
             self._highlights_version += 1
             self._issue_lines = {}
@@ -424,7 +431,10 @@ class CodeEditor(EditorGutterMixin, EditorIssuesMixin, MultiCursorMixin, LineEdi
     def _line_highlight(block, color: QColor) -> list:
         """A full-width background for a line: one per row it is shown in
         (with View → Word Wrap a long line takes several, and Qt fills only
-        the row the selection's cursor is in)."""
+        the row the selection's cursor is in). Nothing for a block not in a
+        document: a cursor made from it crashes Qt."""
+        if not block.isValid():
+            return []
         layout = block.layout()
         starts = [layout.lineAt(i).textStart() for i in range(layout.lineCount())] if layout else []
         out = []

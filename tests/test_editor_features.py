@@ -102,6 +102,35 @@ def test_reloads_a_file_changed_on_disk(qtbot, window, project):
     assert editor.editor.toPlainText().startswith("! changed elsewhere") and not editor.is_dirty()
 
 
+def test_reloading_a_long_file_scrolled_down_made_no_highlight_of_no_line(window, project, monkeypatch):
+    """A long file, scrolled to its end, changed on disk to a short one (as
+    fpm update did to an open dependency file): emptying the document
+    narrowed the gutter and so scrolled, and the highlights were made again
+    then, with the current line one in no document: Qt crashed."""
+    path = project / "src/long.f90"
+    path.write_text("".join(f"x = {i}\n" for i in range(2000)))
+    editor = open_editor(window, path)
+    code = editor.editor
+    code.moveCursor(QTextCursor.End)
+    code.verticalScrollBar().setValue(code.verticalScrollBar().maximum())
+    made = code._line_highlight
+    invalid = []
+
+    def line_highlight(block, color):
+        if not block.isValid():
+            invalid.append(block)
+            return []  # (not made: that's the crash)
+        return made(block, color)
+
+    monkeypatch.setattr(code, "_line_highlight", line_highlight)
+    path.write_text("y = 1\n" * 3)
+    editor._check_disk()
+    assert code.toPlainText() == "y = 1\n" * 3
+    assert not invalid
+    code.update_extra_selections()
+    assert code.extraSelections()  # (the current line's highlight, once the text is in)
+
+
 def test_asks_before_dropping_edits(window, project, monkeypatch):
     def no_dialog(*a, **k):
         raise AssertionError("a dialog: the choice waits in the tab")
