@@ -206,6 +206,11 @@ class ViewMixin:
             action.triggered.connect(lambda _=False, k=key: self.set_theme(k))
             group.addAction(action)
             self.theme_actions[key] = action
+        # The style that draws the window: the theme's, or one chosen.
+        self.window_style_menu = view_menu.addMenu("Window Style")  # (kept: PySide would let it go)
+        self.window_style_menu.setStatusTip("How buttons, tabs and the panels' dividers are drawn: the "
+                                            "theme's choice, or one of Qt's styles")
+        self.window_style_menu.aboutToShow.connect(self._fill_window_style_menu)
         hl.chosen_style = self.settings.value("syntax_style", hl.AUTO) or hl.AUTO
         self.style_menu = view_menu.addMenu("Syntax Colors")
         self.style_menu.setStatusTip("The Pygments color style for the editor and fpm.toml")
@@ -237,6 +242,42 @@ class ViewMixin:
             action.setChecked(action.data() == hl.chosen_style)
             group.addAction(action)
             action.triggered.connect(lambda _checked=False, a=action: self.set_syntax_style(a.data()))
+
+    def _fill_window_style_menu(self):
+        """View → Window Style: Automatic, then Qt's styles on this platform."""
+        menu = self.window_style_menu
+        menu.clear()
+        group = QActionGroup(menu)
+        native = themes.native_style()
+        auto = menu.addAction(f"Automatic ({native} for System / Light / Dark, Fusion for the colorful themes)")
+        auto.setData(themes.AUTOMATIC)
+        menu.addSeparator()
+        actions = [auto]
+        for name in themes.styles():
+            title = name + (" (this platform's)" if name.lower() == native.lower() else "")
+            action = menu.addAction(title)
+            action.setData(name)
+            if name.lower() == "fusion":
+                action.setStatusTip("Qt's own style, alike on every platform: the panels' dividers have a grip of "
+                                    "dots, and the colorful themes' colors show throughout")
+            elif name.lower() not in themes.PALETTE_STYLES:
+                action.setStatusTip(f"{name}: the colorful themes' colors don't show on everything with it "
+                                    "(it draws with the platform's own colors)")
+            actions.append(action)
+        chosen = (themes.chosen_style or "").lower()
+        for action in actions:
+            action.setCheckable(True)
+            action.setChecked((action.data() or "").lower() == chosen)
+            group.addAction(action)
+            action.triggered.connect(lambda _checked=False, a=action: self.set_window_style(a.data()))
+
+    def set_window_style(self, name: str):
+        """View → Window Style (themes.AUTOMATIC: the theme's)."""
+        themes.set_window_style(name)
+        self.settings.setValue("app_style", name)
+        self._apply_highlight_style()
+        for editor in self.editors():
+            editor.refresh_style()
 
     def set_theme(self, key: str):
         """View → Theme: the whole window's colors (and, with Syntax Colors

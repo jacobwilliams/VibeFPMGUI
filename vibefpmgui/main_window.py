@@ -59,6 +59,7 @@ class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
         self.setWindowTitle("VibeFPMGUI")
         self.resize(1300, 850)
         self.settings = make_settings()
+        themes.chosen_style = str(self.settings.value("app_style", themes.AUTOMATIC) or themes.AUTOMATIC)
         themes.apply(str(self.settings.value("app_theme", themes.SYSTEM) or themes.SYSTEM))  # (before the widgets)
         self._session_busy = False  # restoring the open files (don't save meanwhile)
         self.lsp_client = lsp.LspClient(self)  # fortls, for the editor (see _update_language_server)

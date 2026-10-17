@@ -9,6 +9,12 @@ colors (macOS's doesn't), so they use Qt's Fusion style with a palette of
 their own; the color scheme is still set to light or dark to match, so the
 window's title bar and native dialogs agree.
 
+*View → Window Style* chooses the style itself instead (any of Qt's on this
+platform: Fusion everywhere, macOS on a Mac, windows11 / windowsvista on
+Windows…). Fusion draws the panels' dividers with a grip of dots, macOS's a
+plain line; only Fusion (and the plain Windows style) show a colorful
+theme's colors throughout.
+
 Either style is wrapped in `StillStyle`, which turns off the moving of
 panels: Qt's dock layout could otherwise keep "animating" forever on macOS.
 """
@@ -17,7 +23,7 @@ from typing import NamedTuple
 
 from qtpy.QtCore import Qt
 from qtpy.QtGui import QColor, QPalette
-from qtpy.QtWidgets import QApplication, QProxyStyle, QStyle
+from qtpy.QtWidgets import QApplication, QProxyStyle, QStyle, QStyleFactory
 
 
 class Theme(NamedTuple):
@@ -86,6 +92,36 @@ def style_name(style: QStyle) -> str:
 
 current = SYSTEM   # the theme in use (see apply)
 _native_style = ""  # the platform's style ("macOS", "Windows", …), to go back to from Fusion
+AUTOMATIC = ""     # View → Window Style: the theme's (the platform's, or Fusion for a colorful theme)
+chosen_style = AUTOMATIC  # View → Window Style (see window_style)
+PALETTE_STYLES = {"fusion", "windows"}  # (styles that draw with a colorful theme's palette)
+
+
+def styles() -> list[str]:
+    """Qt's styles on this platform (always Fusion)."""
+    return list(QStyleFactory.keys())
+
+
+def native_style() -> str:
+    """The platform's own style (its name as Qt has it)."""
+    return _native_style or style_name(QApplication.instance().style())
+
+
+def window_style(theme: Theme) -> str:
+    """The style to use with a theme: the one chosen in View → Window Style
+    if it's here (a setting from another platform may not be), else the
+    platform's for System / Light / Dark and Fusion for a colorful theme."""
+    available = {name.lower(): name for name in styles()}
+    if chosen_style and chosen_style.lower() in available:
+        return available[chosen_style.lower()]
+    return native_style() if theme.native else "Fusion"
+
+
+def set_window_style(name: str):
+    """View → Window Style (AUTOMATIC: the theme's), applied now."""
+    global chosen_style
+    chosen_style = name
+    apply(current)
 
 
 def palette(theme: Theme) -> QPalette:
@@ -134,7 +170,7 @@ def apply(key: str):
         scheme = Qt.ColorScheme.Unknown if current == SYSTEM else \
             Qt.ColorScheme.Dark if theme.dark else Qt.ColorScheme.Light
         hints.setColorScheme(scheme)
-    wanted = _native_style if theme.native else "Fusion"
+    wanted = window_style(theme)
     if not isinstance(app.style(), StillStyle) or style_name(app.style()).lower() != wanted.lower():
         app.setStyle(StillStyle(wanted))
     app.setPalette(QPalette() if theme.native else palette(theme))  # (native: the platform's, for the scheme)

@@ -213,7 +213,12 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   mode), *Light* or *Dark* in the platform's own look, or a colorful one
   (Nord, Dracula, Solarized Dark and Light, Gruvbox Dark and Light, One
   Dark, Ocean, Mint), which also brings its syntax colors when those are on
-  *Automatic*. *View → Editor Font…* picks the fixed-width font and size for
+  *Automatic*. *View → Window Style* picks how buttons, tabs and the
+  panels' dividers are drawn: *Automatic* (the platform's own style for
+  System, Light and Dark; Fusion for the colorful themes, which need it for
+  their colors), or any of Qt's styles on your platform (Fusion everywhere,
+  with a dotted grip on the dividers; macOS on a Mac; windows11 or
+  windowsvista on Windows…). *View → Editor Font…* picks the fixed-width font and size for
   the editor and `fpm.toml` (*Bigger/Smaller Text* still scale it; *Reset
   Editor Font* goes back to the system's).
 * Linting: free-form Fortran files (`.f90`, `.F90`, …) open in the editor

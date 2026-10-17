@@ -13,7 +13,12 @@ from vibefpmgui import themes
 @pytest.fixture(autouse=True)
 def back_to_system():
     yield
+    themes.chosen_style = themes.AUTOMATIC
     themes.apply(themes.SYSTEM)  # (the app is shared by the tests)
+
+
+def app_style() -> str:
+    return themes.style_name(QApplication.style()).lower()
 
 
 def window_color() -> str:
@@ -95,3 +100,44 @@ def test_every_panel_follows_the_theme(qtbot, window):
         assert light == (not themes.THEMES[key].dark)
         wrong = [type(p).__name__ for p in panels if p.is_light != light]
         assert not wrong, (key, wrong)
+
+
+# ------------------------------------------------------------ View → Window Style
+# (Fusion and Qt's plain Windows style are on every platform; the platform's own
+# style is whatever it is here, Fusion on the tests' offscreen screen.)
+def test_choosing_a_window_style(window):
+    assert {"fusion", "windows"} <= {name.lower() for name in themes.styles()}
+    native = themes.native_style().lower()
+    window.set_window_style("Windows")
+    assert app_style() == "windows" and window.settings.value("app_style") == "Windows"
+    window.set_theme("light")  # (System / Light / Dark: the chosen style all the same)
+    assert app_style() == "windows"
+    window.set_window_style(themes.AUTOMATIC)  # (the theme's again: the platform's)
+    assert app_style() == native
+    window.set_theme("nord")  # (a colorful theme: Fusion, for its colors)
+    assert app_style() == "fusion"
+    window.set_window_style("Windows")
+    assert app_style() == "windows" and window_color() == "#2e3440"  # (its palette still set)
+
+
+def test_the_window_style_is_remembered(make_window, project, settings_file):
+    settings_file.write_text("[General]\nfortls=false\nlint=false\napp_style=Windows\n")
+    make_window(project / "fpm.toml")
+    assert themes.chosen_style == "Windows" and app_style() == "windows"
+
+
+def test_a_style_this_platform_hasn_t_is_automatic(make_window, project, settings_file):
+    settings_file.write_text("[General]\nfortls=false\nlint=false\napp_style=NoSuchStyle\n")
+    make_window(project / "fpm.toml")  # (e.g. "macOS" saved, then opened on Windows)
+    assert app_style() == themes.native_style().lower()
+
+
+def test_the_window_style_menu(window):
+    window._fill_window_style_menu()
+    actions = [a for a in window.window_style_menu.actions() if a.text()]
+    assert actions[0].data() == themes.AUTOMATIC and actions[0].isChecked()
+    assert [a.data() for a in actions[1:]] == themes.styles() and "Fusion" in themes.styles()
+    next(a for a in actions if a.data() == "Windows").trigger()
+    assert app_style() == "windows"
+    window._fill_window_style_menu()
+    assert next(a for a in window.window_style_menu.actions() if a.data() == "Windows").isChecked()
