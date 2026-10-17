@@ -17,6 +17,9 @@ The file::
 A configuration has every Build option but the fpm executable (a path on
 this computer, kept in the app's settings). An option left out of a
 configuration has its default; unknown keys are kept as they are.
+
+The file's "options" (one set, for every configuration in it) are the GUI's
+for the project: see `vibefpmgui.project_options`.
 """
 
 from __future__ import annotations
@@ -166,3 +169,23 @@ def remove(path: Path, name: str) -> list[Configuration]:
     """Take the configuration named ``name`` out of the file."""
     return _with_configurations(path, lambda items: items.__setitem__(
         slice(None), [item for item in items if item.get("name") != name]))
+
+
+def load_options(path: Path) -> dict | None:
+    """The file's "options" (the GUI's, for the whole project: see
+    `vibefpmgui.project_options`); {} if it has none, None if there's no file."""
+    if not Path(path).exists():
+        return None
+    options = _read(path).get("options", {})
+    if not isinstance(options, dict):
+        raise ConfigError(f"{Path(path).name}: \"options\" isn't an object.")
+    return options
+
+
+def save_options(path: Path, options: dict):
+    """Put ``options`` in the file (which must exist and be readable), its
+    configurations and anything else in it kept."""
+    load(path)  # (every configuration checked first: a file that can't be read isn't written over)
+    data = _read(path)
+    data["options"] = options
+    _write(path, data)

@@ -42,11 +42,31 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   configuration chosen is remembered for each project; the file is read
   again when the project reloads.
 
+  The file's `options` are the GUI's settings for the project, one set for
+  every configuration in it: the View menu's choices (theme, fonts, text
+  size, word wrap, linting…), the editor's tabs (the files open, the one in
+  front, where each is scrolled to; one row or several), the panels' layout
+  and their own choices (Search, Problems, Complexity, Coverage, the graph's
+  layout, theme and edges), New configuration's Build options and features,
+  and the configuration chosen. While a project has a configuration file,
+  these are read from it (the app's own settings for any it doesn't have
+  yet) and written back when the window closes or another project is opened
+  (only if they changed); open files inside the project are written relative
+  to it, so the file works wherever the project is. Opening another project
+  in the same window applies its options. Kept out of the file, for this
+  computer: the window's size and place, the recent lists, the spelling
+  dictionary, the AI choices and the fpm executable. A project without a
+  configuration file uses the app's settings as before (nothing is written
+  in it); saving its first configuration starts its options.
+
   ```json
   {"vibefpm": 1, "configurations": [
     {"name": "release (ifx)", "profile": "release", "features": [], "compiler": "ifx",
      "flags": "-O3", "target": "", "extra_args": "", "program_args": "",
-     "parallel_tests": 4, "coverage": false, "verbose": false}]}
+     "parallel_tests": 4, "coverage": false, "verbose": false}],
+   "options": {"word_wrap": true, "font_delta": 1, "app_theme": "system", "…": "…",
+     "session": {"files": [{"path": "src/main.f90", "line": 12, "column": 0, "scroll": 0}],
+                 "current": "src/main.f90"}}}
   ```
   Very long output is cut short so the app stays responsive (an lfortran
   crash, for one, can print 100+ MB): after about 2 MB the Output panel

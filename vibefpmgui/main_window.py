@@ -24,6 +24,7 @@ from .compat import set_macos_bundle_name, set_macos_display_name, set_windows_a
 from .graph_view import EDGE_STYLES, LAYOUTS, THEME_CHOICES
 from .icons import app_icon
 from .parallel_tests import ParallelTests
+from .project_options import LayeredSettings
 from .window.ai import AIMixin
 from .window.ai_chat import AIChatMixin
 from .window.build_outputs import BuildOutputsMixin
@@ -34,6 +35,7 @@ from .window.editing import EditingMixin
 from .window.editor_tabs import EditorTabsMixin
 from .window.git import GitMixin
 from .window.language import LanguageMixin
+from .window.options import ProjectOptionsMixin
 from .window.output import OUTPUT_TAIL_LINES, OutputMixin
 from .window.packages import PackagesMixin
 from .window.panels import PanelsMixin
@@ -46,7 +48,7 @@ from .window.view import ViewMixin
 
 class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
                  EditorTabsMixin, EditingMixin, LanguageMixin, SearchMixin, GitMixin,
-                 RunningMixin, ConfigsMixin, BuildOutputsMixin, OutputMixin, TestingMixin, CoverageMixin, ComplexityMixin,
+                 RunningMixin, ConfigsMixin, ProjectOptionsMixin, BuildOutputsMixin, OutputMixin, TestingMixin, CoverageMixin, ComplexityMixin,
                  AIMixin, AIChatMixin,
                  QMainWindow):
     """The window. Each part of it is a mixin in `vibefpmgui.window`; this
@@ -59,7 +61,12 @@ class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
         self.remember_last = remember_last
         self.setWindowTitle("VibeFPMGUI")
         self.resize(1300, 850)
-        self.settings = make_settings()
+        self.settings = LayeredSettings(make_settings())
+        # The project opened first: its options (if its configuration file has
+        # them) are the settings the window is made with.
+        start = manifest_path or self.settings.value("last_manifest", "")
+        start = Path(start).resolve() if start and Path(start).is_file() else None
+        self._use_project_options(start)
         themes.chosen_style = str(self.settings.value("app_style", themes.AUTOMATIC) or themes.AUTOMATIC)
         themes.apply(str(self.settings.value("app_theme", themes.SYSTEM) or themes.SYSTEM))  # (before the widgets)
         self._session_busy = False  # restoring the open files (don't save meanwhile)
@@ -98,8 +105,7 @@ class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
         self._restore_settings()
         self._update_editor_actions()
 
-        start = manifest_path or self.settings.value("last_manifest", "")
-        if start and Path(start).is_file():
+        if start is not None:
             self.open_manifest(start)
 
     # ------------------------------------------------------------------ UI
@@ -147,15 +153,8 @@ class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
                 self.addDockWidget(Qt.BottomDockWidgetArea, dock)
                 self.tabifyDockWidget(self.docks[beside], dock)
         # Applied once the project's own [profiles] are in the list.
-        self._wanted_profile = s.value("profile", "(default)")
-        self.profile_combo.setCurrentText(self._wanted_profile)
-        self.compiler_edit.setText(s.value("compiler", ""))
-        self.flag_edit.setText(s.value("flags", ""))
-        self.extra_edit.setText(s.value("extra", ""))
+        self._apply_build_options()
         self.fpm_edit.setText(s.value("fpm", ""))
-        self.verbose_check.setChecked(s.value("verbose", False, type=bool))
-        self.coverage_check.setChecked(s.value("coverage", False, type=bool))
-        self.test_jobs_spin.setValue(s.value("test_jobs", 1, type=int))
         self.set_font_delta(s.value("font_delta", 0, type=int), announce=False)
         self._set_graph_layout(s.value("graph_layout", next(iter(LAYOUTS))))
         self._set_graph_theme(s.value("graph_theme", next(iter(THEME_CHOICES))))
@@ -217,17 +216,9 @@ class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
             return
         s = self.settings
         s.setValue("geometry", self.saveGeometry())
-        self.snap_closed.expand_all()  # (collapsed panels are saved open: nothing comes back hidden)
-        s.setValue("panels", self.saveState(self.LAYOUT_VERSION))
-        free = self.free_options()  # (New configuration's, not a saved one's shown)
-        s.setValue("profile", free.profile)
-        s.setValue("compiler", free.compiler)
-        s.setValue("flags", free.flags)
-        s.setValue("extra", free.extra_args)
         s.setValue("fpm", self.fpm_edit.text())
-        s.setValue("verbose", free.verbose)
-        s.setValue("coverage", free.coverage)
-        s.setValue("test_jobs", free.parallel_tests)
+        self._store_window_options()  # (the project's options, or the app's settings)
+        self._write_project_options()
         super().closeEvent(event)
 
 

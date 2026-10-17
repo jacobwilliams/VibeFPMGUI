@@ -29,6 +29,7 @@ from qtpy.QtWidgets import (
 )
 
 from .. import build_configs as bc
+from .options import project_key
 
 NEW_CONFIGURATION = "New configuration"
 MAX_RECENT_CONFIGS = 10
@@ -230,6 +231,7 @@ class ConfigsMixin:
         if self.manifest_path is None:
             return
         self._load_configurations()
+        self.reload_project_options()  # (its options, if they were changed there)
         if self._config_error:
             return  # (the status bar says why; the list is empty until it's fixed)
         count = len(self.configurations)
@@ -343,6 +345,7 @@ class ConfigsMixin:
             return False
         self._config_error = ""
         self._use_config_file(path)
+        self._options_file_made()  # (the project's options go in it from now on, if it was just made)
         self.statusBar().showMessage(f"Saved build configuration “{config.name}” in {path.name}", 5000)
         return True
 
@@ -474,9 +477,15 @@ class ConfigsMixin:
             return
         self._editing = ""
         if manifest.resolve() != self.manifest_path:
+            # (Its options, not those of the file the project used last time.)
+            self.settings.app.setValue(project_key(manifest.resolve(), "build_config_file"), str(path))
             self.open_manifest(manifest)
             if self.manifest_path != manifest.resolve():
                 return  # (not opened: Cancel, or fpm running)
+        elif path != self.config_path:
+            self.settings.app.setValue(project_key(self.manifest_path, "build_config_file"), str(path))
+            self._switch_project_options(self.manifest_path, force=True)  # (this file's options)
+            self.reload()
         self._use_config_file(path)
         self._read_configurations()
         self._fill_config_combo(configs[0].name if configs else "")

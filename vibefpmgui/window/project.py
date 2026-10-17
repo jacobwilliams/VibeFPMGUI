@@ -5,7 +5,6 @@ Also the File menu, the Project files panel and reloading the dependency graph.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import tomllib
@@ -195,6 +194,7 @@ class ProjectMixin:
             self._clear_run_panels()
             self.search_panel.reset()
             self.references_panel.reset()
+            self._switch_project_options(path)  # (this one's written, the other's applied: see window.options)
         self.manifest_path = path
         if self.remember_last:
             self.settings.setValue("last_manifest", str(self.manifest_path))
@@ -256,13 +256,6 @@ class ProjectMixin:
     # Per project: the files open in the editor (with cursor and scroll
     # positions), the tab in front, and the Project files tree's open
     # folders, restored when the project is opened again.
-    def _project_key(self, prefix: str) -> str:
-        """A settings key for this project's ``prefix`` (its session, build
-        configurations, features, test durations): "prefix/" and a short hash
-        of its fpm.toml's path. (A name, not security: SHA-1 is fine.)"""
-        digest = hashlib.sha1(str(self.manifest_path).encode(), usedforsecurity=False).hexdigest()[:16]
-        return f"{prefix}/{digest}"
-
     def _session_key(self) -> str:
         return self._project_key("session")
 
