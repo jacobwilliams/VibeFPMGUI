@@ -173,6 +173,21 @@ def test_about(qtbot, monkeypatch):
     text = QApplication.clipboard().text()
     assert text.startswith("VibeFPMGUI ") and "Compiler:" in text and "fpm's default" in text
     assert copy.text() == "Copied"
+    fpm_path = shutil.which(fpm) or fpm
+    assert fpm_path in text  # (copied with where the programs are)
+    # The paths: not shown, but on hover over the row (its name and its value).
+    from qtpy.QtWidgets import QLabel
+
+    shown = " ".join(label.text() for label in dialog.findChildren(QLabel))
+    assert fpm_path not in shown
+    fpm_row, compiler_row = dialog.version_labels["fpm"], dialog.version_labels["Compiler"]
+    assert fpm_row.toolTip() == fpm_path
+    assert compiler_row.toolTip().startswith(shutil.which("gfortran") or "gfortran")
+    assert "fpm's default" in compiler_row.toolTip()
+    names = [label for label in dialog.findChildren(QLabel) if label.text() in ("<b>fpm</b>", "<b>Compiler</b>")]
+    assert sorted(label.toolTip() for label in names) == sorted([fpm_row.toolTip(), compiler_row.toolTip()])
+    assert dialog.version_labels["Python"].toolTip() == sys.executable  # (the Python running the app)
+    assert dialog.version_labels["Qt"].toolTip() == ""
     assert dialog.windowTitle() == "About VibeFPMGUI"
     assert tool_version(["/no/such/tool", "--version"]) == ""
     if shutil.which("fpm"):

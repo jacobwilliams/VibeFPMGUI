@@ -8,6 +8,7 @@ import platform
 import re
 import shutil
 import subprocess
+import sys
 import time
 
 from qtpy.QtCore import QRectF, Qt, QTimer, qVersion
@@ -21,6 +22,7 @@ from qtpy.QtGui import (
 )
 from qtpy.QtWidgets import (
     QDialog,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -283,26 +285,32 @@ class AboutDialog(QDialog):
         fpm_path = shutil.which(fpm) or fpm
         fpm_ver = fpm_version(fpm)
         compiler_ver = tool_version([compiler, "--version"])
-        compiler_path = shutil.which(compiler) or ""
+        compiler_path = shutil.which(compiler) or compiler
+        compiler_tip = compiler_path + (f"\n(chosen by: {compiler_source})" if compiler_source else "")
+        # (name, value, tooltip: where the program is, shown on hover rather than taking up the window)
         rows = [
-            ("fpm", (html.escape(fpm_ver) if fpm_ver else "<i>not found</i>")
-             # (zero-width spaces after path separators let a long path wrap)
-             + "<br><span style='color:gray'>"
-             + re.sub(r"([/\\])", "\\1\u200b", html.escape(fpm_path)) + "</span>"),
-            ("Compiler", (html.escape(compiler_ver) if compiler_ver
-                          else f"<i>{html.escape(compiler)} not found</i>")
-             + "<br><span style='color:gray'>"
-             + re.sub(r"([/\\])", "\\1\u200b", html.escape(compiler_path or compiler))
-             + (f" — {html.escape(compiler_source)}" if compiler_source else "") + "</span>"),
-            ("Python", html.escape(platform.python_version())),
-            ("Qt", html.escape(qVersion())),
-            ("System", html.escape(f"{platform.system()} {platform.release()} ({platform.machine()})")),
+            ("fpm", fpm_ver or "not found", fpm_path),
+            ("Compiler", compiler_ver or f"{compiler} not found", compiler_tip),
+            ("Python", platform.python_version(), sys.executable),
+            ("Qt", qVersion(), ""),
+            ("System", f"{platform.system()} {platform.release()} ({platform.machine()})", ""),
         ]
-        table = "".join(f"<tr><td style='padding-right:12px' valign='top'><b>{k}</b></td>"
-                        f"<td>{v}</td></tr>" for k, v in rows)
-        versions = QLabel(f"<table>{table}</table>")
-        versions.setWordWrap(True)
-        versions.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        versions = QGridLayout()
+        versions.setHorizontalSpacing(12)
+        versions.setVerticalSpacing(2)
+        self.version_labels: dict[str, QLabel] = {}
+        for row, (name, value, tip) in enumerate(rows):
+            key = QLabel(f"<b>{html.escape(name)}</b>")
+            missing = value.endswith("not found")
+            shown = QLabel(f"<i>{html.escape(value)}</i>" if missing else html.escape(value))
+            shown.setWordWrap(True)
+            shown.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            for label in (key, shown):
+                label.setToolTip(tip)
+            versions.addWidget(key, row, 0, Qt.AlignTop)
+            versions.addWidget(shown, row, 1)
+            self.version_labels[name] = shown
+        versions.setColumnStretch(1, 1)
 
         links = QLabel(f"<a href='{FPM_DOCS_URL}'>fpm documentation</a> &nbsp;·&nbsp; "
                        f"<a href='{PROJECT_URL}'>VibeFPMGUI on GitHub</a>")
@@ -315,7 +323,7 @@ class AboutDialog(QDialog):
         text.addWidget(title)
         text.addWidget(blurb)
         text.addSpacing(4)
-        text.addWidget(versions)
+        text.addLayout(versions)
         text.addSpacing(4)
         text.addWidget(links)
         text.addWidget(legal)
@@ -335,8 +343,10 @@ class AboutDialog(QDialog):
 
         copy = QPushButton("Copy Versions")
         copy.setToolTip("Copy the version information (handy for bug reports)")
-        plain = "\n".join(f"{k}: {re.sub('<[^>]+>', ' ', v).strip()}" for k, v in rows).replace("\u200b", "")
-        plain = f"VibeFPMGUI {__version__}\n" + re.sub(r"[ \t]+", " ", html.unescape(plain))
+        # (Copied with where the programs are: handy in a bug report.)
+        plain = "\n".join(f"{name}: {value}" + (f" ({' '.join(tip.split())})" if tip else "")
+                          for name, value, tip in rows)
+        plain = f"VibeFPMGUI {__version__}\n{plain}"
         copy.clicked.connect(lambda: (self._copy(plain), copy.setText("Copied")))
         packages = QPushButton("Packages…")
         packages.setToolTip("The packages installed in the environment the app runs in "
