@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from conftest import write_files
+from conftest import open_editor, write_files
 from qtpy.QtCore import QPoint, Qt
 from qtpy.QtTest import QTest
 from qtpy.QtWidgets import QInputDialog, QMessageBox
@@ -349,3 +349,32 @@ def test_the_features_menu_stays_open_to_tick_several(qtbot):
     assert first.isChecked() and menu.isVisible()
     QTest.mouseClick(menu, Qt.LeftButton, pos=menu.actionGeometry(plain).center())
     assert not menu.isVisible()
+
+
+# ----------------------------------------------------------------- edited as text
+def test_saving_the_file_in_the_editor_reads_it_again(saved, project):
+    window = saved
+    editor = open_editor(window, project / bc.FILE_NAME)
+    text = editor.editor.toPlainText()
+    assert '"ifx"' in text
+    editor.editor.setPlainText(text.replace('"ifx"', '"lfortran"'))
+    editor.save()
+    assert window.config_combo.currentText() == "a" and window.compiler_edit.text() == "lfortran"
+    assert not editable(window)
+    # Broken: the list is empty (and says why) until it's fixed.
+    editor.editor.setPlainText("{oops")
+    editor.save()
+    assert window.config_combo.count() == 1 and "isn't valid JSON" in window.config_combo.toolTip()
+    editor.editor.setPlainText(text)
+    editor.save()
+    assert window.config_combo.count() == 2
+
+
+def test_a_change_saved_in_the_editor_while_editing_keeps_the_changes(saved, project):
+    window = saved
+    window.edit_configuration()
+    window.compiler_edit.setText("mine")
+    editor = open_editor(window, project / bc.FILE_NAME)
+    editor.editor.setPlainText(editor.editor.toPlainText().replace('"ifx"', '"theirs"'))
+    editor.save()
+    assert window.compiler_edit.text() == "mine" and window.has_unsaved_configuration()

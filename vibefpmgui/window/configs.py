@@ -223,6 +223,19 @@ class ConfigsMixin:
         self._read_configurations()
         self._fill_config_combo(wanted)
 
+    def reload_configurations(self):
+        """The configuration file again (it was saved in the editor): the
+        one shown kept, with its options as the file has them now (unless
+        it's being edited: its changes are kept)."""
+        if self.manifest_path is None:
+            return
+        self._load_configurations()
+        if self._config_error:
+            return  # (the status bar says why; the list is empty until it's fixed)
+        count = len(self.configurations)
+        self.statusBar().showMessage(f"Build configurations read again from {self.config_path.name}: {count} "
+                                     f"configuration{'s' * (count != 1)}", 5000)
+
     def _read_configurations(self):
         try:
             self.configurations = bc.load(self.config_path) if self.config_path else []
