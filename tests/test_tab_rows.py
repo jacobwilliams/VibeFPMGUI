@@ -280,3 +280,15 @@ def test_right_click_beside_the_tabs(qtbot, window, project):
     assert shown[-1] == choices and len(shown) == 3
     right_click(rows, rows.tab_rect(0).center())
     assert len(shown) == 3
+
+
+def test_the_close_glyph_at_any_screen_scale(qtbot):
+    """Sharp and the same size on a 1x screen, a Retina one (2x) and a scaled Windows one
+    (1.25x, 1.5x): the scale given, not the screen's (the tests' is 1x)."""
+    from vibefpmgui.wrapping_tabs import CLOSE_SIZE, close_pixmap
+
+    for ratio in (1.0, 1.25, 1.5, 2.0, 3.0):
+        pixmap = close_pixmap(ratio)
+        assert pixmap.devicePixelRatio() == ratio and pixmap.width() == round(CLOSE_SIZE * ratio)
+        size = pixmap.deviceIndependentSize()
+        assert (round(size.width()), round(size.height())) == (CLOSE_SIZE, CLOSE_SIZE)

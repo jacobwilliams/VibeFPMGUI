@@ -30,6 +30,13 @@ from .icons import make_icon
 CLOSE_SIZE = 12  # the close glyph (as the tabs' own close buttons)
 
 
+def close_pixmap(ratio: float):
+    """The close glyph for a screen with this many pixels to a point (2 on a
+    Retina screen, 1.25 or 1.5 on a scaled Windows one): sharp there, drawn
+    CLOSE_SIZE points across."""
+    return make_icon("close", QColor(140, 140, 140)).pixmap(QSize(CLOSE_SIZE, CLOSE_SIZE), ratio)
+
+
 class WrappingTabBar(QWidget):
     """A ``QTabWidget``'s tabs, wrapped onto rows."""
 
@@ -137,7 +144,7 @@ class WrappingTabBar(QWidget):
         painter = QStylePainter(self)
         italic = QFont(self.font())
         italic.setItalic(True)
-        close = make_icon("close", QColor(140, 140, 140)).pixmap(CLOSE_SIZE, CLOSE_SIZE)
+        close = close_pixmap(self.devicePixelRatioF())
         current = self.tabs.currentIndex()
         for index in [i for i in range(len(self._rects)) if i != current] + ([current] if current >= 0 else []):
             option = self._option(index)  # (the current tab last: drawn over its neighbours)
@@ -162,7 +169,9 @@ class WrappingTabBar(QWidget):
                 painter.setPen(Qt.NoPen)
                 painter.setBrush(QColor(128, 128, 128, 80))
                 painter.drawRoundedRect(rect, 4, 4)
-            painter.drawPixmap(rect.center() - QPoint(CLOSE_SIZE // 2, CLOSE_SIZE // 2), close)
+            glyph = QRect(0, 0, CLOSE_SIZE, CLOSE_SIZE)  # (its size as drawn, whatever the screen's pixels)
+            glyph.moveCenter(rect.center())
+            painter.drawPixmap(glyph, close)
             painter.setClipping(False)
 
     # ------------------------------------------------------------ the mouse
