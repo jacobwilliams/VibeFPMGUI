@@ -305,11 +305,13 @@ class ConfigsMixin:
             self.config_note.setToolTip("Save puts the changes in the file; Cancel goes back to it as saved.")
         self.config_note.setVisible(locked or editing)
 
-    def _remember_config_file(self, manifest: Path, path: Path):
-        """The configuration file the project uses from now on (and in Recent Build Configurations)."""
+    def _remember_config_file(self, manifest: Path, path: Path, recent: bool = True):
+        """The configuration file the project uses from now on (``recent``:
+        and in Recent Build Configurations)."""
         self.settings.setValue(project_key(manifest, "build_config_file"),
                                "" if path == bc.default_path(manifest) else str(path))
-        self._remember_config(path)
+        if recent:
+            self._remember_config(path)
 
     # ------------------------------------------------------------ commands
     def save_configuration(self) -> bool:
@@ -407,7 +409,8 @@ class ConfigsMixin:
     def maybe_save_configuration(self) -> bool:
         """Before leaving a configuration being edited with unsaved changes
         (choosing another, opening another project or file, quitting): Save,
-        Discard or Cancel. False: Cancel (or saving failed): stay."""
+        Discard (it's shown as saved again: what follows may not happen) or
+        Cancel. False: Cancel (or saving failed): stay."""
         if not self.has_unsaved_configuration():
             return True
         answer = QMessageBox.question(
@@ -420,6 +423,8 @@ class ConfigsMixin:
             name = self._editing
             if not self._write_configuration(self.current_options(name)):
                 return False
+        else:
+            self.cancel_editing()
         return True
 
     def edit_configuration_as_new(self):
@@ -473,11 +478,10 @@ class ConfigsMixin:
             return
         if not self.maybe_save_configuration():
             return
-        self._editing = ""
         manifest = manifest.resolve()
         key = project_key(manifest, "build_config_file")
         before = self.settings.app.value(key, "")
-        self._remember_config_file(manifest, path)  # (the file the project is opened with)
+        self._remember_config_file(manifest, path, recent=False)  # (the file the project is opened with)
         if manifest != self.manifest_path:
             self.open_manifest(manifest)
             if self.manifest_path != manifest:  # (not opened: Cancel, or fpm running)
@@ -486,6 +490,7 @@ class ConfigsMixin:
         elif path != self.config_path:
             self._switch_config_file(manifest, force=True)
             self._load_configurations()
+        self._remember_config(path)  # (opened: in Recent Build Configurations)
         configs = self.configurations
         self._fill_config_combo(configs[0].name if configs else "")
         self.statusBar().showMessage(f"{path.name}: {len(configs)} configuration"

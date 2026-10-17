@@ -300,3 +300,6 @@ class ProjectOptionsMixin:
             layout = s.value("panels")
             if layout:
                 self.restore_layout(layout, s.value("panels_front", [], type=list) or [])
+        if only is not None and "build_configuration" in only and not self._editing:
+            # (Changed in the file. Another project's: chosen when its configurations are listed.)
+            self.select_configuration(s.value("build_configuration", "") or "")

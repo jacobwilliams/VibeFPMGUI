@@ -404,3 +404,55 @@ def test_a_file_fixed_in_the_editor_has_its_options_used(make_window, configured
     editor.save()
     assert window.options_in_use() and window.word_wrap_action.isChecked()
     assert window.config_combo.findText("a") > 0
+
+
+# ----------------------------------------------------------------- found in the third review
+@pytest.fixture
+def editing_then_blocked(make_window, project, conflict_project, monkeypatch):
+    """Configuration "a" being edited (compiler changed), and a file with
+    unsaved changes whose question is answered Cancel: opening another
+    project's configuration file asks about "a" (answered Discard), then
+    stops at the file."""
+    from qtpy.QtWidgets import QMessageBox
+
+    bc.save(project / bc.FILE_NAME, bc.Configuration("a", compiler="ifx"))
+    other = conflict_project / "other.json"
+    other.write_text(json.dumps({"configurations": [{"name": "o"}]}))
+    window = make_window(project / "fpm.toml")
+    window.select_configuration("a")
+    window.edit_configuration()
+    window.compiler_edit.setText("edited")
+    editor = open_editor(window, project / "src/foo.f90")
+    editor.editor.insertPlainText("! not saved\n")  # (so it's asked about)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Discard)
+    monkeypatch.setattr(type(editor), "maybe_save", lambda self: False)
+    window.open_configuration(other)
+    return window, other
+
+
+def test_discard_puts_the_configuration_back_as_saved(editing_then_blocked, project):
+    window, _other = editing_then_blocked
+    assert window.manifest_path.parent == project.resolve()  # (not opened: the file's Cancel)
+    assert window.config_combo.currentText() == "a" and window.compiler_edit.text() == "ifx"
+    assert not window.compiler_edit.isEnabled() and not window.has_unsaved_configuration()
+    assert window.build_arguments(["build"], True) == ["build", "--compiler", "ifx"]
+
+
+def test_an_open_that_didnt_happen_isnt_a_recent_configuration(editing_then_blocked):
+    window, other = editing_then_blocked
+    assert str(other.resolve()) not in window.recent_configs()
+
+
+def test_the_configuration_chosen_changed_in_the_editor_is_chosen(make_window, configured):
+    bc.save(configured / bc.FILE_NAME, bc.Configuration("b", compiler="nvfortran"))
+    window = make_window(configured / "fpm.toml")
+    window.select_configuration("a")
+    window.close()
+    window = make_window(configured / "fpm.toml")
+    assert window.config_combo.currentText() == "a"
+    editor = open_editor(window, configured / bc.FILE_NAME)
+    data = json.loads(editor.editor.toPlainText())
+    data["options"]["build_configuration"] = "b"
+    editor.editor.setPlainText(json.dumps(data, indent=2))
+    editor.save()
+    assert window.config_combo.currentText() == "b" and window.compiler_edit.text() == "nvfortran"
