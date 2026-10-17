@@ -462,6 +462,10 @@ class RunningMixin:
 
     def stop(self):
         if self.process is not None:
+            # (Remembered: the process may still end normally. Its children go first,
+            # and fpm, seeing its test program killed, can exit with its code before
+            # it's killed too: the run is the one stopped, not a failure.)
+            self._stop_requested = True
             kill_process_tree(self.process)
         if self.parallel_tests is not None:
             self.parallel_tests.stop()
@@ -533,7 +537,7 @@ class RunningMixin:
 
     def _finished(self, code: int, status):
         self._read_output(final=True)
-        crashed = status == QProcess.CrashExit
+        crashed = status == QProcess.CrashExit or self._stop_requested  # (stopped)
         self._flush_monitor(code, crashed)
         self._end_output()
         if crashed:
@@ -573,6 +577,7 @@ class RunningMixin:
             return
         self.process.deleteLater()
         self.process = None
+        self._stop_requested = False
         self.stop_action.setEnabled(False)
         self._set_project_enabled(self.graph is not None)
         if self._refresh_after:

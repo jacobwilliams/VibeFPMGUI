@@ -86,7 +86,10 @@ def conflict_project(tmp_path) -> Path:
 
 
 def close_window(window):
-    """Close without "Save changes?" questions."""
+    """Close without "Save changes?" questions (or "fpm is running": a
+    test that failed may leave a process running)."""
+    if window.busy():
+        window._stop_and_wait(3000)
     window._editing = ""  # (a build configuration's unsaved changes: dropped)
     for editor in window.editors():
         editor.editor.document().setModified(False)

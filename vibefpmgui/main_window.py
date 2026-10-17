@@ -80,6 +80,7 @@ class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
         self.process: QProcess | None = None
         self.parallel_tests: ParallelTests | None = None  # tests run by us, several at once
         self._refresh_after = False
+        self._stop_requested = False  # Stop was pressed for the running process (see stop)
         self._monitoring = False
         self._partial = ""  # output text after the last newline
         # The running command's output as text: a character whose bytes arrive
