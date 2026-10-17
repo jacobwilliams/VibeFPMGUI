@@ -194,7 +194,7 @@ class ProjectMixin:
             self._clear_run_panels(show_build=self.manifest_path is not None)
             self.search_panel.reset()
             self.references_panel.reset()
-            self._switch_project_options(path)  # (this one's written, the other's applied: see window.options)
+            self._switch_config_file(path)  # (this one's options written, the other's applied: see window.options)
         self.manifest_path = path
         if self.remember_last:
             self.settings.setValue("last_manifest", str(self.manifest_path))
@@ -257,7 +257,7 @@ class ProjectMixin:
     # positions), the tab in front, and the Project files tree's open
     # folders, restored when the project is opened again.
     def _session_key(self) -> str:
-        return self._project_key("session")
+        return "session"  # (the project's: see project_options.PER_PROJECT)
 
     def _save_session(self):
         if self.manifest_path is None or self._session_busy:

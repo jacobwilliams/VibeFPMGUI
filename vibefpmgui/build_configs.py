@@ -18,10 +18,14 @@ A configuration has every Build option but the fpm executable (a path on
 this computer, kept in the app's settings). An option left out of a
 configuration has its default; unknown keys are kept as they are.
 
-The file's "options" (one set, for every configuration in it) are the GUI's
-for the project: see `vibefpmgui.project_options`. New configuration's Build
-options (those not saved as a configuration) aren't among them, but beside
-the configurations, as one without a name: "new_configuration".
+Beside the configurations, "new_configuration" is New configuration's Build
+options (those not saved as one): a configuration without a name. Then
+"options" (one set, for every configuration in it) are the GUI's for the
+project: see `vibefpmgui.project_options`.
+
+`ConfigFile` is a project's file as the app has it: read whole (a file that
+can't be read whole isn't used, nor written over), and written a part at a
+time, the rest kept as it is.
 """
 
 from __future__ import annotations
@@ -55,17 +59,22 @@ class Configuration:
     coverage: bool = False
     verbose: bool = False
 
-    def to_json(self) -> dict:
+    def to_json(self, named: bool = True) -> dict:
+        """As the file has it (``named`` False: New configuration's, without a name)."""
         data = asdict(self)
         data["profile"] = "" if self.profile == DEFAULT_PROFILE else self.profile
+        if not named:
+            del data["name"]
         return data
 
     @classmethod
-    def from_json(cls, data: dict) -> Configuration:
-        """A configuration from the file (a value of the wrong type: its default)."""
-        name = data.get("name")
-        if not isinstance(name, str) or not name.strip():
-            raise ConfigError("A configuration has no name.")
+    def from_json(cls, data: dict, name: str | None = None) -> Configuration:
+        """A configuration from the file (a value of the wrong type: its
+        default). ``name``: one without a name in the file (New configuration's)."""
+        if name is None:
+            name = data.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise ConfigError("A configuration has no name.")
         config = cls(name.strip())
         for f in fields(cls):
             if f.name == "name" or f.name not in data:
@@ -173,38 +182,122 @@ def remove(path: Path, name: str) -> list[Configuration]:
         slice(None), [item for item in items if item.get("name") != name]))
 
 
-def load_options(path: Path) -> dict | None:
-    """The file's "options" (the GUI's, for the whole project: see
-    `vibefpmgui.project_options`); {} if it has none, None if there's no file."""
-    if not Path(path).exists():
-        return None
-    options = _read(path).get("options", {})
-    if not isinstance(options, dict):
-        raise ConfigError(f"{Path(path).name}: \"options\" isn't an object.")
-    return options
+# Build options a file's "options" had before they went to "new_configuration"
+# (the app's settings keys for them): moved there when it's read.
+_OLD_OPTION_FIELDS = {"profile": "profile", "compiler": "compiler", "flags": "flags", "extra": "extra_args",
+                      "target": "target", "program_args": "program_args", "verbose": "verbose",
+                      "coverage": "coverage", "test_jobs": "parallel_tests", "features": "features"}
 
 
-def load_new_configuration(path: Path) -> dict:
-    """The file's "new_configuration": New configuration's Build options
-    (what isn't saved as a configuration; a configuration's fields, without
-    a name). {} if it has none."""
-    if not Path(path).exists():
-        return {}
-    new = _read(path).get("new_configuration", {})
-    if not isinstance(new, dict):
-        raise ConfigError(f"{Path(path).name}: \"new_configuration\" isn't an object.")
-    return new
+def _object(data: dict, key: str, path: Path) -> dict | None:
+    value = data.get(key)
+    if value is not None and not isinstance(value, dict):
+        raise ConfigError(f"{Path(path).name}: \"{key}\" isn't an object.")
+    return value
 
 
-def save_options(path: Path, options: dict, new_configuration: dict | None = None):
-    """Put ``options`` (and New configuration's Build options) in the file
+class ConfigFile:
+    """A project's configuration file, as the app has it: ``configurations``,
+    New configuration's Build options (``new_configuration``: None if the
+    file has none) and the GUI's ``options`` (None: there's no file, or it
+    can't be read, ``error`` saying why; then none of it is used, and it
+    isn't written over)."""
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self.configurations: list[Configuration] = []
+        self.new_configuration: Configuration | None = None
+        self.options: dict | None = None
+        self.error = ""
+        self._written: tuple | None = None  # (options, new configuration) as the file has them
+
+    def exists(self) -> bool:
+        return self.path.is_file()
+
+    def _load(self) -> tuple[list[Configuration], dict | None, dict | None]:
+        """Everything in the file, checked (ConfigError if any of it can't be read)."""
+        if not self.exists():
+            return [], None, None
+        configurations = load(self.path)
+        data = _read(self.path)
+        return configurations, _object(data, "options", self.path), _object(data, "new_configuration", self.path)
+
+    def read(self) -> ConfigFile:
+        """Read it all (the file's options and New configuration replace those had)."""
+        try:
+            configurations, options, new = self._load()
+        except ConfigError as exc:
+            self.configurations, self.options, self.new_configuration = [], None, None
+            self.error, self._written = str(exc), None
+            return self
+        self.configurations, self.error = configurations, ""
+        self._take_gui(options, new)
+        return self
+
+    def _take_gui(self, options: dict | None, new: dict | None):
+        self._written = (options, new) if self.exists() else None
+        self.options = dict(options or {}) if self.exists() else None
+        new = dict(new or {})
+        for key, name in _OLD_OPTION_FIELDS.items():  # (from a file written before: moved)
+            if self.options is not None and key in self.options:
+                new.setdefault(name, self.options.pop(key))
+        self.new_configuration = Configuration.from_json(new, name="") if new else None
+
+    def reread(self) -> bool:
+        """Read it again (it was changed, e.g. in the editor): its
+        configurations, and its options and New configuration if they're
+        not those last read or written (True: they changed)."""
+        try:
+            configurations, options, new = self._load()
+        except ConfigError as exc:
+            self.configurations, self.error = [], str(exc)
+            return False
+        self.configurations, self.error = configurations, ""
+        if self.exists() and (options, new) != self._written:
+            self._take_gui(options, new)
+            return True
+        return False
+
+    def start_options(self):
+        """It was just made (the first configuration saved): it holds the
+        project's options from now on (none yet)."""
+        if self.options is None and self.exists() and not self.error:
+            self.options, self._written = {}, ({}, None)
+
+    def _check_writable(self):
+        if self.error and self.exists():  # (not written over: fix it, or move it away)
+            raise ConfigError(self.error)
+
+    def save(self, config: Configuration):
+        """Add a configuration, or replace the one with its name (OSError, ConfigError)."""
+        self._check_writable()
+        self.configurations = save(self.path, config)
+
+    def remove(self, name: str):
+        """Take a configuration out (OSError, ConfigError)."""
+        self._check_writable()
+        self.configurations = remove(self.path, name)
+
+    def write_options(self, options: dict, new: Configuration) -> bool:
+        """Write the options and New configuration, if they changed (True:
+        written; OSError, ConfigError)."""
+        if self.options is None or self.error:
+            return False
+        written = (options, new.to_json(named=False))
+        if written == self._written:
+            return False
+        save_options(self.path, *written)
+        self.options, self.new_configuration, self._written = dict(options), new, written
+        return True
+
+
+def save_options(path: Path, options: dict, new_configuration: dict):
+    """Put ``options`` and New configuration's Build options in the file
     (which must exist and be readable), its configurations and anything else
-    in it kept."""
+    in it kept, in the order it's read: the configurations, New
+    configuration, the options."""
     load(path)  # (every configuration checked first: a file that can't be read isn't written over)
-    data = _read(path)
-    if new_configuration is not None:
-        # (Beside the configurations, before the options: the order it's read in.)
-        data = {k: v for k, v in data.items() if k not in ("new_configuration", "options")}
-        data["new_configuration"] = new_configuration
+    data = {k: v for k, v in _read(path).items() if k not in ("new_configuration", "options")}
+    data["new_configuration"] = new_configuration
     data["options"] = options
     _write(path, data)

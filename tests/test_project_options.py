@@ -72,46 +72,76 @@ def test_the_options_written_have_them_all(layered, tmp_path):
     layered.app.setValue("problems/lint", "true")
     layered.app.setValue("geometry", "not an option")
     layered.app.setValue("compiler", "a build option: not with the options")
-    layered.use({"word_wrap": True}, tmp_path)
-    options = layered.complete_options({"session": "session/abc"})
-    assert options == {"word_wrap": True, "minimap": False, "indent_width": 2, "session": {"files": []},
-                       "problems/lint": True}
+    layered.use({"word_wrap": True}, tmp_path, {"session": "session/abc", "build_configuration": "bc/abc"})
+    assert layered.complete_options() == {"word_wrap": True, "minimap": False, "indent_width": 2,
+                                          "session": {"files": []}, "problems/lint": True}
 
 
-def test_new_configurations_build_options_go_beside_the_configurations(layered, tmp_path):
-    layered.app.setValue("compiler", "gfortran")
-    layered.use({}, tmp_path, {"flags": "-O2"})
-    assert layered.value("compiler", "") == "gfortran"  # (not in the file yet: the app's)
-    assert layered.value("flags", "") == "-O2"
-    for key, value in (("compiler", "ifx"), ("extra", "--x"), ("test_jobs", 4), ("features", ["mpi"]),
-                       ("profile", "(default)"), ("target", "t*"), ("program_args", "-v")):
-        layered.setValue(key, value)
-        assert key not in layered.options
-    assert layered.new_configuration == {"flags": "-O2", "compiler": "ifx", "extra_args": "--x",
-                                         "parallel_tests": 4, "features": ["mpi"], "profile": "",
-                                         "target": "t*", "program_args": "-v"}
-    assert layered.value("profile", "") == "(default)" and layered.value("test_jobs", 1, type=int) == 4
-    assert layered.app.value("compiler") == "gfortran"  # (the app's unchanged)
-    # A file from before: its options' Build options move there.
-    layered.use({"compiler": "old", "word_wrap": True, "features": ["omp"]}, tmp_path, {})
-    assert layered.options == {"word_wrap": True}
-    assert layered.new_configuration == {"compiler": "old", "features": ["omp"]}
+def test_a_projects_own_options_without_a_file_are_the_apps_per_project_keys(layered):
+    layered.use(None, None, {"session": "session/abc", "build_configuration": "bc/abc"})
+    layered.setValue("session", "{}")
+    assert layered.app.value("session/abc") == "{}" and not layered.app.contains("session")
+    assert layered.value("session") == "{}" and layered.contains("session")
+    layered.use({}, None, {"session": "session/abc"})  # (a file without them yet: the app's, for the project)
+    assert layered.value("session") == "{}"
+    layered.use(None)  # (no project)
+    assert layered.value("session", "none") == "none"
+    layered.setValue("session", "ignored")
+    assert layered.app.value("session/abc") == "{}"
 
 
 # ----------------------------------------------------------------- the file
-def test_the_options_key_keeps_the_configurations(tmp_path):
+def test_the_file_is_read_whole_and_written_a_part_at_a_time(tmp_path):
     path = tmp_path / bc.FILE_NAME
+    missing = bc.ConfigFile(path).read()
+    assert missing.options is None and missing.configurations == [] and not missing.error
     bc.save(path, bc.Configuration("a", compiler="ifx"))
-    assert bc.load_options(path) == {}
-    bc.save_options(path, {"word_wrap": True})
-    assert bc.load_options(path) == {"word_wrap": True}
-    assert bc.load(path) == [bc.Configuration("a", compiler="ifx")]
-    bc.save(path, bc.Configuration("b"))
-    assert bc.load_options(path) == {"word_wrap": True}  # (saving a configuration keeps them)
-    assert bc.load_options(tmp_path / "none.json") is None
-    path.write_text('{"configurations": [], "options": []}')
-    with pytest.raises(bc.ConfigError, match="isn't an object"):
-        bc.load_options(path)
+    file = bc.ConfigFile(path).read()
+    assert file.options == {} and file.new_configuration is None
+    new = bc.Configuration("", flags="-g", parallel_tests=2)
+    assert file.write_options({"word_wrap": True}, new)
+    assert not file.write_options({"word_wrap": True}, new)  # (the same: not written again)
+    data = json.loads(path.read_text())
+    assert list(data) == ["vibefpm", "configurations", "new_configuration", "options"]
+    assert data["new_configuration"] == new.to_json(named=False) and "name" not in data["new_configuration"]
+    again = bc.ConfigFile(path).read()
+    assert again.options == {"word_wrap": True} and again.new_configuration == new
+    assert again.configurations == [bc.Configuration("a", compiler="ifx")]
+    bc.save(path, bc.Configuration("b"))  # (saving a configuration keeps the rest)
+    assert bc.ConfigFile(path).read().options == {"word_wrap": True}
+
+
+def test_new_configurations_values_are_checked(tmp_path):
+    path = tmp_path / bc.FILE_NAME
+    path.write_text(json.dumps({"configurations": [], "new_configuration": {"parallel_tests": 0, "flags": 3,
+                                                                             "compiler": "ifx"}}))
+    assert bc.ConfigFile(path).read().new_configuration == bc.Configuration("", compiler="ifx")
+
+
+def test_a_file_from_before_has_its_build_options_moved(tmp_path):
+    path = tmp_path / bc.FILE_NAME
+    path.write_text(json.dumps({"configurations": [], "options": {
+        "word_wrap": True, "compiler": "old", "test_jobs": 3, "features": ["omp"], "extra": "--x"}}))
+    file = bc.ConfigFile(path).read()
+    assert file.options == {"word_wrap": True}
+    assert file.new_configuration == bc.Configuration("", compiler="old", parallel_tests=3, features=["omp"],
+                                                      extra_args="--x")
+    assert file.write_options(file.options, file.new_configuration)  # (moved: written so)
+    assert "compiler" not in json.loads(path.read_text())["options"]
+
+
+@pytest.mark.parametrize("key", ["options", "new_configuration"])
+def test_a_file_whose_options_cant_be_read_isnt_used(tmp_path, key):
+    path = tmp_path / bc.FILE_NAME
+    path.write_text(json.dumps({"configurations": [{"name": "a"}], key: []}))
+    file = bc.ConfigFile(path).read()
+    assert f'"{key}" isn\'t an object' in file.error
+    assert file.options is None and file.configurations == []
+    text = path.read_text()
+    for change in (lambda: file.save(bc.Configuration("b")), lambda: file.remove("a")):
+        with pytest.raises(bc.ConfigError):
+            change()
+    assert path.read_text() == text  # (not written over)
 
 
 # ----------------------------------------------------------------- the window
@@ -122,8 +152,21 @@ def configured(project):
     return project
 
 
+def file_data(project) -> dict:
+    return json.loads((project / bc.FILE_NAME).read_text())
+
+
 def file_options(project) -> dict:
-    return bc.load_options(project / bc.FILE_NAME)
+    return file_data(project)["options"]
+
+
+def put(project, options: dict, new: dict | None = None):
+    """The file's options (and New configuration), as if written before."""
+    data = file_data(project)
+    data["options"] = options
+    if new is not None:
+        data["new_configuration"] = new
+    (project / bc.FILE_NAME).write_text(json.dumps(data))
 
 
 def test_closing_writes_the_options_in_the_file(make_window, configured):
@@ -138,7 +181,7 @@ def test_closing_writes_the_options_in_the_file(make_window, configured):
     assert options["panels"] and "tab_rows_wrap" in options
     for build_option in ("compiler", "flags", "profile", "test_jobs", "features", "extra"):
         assert build_option not in options  # (beside the configurations: see below)
-    new = bc.load_new_configuration(configured / bc.FILE_NAME)
+    new = file_data(configured)["new_configuration"]
     assert {"compiler", "flags", "profile", "parallel_tests", "features", "extra_args", "target",
             "program_args", "coverage", "verbose"} <= set(new) and "name" not in new
     assert all(f"problems/{source}" in options for source in window.problems_panel.buttons)
@@ -149,7 +192,7 @@ def test_closing_writes_the_options_in_the_file(make_window, configured):
 
 
 def test_opening_uses_the_files_options(make_window, configured):
-    bc.save_options(configured / bc.FILE_NAME, {
+    put(configured, {
         "word_wrap": True, "minimap": False, "tab_rows_wrap": True,
         "session": {"files": [{"path": "src/foo.f90", "line": 2, "column": 0, "scroll": 0}],
                     "current": "src/foo.f90"}}, {"compiler": "nvfortran", "target": "check*"})
@@ -170,7 +213,7 @@ def test_a_project_without_a_file_gets_none(make_window, project):
 
 
 def test_switching_projects_applies_each_ones_options(make_window, configured, conflict_project):
-    bc.save_options(configured / bc.FILE_NAME, {"word_wrap": True, "compiler": "ifx"})
+    put(configured, {"word_wrap": True, "compiler": "ifx"})
     window = make_window(configured / "fpm.toml")
     assert window.word_wrap_action.isChecked()
     window.minimap_action.setChecked(False)  # (this project's)
@@ -203,15 +246,14 @@ def test_options_changed_in_the_editor_are_applied(make_window, configured):
     assert window.word_wrap_action.isChecked()
 
 
-def test_a_file_from_before_has_its_build_options_moved(make_window, configured):
-    bc.save_options(configured / bc.FILE_NAME, {"word_wrap": True, "compiler": "ifx", "features": []})
+def test_a_file_from_before_has_its_build_options_moved_when_the_window_closes(make_window, configured):
+    put(configured, {"word_wrap": True, "compiler": "ifx", "features": []})
     window = make_window(configured / "fpm.toml")
     assert window.compiler_edit.text() == "ifx" and window.word_wrap_action.isChecked()
     window.close()
     assert "compiler" not in file_options(configured)
-    assert bc.load_new_configuration(configured / bc.FILE_NAME)["compiler"] == "ifx"
-    data = json.loads((configured / bc.FILE_NAME).read_text())
-    assert list(data) == ["configurations", "new_configuration", "options"]  # (in the order it's read)
+    assert file_data(configured)["new_configuration"]["compiler"] == "ifx"
+    assert list(file_data(configured)) == ["configurations", "new_configuration", "options"]
 
 
 def test_nothing_written_when_nothing_changed(make_window, configured):
@@ -232,3 +274,55 @@ def test_a_shared_file_works_where_the_project_is(make_window, tmp_path):
     root = write_files(tmp_path / "copy", files)
     window = make_window(root / "fpm.toml")
     assert window.current_editor().path == (root / "src/m.f90").resolve()
+
+
+# ----------------------------------------------------------------- found in review
+def test_new_configurations_features_survive_saving_the_first_configuration(make_window, tmp_path, monkeypatch):
+    """Saving the first configuration starts the file's options: New
+    configuration's features were then read from the wrong key (lost)."""
+    root = write_files(tmp_path / "feat", {"fpm.toml": 'name = "feat"\n[features]\nmpi.flags = "-DMPI"\n'})
+    window = make_window(root / "fpm.toml")
+    window.feature_actions["mpi"].trigger()
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("first", True))
+    window.save_configuration()
+    window.select_configuration("")
+    assert window.selected_features == ["mpi"]
+
+
+def test_options_changed_in_the_editor_keep_the_configuration_chosen(make_window, configured):
+    bc.save(configured / bc.FILE_NAME, bc.Configuration("a", compiler="ifx"))
+    window = make_window(configured / "fpm.toml")
+    window.select_configuration("a")
+    editor = open_editor(window, configured / bc.FILE_NAME)
+    data = json.loads(editor.editor.toPlainText())
+    data["options"] = {"word_wrap": True}
+    editor.editor.setPlainText(json.dumps(data, indent=2))
+    editor.save()
+    assert window.word_wrap_action.isChecked()
+    assert window.config_combo.currentText() == "a" and window.compiler_edit.text() == "ifx"
+
+
+def test_switching_projects_without_options_leaves_collapsed_panels(qtbot, make_window, project, conflict_project):
+    from qtpy.QtCore import QPoint
+    from test_dock_snap import collapsed, drag, ready
+
+    window = make_window(project / "fpm.toml")
+    ready(qtbot, window)
+    files = window.docks["files"]
+    y, edge = files.geometry().center().y(), files.geometry().right() + 3
+    drag(qtbot, window, QPoint(edge, y), QPoint(edge - 100, y), QPoint(5, y))
+    assert collapsed(window, "files")
+    window.open_manifest(conflict_project / "fpm.toml")
+    assert collapsed(window, "files")
+
+
+@pytest.mark.parametrize("key", ["options", "new_configuration"])
+def test_options_that_cant_be_read_say_why(make_window, configured, key):
+    data = json.loads((configured / bc.FILE_NAME).read_text())
+    data[key] = ["not", "an", "object"]
+    text = json.dumps(data)
+    (configured / bc.FILE_NAME).write_text(text)
+    window = make_window(configured / "fpm.toml")
+    assert f'"{key}" isn\'t an object' in window.config_combo.toolTip()
+    window.close()
+    assert (configured / bc.FILE_NAME).read_text() == text  # (not written over)

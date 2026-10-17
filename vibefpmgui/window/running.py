@@ -317,12 +317,9 @@ class RunningMixin:
         self.profile_combo.blockSignals(False)
 
         if not self.config_shown():  # (a configuration's own features stay; see vibefpmgui.window.configs)
-            saved = self.settings.value(self._features_key(), [], type=list) or []
+            saved = self._saved_free_options().features
             self.selected_features = [f for f in saved if f in self.project_features]
         self._rebuild_features_menu()
-
-    def _features_key(self) -> str:
-        return self._project_key("features")
 
     def _rebuild_features_menu(self):
         menu = self.features_menu
@@ -368,7 +365,7 @@ class RunningMixin:
     def _save_features(self):
         """New configuration's features (not a saved configuration's, being edited)."""
         if self.manifest_path and not self.config_shown():
-            self.settings.setValue(self._features_key(), self.selected_features)
+            self._keep_free_options(self.current_options())
 
     def _update_features_ui(self):
         """Show the selection, and disable Profile while features are on."""

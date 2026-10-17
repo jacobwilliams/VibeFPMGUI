@@ -66,7 +66,7 @@ class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
         # them) are the settings the window is made with.
         start = manifest_path or self.settings.value("last_manifest", "")
         start = Path(start).resolve() if start and Path(start).is_file() else None
-        self._use_project_options(start)
+        self._use_config_file(self._config_file_for(start) if start is not None else None, start)
         themes.chosen_style = str(self.settings.value("app_style", themes.AUTOMATIC) or themes.AUTOMATIC)
         themes.apply(str(self.settings.value("app_theme", themes.SYSTEM) or themes.SYSTEM))  # (before the widgets)
         self._session_busy = False  # restoring the open files (don't save meanwhile)
@@ -185,10 +185,10 @@ class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
 
     def closeEvent(self, event):
         clearing = getattr(self, "_clearing_settings", False)
+        # (Before closing brings other panels to the front: e.g. stopping a review shows Build.)
+        front = self.front_panels()
         if not clearing:
             self._save_session()
-            # (Before closing brings other panels to the front: e.g. stopping a review shows Build.)
-            self._front_at_close = self.front_panels()
         # Every question first: answering Cancel or No leaves everything running.
         if not self.maybe_save_configuration():
             event.ignore()
@@ -220,8 +220,8 @@ class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
         s = self.settings
         s.setValue("geometry", self.saveGeometry())
         s.setValue("fpm", self.fpm_edit.text())
-        self._store_window_options()  # (the project's options, or the app's settings)
-        self._write_project_options()
+        self._store_window_options(front)  # (the project's options, or the app's settings)
+        self._write_config_file()
         super().closeEvent(event)
 
 

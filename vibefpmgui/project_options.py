@@ -1,8 +1,9 @@
 """A project's GUI options, in its build configuration file's "options"
 (see `vibefpmgui.build_configs`): the View menu's choices, the panels'
-layout, the editor's tabs and the files open in them, New configuration's
-Build options… everything the app keeps in its settings that's about how
-the project is worked on.
+layout, the editor's tabs and the files open in them… everything the app
+keeps in its settings that's about how the project is worked on. (New
+configuration's Build options are in the file too, but as a configuration:
+see `vibefpmgui.window.options`.)
 
 Not in it (kept in the app's settings, for this computer): the window's size
 and place, the recent lists and the last project, the command palette's
@@ -13,7 +14,9 @@ durations, which build folders a build wrote).
 `LayeredSettings` stands in for the app's QSettings: while a project's
 options are in use (``options`` not None), an option is read from them (the
 app's value if they don't have it yet) and written to them; anything else,
-and every option while there are none, is the app's. In the file, the open
+and every option while there are none, is the app's. An option the app
+keeps per project (`PER_PROJECT`) is asked for by its name; the app's key
+for it is the project's (see ``use``). In the file, the open
 files and the Project files tree's folders inside the project are relative
 to it (so it works wherever the project is).
 """
@@ -43,22 +46,12 @@ OPTIONS: dict[str, object] = {
     "complexity_tests": bool, "complexity_dependencies": bool, "coverage_tests": bool,
     "search/case": bool, "search/word": bool, "search/regex": bool, "search/dependencies": bool,
     "search/ignored": bool, "search/include": str, "search/exclude": str,
-    # The configuration chosen (New configuration's Build options: see NEW_CONFIGURATION)
+    # The configuration chosen
     "build_configuration": str,
 }
-# New configuration's Build options (not the fpm executable) and features, by
-# their settings key: in the file, not with the options but beside the saved
-# configurations, as one ("new_configuration", their fields without a name).
-NEW_CONFIGURATION: dict[str, tuple[str, object]] = {
-    "profile": ("profile", str), "compiler": ("compiler", str), "flags": ("flags", str),
-    "extra": ("extra_args", str), "target": ("target", str), "program_args": ("program_args", str),
-    "verbose": ("verbose", bool), "coverage": ("coverage", bool), "test_jobs": ("parallel_tests", int),
-    "features": ("features", list),
-}
-DEFAULT_PROFILE = "(default)"  # (as the Profile list shows it; "" in the file)
 PREFIXES: dict[str, object] = {"problems/": bool}  # (one key per source of problems)
 # Options the app keeps per project (its settings key: "<name>/<hash of the project>").
-PER_PROJECT = ("session", "features", "build_configuration")
+PER_PROJECT = ("session", "build_configuration")
 
 
 def kind_of(key: str):
@@ -143,60 +136,66 @@ class LayeredSettings:
     def __init__(self, app):
         self.app = app
         self.options: dict | None = None
-        self.new_configuration: dict = {}  # (the file's "new_configuration", while options are used)
         self.root: Path | None = None  # the project's folder (the session's paths are relative to it)
+        self.project_keys: dict[str, str] = {}  # the app's key of each PER_PROJECT option, for this project
 
-    def use(self, options: dict | None, root: Path | None = None, new_configuration: dict | None = None):
-        """Use a project's options (and New configuration's Build options)
-        from now on (None: the app's settings only). Build options a file's
-        options had (before they went beside the configurations) move there."""
+    def use(self, options: dict | None, root: Path | None = None, project_keys: dict[str, str] | None = None):
+        """Use a project's options from now on (None: the app's settings
+        only); ``project_keys``: the app's key of each PER_PROJECT option for
+        the project (none: there's no project)."""
         self.options = None if options is None else dict(options)
-        self.new_configuration = dict(new_configuration or {})
         self.root = root
-        for key, (field, _kind) in NEW_CONFIGURATION.items():
-            if self.options is not None and key in self.options:
-                self.new_configuration.setdefault(field, self.options.pop(key))
+        self.project_keys = dict(project_keys or {})
+
+    def _app_key(self, key: str) -> str | None:
+        """The app's key for ``key`` (None: a per-project one, with no project)."""
+        return self.project_keys.get(key) if key in PER_PROJECT else key
+
+    def _in_options(self, key: str) -> bool:
+        return self.options is not None and kind_of(key) is not None
 
     def value(self, key: str, default=None, type=None):
-        if self.options is not None and key in NEW_CONFIGURATION:
-            field, kind = NEW_CONFIGURATION[key]
-            if field in self.new_configuration:
-                fallback = default if default is not None else self._default(kind)
-                value = from_file(self.new_configuration[field], kind, fallback)
-                return DEFAULT_PROFILE if key == "profile" and not value else value
         kind = kind_of(key)
-        if self.options is not None and kind is not None and key in self.options:
+        if self._in_options(key) and key in self.options:
             value = self.options[key]
             if kind == JSON and isinstance(value, dict) and self.root is not None:
                 value = _session_paths(value, self.root, _absolute)
             fallback = default if default is not None else self._default(kind)
             return from_file(value, kind, fallback)
-        return self.app.value(key, default) if type is None else self.app.value(key, default, type=type)
+        source = self._app_key(key)
+        if source is None:
+            return default
+        return self.app.value(source, default) if type is None else self.app.value(source, default, type=type)
+
+    def setValue(self, key: str, value):
+        if self._in_options(key):
+            kind = kind_of(key)
+            value = to_file(value, kind)
+            if kind == JSON and isinstance(value, dict) and self.root is not None:
+                value = _session_paths(value, self.root, _relative)
+            self.options[key] = value
+        elif (source := self._app_key(key)) is not None:
+            self.app.setValue(source, value)
+
+    def contains(self, key: str) -> bool:
+        if self._in_options(key) and key in self.options:
+            return True
+        source = self._app_key(key)
+        return source is not None and self.app.contains(source)
+
+    def remove(self, key: str):
+        if self._in_options(key):
+            self.options.pop(key, None)
+        elif (source := self._app_key(key)) is not None:
+            self.app.remove(source)
 
     @staticmethod
     def _default(kind):
         return {bool: False, int: 0, float: 0.0, list: [], str: ""}.get(kind)
 
-    def setValue(self, key: str, value):
-        if self.options is not None and key in NEW_CONFIGURATION:
-            field, kind = NEW_CONFIGURATION[key]
-            value = to_file(value, kind)
-            self.new_configuration[field] = "" if key == "profile" and value == DEFAULT_PROFILE else value
-            return
-        kind = kind_of(key)
-        if self.options is not None and kind is not None:
-            value = to_file(value, kind)
-            if kind == JSON and isinstance(value, dict) and self.root is not None:
-                value = _session_paths(value, self.root, _relative)
-            self.options[key] = value
-            return
-        self.app.setValue(key, value)
-
-    def complete_options(self, app_keys: dict[str, str] | None = None) -> dict:
+    def complete_options(self) -> dict:
         """The options to write: those set, and the app's values for the
-        others it has (so the file has them all). ``app_keys``: the app's
-        settings key of an option kept per project ("session" →
-        "session/<hash>")."""
+        others it has (so the file has them all)."""
         out = {}
         prefixed = {k for k in [*self.app.allKeys(), *(self.options or {})] if any(k.startswith(p) for p in PREFIXES)}
         names = set(OPTIONS) | prefixed
@@ -204,7 +203,7 @@ class LayeredSettings:
             if name in (self.options or {}):
                 out[name] = self.options[name]
                 continue
-            source = (app_keys or {}).get(name, name if name not in PER_PROJECT else None)
+            source = self._app_key(name)
             if source is None or not self.app.contains(source):
                 continue
             kind = kind_of(name)
