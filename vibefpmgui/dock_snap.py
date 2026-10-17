@@ -128,12 +128,15 @@ class SnapClosed(QObject):
             for bar in tab_bars:
                 other = bar.geometry()
                 # Its own stack's: starting where it starts and within it, along
-                # its edge (tabs above or below it), or down its side (tabs beside
-                # it). (Not another stack's that only touches it: with the macOS
-                # style's thin separators, the bottom panels' tab bar touched the
-                # right side's, which then reached across the window.)
-                lined_up = (abs(other.left() - rect.left()) <= 4 and other.right() <= rect.right() + 4) or \
-                    (abs(other.top() - rect.top()) <= 4 and other.bottom() <= rect.bottom() + 4)
+                # its edge (a bar across: tabs above or below it), or down its
+                # side (a bar down: tabs beside it). (Not another stack's that
+                # only touches it: with the macOS style's thin separators, the
+                # bottom panels' tab bar touched the right side's, which then
+                # reached across the window; and a stack's bar, beside a panel
+                # and level with its top, was taken to be its tabs down its side.)
+                across = other.width() >= other.height()
+                lined_up = (across and abs(other.left() - rect.left()) <= 4 and other.right() <= rect.right() + 4) \
+                    or (not across and abs(other.top() - rect.top()) <= 4 and other.bottom() <= rect.bottom() + 4)
                 if lined_up and other.adjusted(-2, -2, 2, 2).intersects(rect):
                     rect = rect.united(other)
         return rect
@@ -199,7 +202,13 @@ class SnapClosed(QObject):
     def _collapse(self, side: Side):
         """The panels in front: no content or title, so no minimum size; the
         ones behind them in their stacks: hidden (with one panel left, Qt
-        takes the stack's tab bar away, which would keep a strip open)."""
+        takes the stack's tab bar away, which would keep a strip open).
+        Panels among them already collapsed (on their own: one of two side by
+        side, then both) are opened first: their content put back, to be
+        saved again (saved as it was, a panel's would be its grip, and it would
+        come back blank); they open with the others."""
+        for other in [s for s in self.collapsed if set(s.group) & set(side.group)]:
+            self._open(other)
         side.cross = [d.height() if side.horizontal else d.width() for d in side.docks]
         for dock in side.group:
             if dock in side.docks:
