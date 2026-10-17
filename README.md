@@ -34,6 +34,11 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   message's "src/x.f90:12:5:" to open the file at that line; in an ifx
   traceback, a row's line number and file (ifx gives only the file's name: the
   project's file of that name opens, a dependency's if it's only there).
+  *File → New fpm Project…* makes a new project with `fpm new` and opens it:
+  its name and folder, and its kind (*Full*, the default: an annotated
+  `fpm.toml` and every folder, `--full`; only the folders chosen; or
+  *Bare*), with *Backfill* to add only what an existing folder is missing;
+  the dialog shows the command it will run.
   *File → Recent Manifests* reopens any of the last 10 projects (missing
   ones are greyed out); the last one is reopened at startup. Each project
   remembers the files open in the editor (with their cursor and scroll

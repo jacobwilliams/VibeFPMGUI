@@ -13,12 +13,16 @@ from pathlib import Path
 
 from qtpy.QtCore import QProcess, QProcessEnvironment, QTimer
 from qtpy.QtGui import QAction, QKeySequence
-from qtpy.QtWidgets import QFileDialog, QMessageBox, QVBoxLayout, QWidget
+from qtpy.QtWidgets import QDialog, QFileDialog, QMessageBox, QVBoxLayout, QWidget
 
+from .. import console
 from .. import manifest as m
+from ..background import call_in_background
 from ..console import gui_python
 from ..editor import EditorTab
+from ..new_project import NewProjectDialog
 from ..project_tree import ProjectTree
+from ..widgets import run_dialog
 
 
 def _signature(graph: m.DependencyGraph):
@@ -41,7 +45,11 @@ class ProjectMixin:
         open_new_action.setShortcut(QKeySequence("Ctrl+Shift+N"))  # (⌘⇧O: Open File in Editor)
         open_new_action.setStatusTip("Open another project in its own window, keeping this one open")
         open_new_action.triggered.connect(lambda: self.browse(new_window=True))
+        new_project_action = QAction("New fpm Project…", self)
+        new_project_action.setStatusTip("Make a new fpm project (fpm new), and open it")
+        new_project_action.triggered.connect(self.new_project)
         file_menu = self.menuBar().addMenu("&File")
+        file_menu.addAction(new_project_action)
         file_menu.addAction(open_action)
         file_menu.addAction(open_new_action)
         self.recent_menu = file_menu.addMenu("Recent Manifests")
@@ -94,6 +102,28 @@ class ProjectMixin:
         files_layout.setContentsMargins(4, 4, 4, 4)
         files_layout.addWidget(self.project_tree)
         return files_box
+
+    def new_project(self):
+        """File → New fpm Project…: fpm new with the options chosen, in the
+        background; then the new project is opened here."""
+        start = self.manifest_path.parent.parent if self.manifest_path else Path.home()
+        dialog = NewProjectDialog(self._fpm_executable(), start, self)
+        if run_dialog(dialog) != QDialog.Accepted:
+            return
+        command, target = dialog.command(), dialog.project_folder()
+        self.statusBar().showMessage(f"Making {target.name} (fpm new)…")
+        call_in_background(lambda: _run_fpm_new(command, target.parent),
+                           lambda result: self._project_made(target, *result), self)
+
+    def _project_made(self, target: Path, ok: bool, message: str):
+        manifest = target / "fpm.toml"
+        if not ok or not manifest.is_file():
+            self.statusBar().clearMessage()
+            QMessageBox.warning(self, "New fpm Project", f"fpm couldn't make {target.name}:\n\n"
+                                f"{message or 'it made no fpm.toml'}")
+            return
+        self.open_manifest(manifest)
+        self.statusBar().showMessage(f"Made {target.name}: {target}", 6000)
 
     def browse(self, new_window: bool = False):
         start = str(self.manifest_path.parent) if self.manifest_path else str(Path.home())
@@ -337,3 +367,13 @@ class ProjectMixin:
             msg += (f" · ⚠ {len(conflicts)} version conflict{'s' * (len(conflicts) != 1)}: "
                     + ", ".join(sorted(conflicts)) + " (see the graph)")
         self.statusBar().showMessage(msg)
+
+
+def _run_fpm_new(command: list[str], folder: Path) -> tuple[bool, str]:
+    """(whether it worked, what fpm said) of ``fpm new`` run in ``folder`` (on a pool thread)."""
+    try:
+        code, output, message = console.run(command, timeout=120, cwd=str(folder))
+    except (OSError, TimeoutError) as error:
+        return False, str(error)
+    said = "\n".join(part for part in ((output or b"").decode("utf-8", "replace").strip(), message) if part)
+    return code == 0, said
