@@ -127,9 +127,14 @@ class SnapClosed(QObject):
         if isinstance(widget, QDockWidget):
             for bar in tab_bars:
                 other = bar.geometry()
-                beside = other.left() <= rect.center().x() <= other.right() or \
-                    other.top() <= rect.center().y() <= other.bottom()
-                if beside and other.adjusted(-2, -2, 2, 2).intersects(rect):
+                # Its own stack's: starting where it starts and within it, along
+                # its edge (tabs above or below it), or down its side (tabs beside
+                # it). (Not another stack's that only touches it: with the macOS
+                # style's thin separators, the bottom panels' tab bar touched the
+                # right side's, which then reached across the window.)
+                lined_up = (abs(other.left() - rect.left()) <= 4 and other.right() <= rect.right() + 4) or \
+                    (abs(other.top() - rect.top()) <= 4 and other.bottom() <= rect.bottom() + 4)
+                if lined_up and other.adjusted(-2, -2, 2, 2).intersects(rect):
                     rect = rect.united(other)
         return rect
 

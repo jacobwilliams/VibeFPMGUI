@@ -129,6 +129,45 @@ def test_the_right_side_collapses(qtbot, window):
     assert not collapsed(window, "files") and not collapsed(window, "build")
 
 
+def test_the_right_side_collapses_with_thin_separators(mac_style, qtbot, window):
+    """(With the macOS style's thin separators the bottom panels' tab bar touched the
+    right side's, which was then taken to reach across the window: it didn't collapse.)"""
+    ready(qtbot, window)
+    graph = window.docks["graph"]
+    edge = graph.geometry().left() - 3
+    y = graph.geometry().center().y()
+    drag(qtbot, window, QPoint(edge, y), QPoint(edge + 100, y), QPoint(window.width() - 5, y))
+    assert collapsed(window, "graph") and collapsed(window, "outputs")
+
+
+def test_a_panel_takes_only_its_own_stack_s_tab_bar(qtbot):
+    """Which tab bars count as a panel's (they sit between it and the separator):
+    worked out from where they are, on any platform and style. (Another stack's
+    bar that only touched it, as the bottom panels' did the right side's with
+    thin separators, made the right side reach across the window.)"""
+    from qtpy.QtCore import QRect
+    from qtpy.QtWidgets import QDockWidget, QMainWindow, QWidget
+
+    from vibefpmgui.dock_snap import SnapClosed
+
+    window = QMainWindow()
+    qtbot.addWidget(window)
+    snap = SnapClosed(window, [])
+    right = QDockWidget(window)
+    right.setGeometry(QRect(967, 110, 433, 479))
+    own, beside, short = QWidget(window), QWidget(window), QWidget(window)
+    own.setGeometry(QRect(967, 86, 433, 24))      # (its stack's tabs, above it)
+    beside.setGeometry(QRect(311, 590, 1004, 24))  # (the bottom stack's tabs, touching its bottom)
+    short.setGeometry(QRect(967, 86, 200, 24))     # (tabs only as wide as they need: still its own)
+    assert snap._rect(right, [own, beside]) == QRect(967, 86, 433, 503)
+    assert snap._rect(right, [short]) == QRect(967, 86, 433, 503)
+    left = QDockWidget(window)
+    left.setGeometry(QRect(0, 110, 310, 400))
+    side = QWidget(window)
+    side.setGeometry(QRect(310, 110, 24, 180))     # (tabs down its side)
+    assert snap._rect(left, [side, beside]) == QRect(0, 110, 334, 400)
+
+
 def test_reset_layout_opens_collapsed_panels(qtbot, window):
     ready(qtbot, window)
     files = window.docks["files"]

@@ -20,6 +20,7 @@ from qtpy.QtGui import (
 )
 from qtpy.QtWidgets import (
     QFileDialog,
+    QHBoxLayout,
     QInputDialog,
     QLabel,
     QMenu,
@@ -129,16 +130,9 @@ class EditorTabsMixin:
         self.tabs.setElideMode(Qt.ElideNone)
         self.tabs.tabBar().setExpanding(False)
         # A list of every open tab, at the right end of the tab bar.
-        self.tab_list_button = QToolButton()
-        self.tab_list_button.setArrowType(Qt.DownArrow)
-        self.tab_list_button.setAutoRaise(True)
-        self.tab_list_button.setToolTip("All open tabs")
-        self.tab_list_button.setPopupMode(QToolButton.InstantPopup)
-        # Just the one arrow (a button with a menu also gets a menu indicator).
-        self.tab_list_button.setStyleSheet("QToolButton::menu-indicator { image: none; width: 0px; }")
-        tab_list = QMenu(self.tab_list_button)
+        tab_list = self.tab_list = QMenu(self.tabs)
         tab_list.aboutToShow.connect(lambda: self._fill_tab_list(tab_list))
-        self.tab_list_button.setMenu(tab_list)
+        self.tab_list_button = self._tab_list_button()
         self.tabs.setCornerWidget(self.tab_list_button, Qt.TopRightCorner)
         # The middle of the window: files open in the editor, each in a closable tab.
         self.tabs.setTabsClosable(True)
@@ -154,11 +148,18 @@ class EditorTabsMixin:
         self.tab_rows = WrappingTabBar(self.tabs)
         self.tab_rows.close_requested.connect(self.close_editor)
         self.tabs.tabBar().changed.connect(self.tab_rows.refresh)
+        # (The tab list, with Close All Editor Tabs, at the rows' end: as at the one row's.)
+        self.tab_rows_list_button = self._tab_list_button()
+        rows = QHBoxLayout()
+        rows.setContentsMargins(0, 0, 0, 0)
+        rows.setSpacing(0)
+        rows.addWidget(self.tab_rows, 1)
+        rows.addWidget(self.tab_rows_list_button, 0, Qt.AlignTop)
         self.editor_area = QWidget()
         area = QVBoxLayout(self.editor_area)
         area.setContentsMargins(0, 0, 0, 0)
         area.setSpacing(0)
-        area.addWidget(self.tab_rows)
+        area.addLayout(rows)
         area.addWidget(self.tabs, 1)
         menu = self.tab_rows_menu = self.view_menu.addMenu("Editor Tabs")  # (kept: PySide would let it go)
         group = QActionGroup(menu)
@@ -175,14 +176,27 @@ class EditorTabsMixin:
             self.tab_rows_actions[wrap] = action
         self.set_tab_rows(self.settings.value("tab_rows_wrap", False, type=bool), save=False)
 
+    def _tab_list_button(self) -> QToolButton:
+        """A button for the list of every open tab (the tab bar's corner, or the rows' end)."""
+        button = QToolButton()
+        button.setArrowType(Qt.DownArrow)
+        button.setAutoRaise(True)
+        button.setToolTip("All open tabs")
+        button.setPopupMode(QToolButton.InstantPopup)
+        # Just the one arrow (a button with a menu also gets a menu indicator).
+        button.setStyleSheet("QToolButton::menu-indicator { image: none; width: 0px; }")
+        button.setMenu(self.tab_list)
+        return button
+
     def set_tab_rows(self, wrap: bool, save: bool = True):
         """View → Editor Tabs: one row that scrolls, or several rows."""
         self.tab_rows_actions[wrap].setChecked(True)
         if save:
             self.settings.setValue("tab_rows_wrap", wrap)
         self.tabs.tabBar().setVisible(not wrap)
-        self.tab_list_button.setVisible(not wrap)  # (every tab is in view)
+        self.tab_list_button.setVisible(not wrap)  # (the rows have their own, at their end)
         self.tab_rows.setVisible(wrap)
+        self.tab_rows_list_button.setVisible(wrap)
         self.tab_rows.refresh()
 
     def editors(self) -> list[EditorTab]:

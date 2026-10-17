@@ -22,11 +22,13 @@ def test_switching_modes_is_remembered(qtbot, window, project, make_window):
     assert not rows.isVisible() and bar.isVisible() and window.tab_rows_actions[False].isChecked()
     window.tab_rows_actions[True].trigger()
     assert rows.isVisible() and not bar.isVisible() and not window.tab_list_button.isVisible()
+    assert window.tab_rows_list_button.isVisible()  # (the tab list at the rows' end)
     assert window.settings.value("tab_rows_wrap", type=bool) is True
     other = make_window(project / "fpm.toml")  # (the next start: several rows again)
     assert other.tab_rows_actions[True].isChecked() and other.tab_rows.isVisibleTo(other)
     window.tab_rows_actions[False].trigger()
     assert bar.isVisible() and not rows.isVisible() and window.tab_list_button.isVisible()
+    assert not window.tab_rows_list_button.isVisible()
 
 
 def test_tabs_wrap_onto_rows_as_wide_as_the_editor(qtbot, window, project):
@@ -116,3 +118,19 @@ def test_a_retina_icon_sits_where_the_tab_bar_puts_it(qtbot):
     area = rows.style().subElementRect(QStyle.SE_TabBarTabLeftButton, rows._option(0), rows)
     assert magenta and round(max(xs) - min(xs) + 1 / scale) == 16  # (16 points wide, not 32)
     assert abs((min(xs) + max(xs)) / 2 - area.center().x()) <= 1 and abs((min(ys) + max(ys)) / 2 - area.center().y()) <= 1
+
+
+def test_the_tab_list_and_close_all_on_rows(qtbot, window, project):
+    """(With the tabs on rows, their list, and Close All Editor Tabs, were gone.)"""
+    open_many(window, project)
+    window.set_tab_rows(True)
+    menu = window.tab_rows_list_button.menu()
+    assert menu is window.tab_list_button.menu()  # (the same list)
+    menu.aboutToShow.emit()
+    names = [a.text() for a in menu.actions() if a.text()]
+    assert names[:len(NAMES)] == NAMES and names[-1] == "Close All Editor Tabs"
+    button = window.tab_rows_list_button
+    assert button.geometry().right() >= window.tab_rows.geometry().right()  # (at the rows' end)
+    close_all = next(a for a in menu.actions() if a.text() == "Close All Editor Tabs")
+    close_all.trigger()
+    assert window.tabs.count() == 0
