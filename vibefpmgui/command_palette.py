@@ -4,7 +4,7 @@ found by typing part of its name, as in VS Code.
 The commands aren't listed here: they're the menu bar's actions, read when
 the palette opens (`collect`), so a command added to a menu is in the
 palette too. A menu that fills itself when it opens (Syntax Colors, Window
-Style, Recent Manifests…) is asked to, as it is when it's opened. Running a
+Style, Recent Projects…) is asked to, as it is when it's opened. Running a
 command triggers its action, as choosing it in its menu does.
 """
 

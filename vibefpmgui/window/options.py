@@ -58,7 +58,7 @@ class ProjectOptionsMixin:
     # ------------------------------------------------------------ the file
     def _config_file_for(self, manifest: Path) -> bc.ConfigFile:
         """A project's configuration file, read: the one opened for it last
-        (File → Open Build Configuration…), or the one beside its fpm.toml."""
+        (Build options → ⋯ → Open Configuration File…), or the one beside its fpm.toml."""
         remembered = self.settings.app.value(project_key(manifest, "build_config_file"), "") or ""
         path = Path(remembered) if remembered and Path(remembered).is_file() else bc.default_path(manifest)
         return bc.ConfigFile(path).read()

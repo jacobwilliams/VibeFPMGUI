@@ -440,9 +440,9 @@ def test_discard_puts_the_configuration_back_as_saved(editing_then_blocked, proj
     assert window.build_arguments(["build"], True) == ["build", "--compiler", "ifx"]
 
 
-def test_an_open_that_didnt_happen_isnt_a_recent_configuration(editing_then_blocked):
+def test_an_open_that_didnt_happen_isnt_a_recent_project(editing_then_blocked):
     window, other = editing_then_blocked
-    assert str(other.resolve()) not in window.recent_configs()
+    assert str(other.parent.resolve()) not in window.recent_projects()
 
 
 def test_the_configuration_chosen_changed_in_the_editor_is_chosen(make_window, configured):

@@ -143,19 +143,6 @@ def test_package_menu_for_the_project_and_a_path_dependency(conflict_window, mon
 
 
 # ------------------------------------------------------------- window menus
-def test_recent_manifests(make_window, project, conflict_project):
-    window = make_window(project / "fpm.toml")
-    window.open_manifest(conflict_project / "fpm.toml")
-    window._fill_recent_menu()
-    labels = [a.text() for a in window.recent_menu.actions()]
-    assert any(label.startswith("proj") for label in labels) and any("conflict" in label for label in labels)
-    window.open_recent(str(project / "fpm.toml"))
-    assert window.manifest_path == (project / "fpm.toml").resolve() or window.manifest_path.name == "fpm.toml"
-    window.clear_recent_manifests()
-    window._fill_recent_menu()
-    assert window.recent_menu.actions()[0].text() == "No recent manifests"
-
-
 def test_syntax_colors_menu(window, project):
     editor = open_editor(window, project / "src/foo.f90")
     window._fill_style_menu()

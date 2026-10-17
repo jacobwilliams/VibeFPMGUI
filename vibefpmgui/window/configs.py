@@ -1,6 +1,8 @@
 """Build configurations (see `vibefpmgui.build_configs`): the Configuration
-list at the top of Build options, and File → Open / Recent / Save Build
-Configuration.
+list at the top of Build options (its ⋯ menu opens another configuration
+file), and File → Save Build Configuration…. (A project opened with File →
+Open Project… or Recent Projects comes with its vibefpm.json: see
+vibefpmgui.window.project.)
 
 "New configuration" is the Build options as before: editable, kept in the
 app's settings. Choosing a saved configuration shows its options, read-only
@@ -14,7 +16,6 @@ project or file, quitting) with changes not saved asks first.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from qtpy.QtWidgets import (
@@ -32,7 +33,6 @@ from .. import build_configs as bc
 from .options import project_key
 
 NEW_CONFIGURATION = "New configuration"
-MAX_RECENT_CONFIGS = 10
 
 
 class ConfigsMixin:
@@ -306,13 +306,10 @@ class ConfigsMixin:
         self.config_note.setVisible(locked or editing)
         self.update_window_title()  # (the configuration chosen is in it)
 
-    def _remember_config_file(self, manifest: Path, path: Path, recent: bool = True):
-        """The configuration file the project uses from now on (``recent``:
-        and in Recent Build Configurations)."""
+    def _remember_config_file(self, manifest: Path, path: Path):
+        """The configuration file the project uses from now on."""
         self.settings.setValue(project_key(manifest, "build_config_file"),
                                "" if path == bc.default_path(manifest) else str(path))
-        if recent:
-            self._remember_config(path)
 
     # ------------------------------------------------------------ commands
     def save_configuration(self) -> bool:
@@ -482,7 +479,7 @@ class ConfigsMixin:
         manifest = manifest.resolve()
         key = project_key(manifest, "build_config_file")
         before = self.settings.app.value(key, "")
-        self._remember_config_file(manifest, path, recent=False)  # (the file the project is opened with)
+        self._remember_config_file(manifest, path)  # (the file the project is opened with)
         if manifest != self.manifest_path:
             self.open_manifest(manifest)
             if self.manifest_path != manifest:  # (not opened: Cancel, or fpm running)
@@ -491,7 +488,6 @@ class ConfigsMixin:
         elif path != self.config_path:
             self._switch_config_file(manifest, force=True)
             self._load_configurations()
-        self._remember_config(path)  # (opened: in Recent Build Configurations)
         configs = self.configurations
         self._fill_config_combo(configs[0].name if configs else "")
         self.statusBar().showMessage(f"{path.name}: {len(configs)} configuration"
@@ -500,44 +496,3 @@ class ConfigsMixin:
     def _show_config_file(self):
         if self.config_path and self.config_path.is_file():
             self.open_file(str(self.config_path), force_editor=True)
-
-    # ------------------------------------------------------------ recent
-    def recent_configs(self) -> list[str]:
-        value = self.settings.value("recent_configs", [], type=list) or []
-        return [str(p) for p in value if p]
-
-    def _remember_config(self, path: Path):
-        recent = [p for p in self.recent_configs() if Path(p) != path]
-        self.settings.setValue("recent_configs", [str(path), *recent][:MAX_RECENT_CONFIGS])
-
-    def _fill_recent_configs_menu(self):
-        """Rebuilt each time it opens, so missing files show as such."""
-        menu = self.recent_configs_menu
-        menu.clear()
-        recent = self.recent_configs()
-        if not recent:
-            menu.addAction("No recent configurations").setEnabled(False)
-        home = str(Path.home())
-        for path in recent:
-            shown = "~" + path[len(home):] if path.startswith(home + os.sep) else path
-            exists = Path(path).is_file()
-            label = f"{Path(path).parent.name} — {shown}" + ("" if exists else "  (not found)")
-            action = menu.addAction(label.replace("&", "&&"))
-            action.setToolTip(path if exists else f"{path}\nThis file no longer exists.")
-            action.setEnabled(exists)
-            action.setCheckable(True)
-            action.setChecked(self.config_path is not None and Path(path) == self.config_path)
-            action.triggered.connect(lambda _=False, p=path: self.open_recent_config(p))
-        menu.addSeparator()
-        clear = menu.addAction("Clear Menu")
-        clear.setEnabled(bool(recent))
-        clear.triggered.connect(lambda: self.settings.setValue("recent_configs", []))
-
-    def open_recent_config(self, path: str):
-        if not Path(path).is_file():
-            QMessageBox.warning(self, "File not found", f"{path}\n\nno longer exists, so it was removed from "
-                                "Recent Build Configurations.")
-            self.settings.setValue("recent_configs", [p for p in self.recent_configs() if p != path])
-            return
-        self.open_configuration(path)
-

@@ -177,10 +177,7 @@ def test_open_a_configuration_file_and_its_project(window, project, conflict_pro
     assert window.manifest_path == (conflict_project / "fpm.toml").resolve()
     assert window.config_path == path.resolve()
     assert window.config_combo.currentText() == "other" and window.compiler_edit.text() == "lfortran"
-    assert window.recent_configs()[0] == str(path.resolve())
-    window._fill_recent_configs_menu()
-    entries = [a for a in window.recent_configs_menu.actions() if a.isCheckable()]
-    assert entries[0].isChecked() and "conflict" in entries[0].text()
+    assert window.recent_projects()[0] == str(conflict_project.resolve())
 
 
 def test_a_configuration_file_not_beside_an_fpm_toml(window, tmp_path, monkeypatch):
@@ -204,7 +201,7 @@ def test_a_file_that_cant_be_read(make_window, project, monkeypatch):
 
 def test_the_file_menu(window):
     titles = {c.title for c in collect(window.menuBar())}
-    assert {"File › Open Build Configuration…", "File › Save Build Configuration…"} <= titles
+    assert {"File › Open Project…", "File › Save Build Configuration…"} <= titles
 
 
 # ----------------------------------------------------------------- editing

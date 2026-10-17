@@ -36,11 +36,13 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   drops them. Leaving it with changes not saved (choosing another, opening
   another project or configuration file, quitting) asks to save them first.
   *⋯* saves under another name (*Save As…*), edits a copy as New
-  configuration, deletes one, or shows the file in the editor. *File → Open Build Configuration…* opens
-  a configuration file (any `.json` of them beside an `fpm.toml`) and its
-  project; *Recent Build Configurations* lists the last ones. The
-  configuration chosen is remembered for each project; the file is read
-  again when the project reloads.
+  configuration, deletes one, shows the file in the editor, or opens
+  another configuration file (any `.json` of them beside the `fpm.toml`). A
+  project opened with *File → Open Project…* comes with its
+  `vibefpm.json`. The configuration chosen is remembered for each project.
+  The configurations are read again when the project reloads (after a
+  build, say); saving the file in the editor applies it, taking the options
+  changed there.
 
   The file's `options` are the GUI's settings for the project, one set for
   every configuration in it: the View menu's choices (word wrap, linting,
@@ -86,12 +88,15 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   `fpm.toml` and every folder, `--full`; only the folders chosen; or
   *Bare*), with *Backfill* to add only what an existing folder is missing;
   the dialog shows the command it will run.
-  *File → Recent Manifests* reopens any of the last 10 projects (missing
-  ones are greyed out); the last one is reopened at startup. Each project
+  *File → Open Project…* (⌘O) opens a project's folder: with its
+  `vibefpm.json` (its build configurations and options) if it has one, else
+  its `fpm.toml`; a folder without an `fpm.toml` isn't a project, and says
+  so. *File → Recent Projects* reopens any of the last 10 project folders
+  (missing ones are greyed out); the last one is reopened at startup. Each project
   remembers the files open in the editor (with their cursor and scroll
   positions), the tab in front and the folders open in the *Project files*
-  tree, and restores them when it is opened again. *File → Open fpm.toml in
-  New Window…* (⇧⌘O) opens another project in its own window (a separate
+  tree, and restores them when it is opened again. *File → Open Project in
+  New Window…* (⇧⌘N) opens another project in its own window (a separate
   process, so each has its own builds and language server); such windows
   don't change which project is reopened at startup.
 * *Build options → Features*: tick any of the features declared in the
