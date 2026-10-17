@@ -7,6 +7,7 @@ Its gutter, issue squiggles and multiple cursors are mixins:
 from __future__ import annotations
 
 import re
+from bisect import bisect_left
 from collections.abc import Callable
 
 from qtpy.QtCore import QPoint, QRect, Qt, QTimer, Signal
@@ -43,6 +44,7 @@ from .highlighter import document_text
 from .hover_popup import HoverPopup
 from .multi_cursor import MultiCursorMixin
 
+FIND_COLOR = QColor(252, 196, 25, 110)  # the find bar's matches
 
 class CodeEditor(EditorGutterMixin, EditorIssuesMixin, MultiCursorMixin, QPlainTextEdit):
     """Plain-text editor with a line-number gutter, current-line highlight,
@@ -82,12 +84,13 @@ class CodeEditor(EditorGutterMixin, EditorIssuesMixin, MultiCursorMixin, QPlainT
         self.change_marks: dict[int, str] = {}                  # line -> "unsaved" / "saved"
         self.deletions: dict[int, tuple[str, int]] = {}          # line -> (kind, lines deleted above it)
         self.minimap = None  # the vibefpmgui.minimap.Minimap beside it, if any
-        self.find_selections: list[QTextEdit.ExtraSelection] = []
+        self.find_selections: list[tuple[int, int]] = []  # the find bar's matches: (start, end) positions
         self.coverage: dict[int, int] = {}  # line -> times the tests ran it (see set_coverage)
         self.coverage_branches: dict[int, tuple[int, int]] = {}  # line -> (branches taken, branches)
         # The selection's other occurrences, highlighted (see update_occurrences):
         # Match case / Whole words come from the tab's find bar.
-        self.occurrence_selections: list[QTextEdit.ExtraSelection] = []
+        self.occurrence_selections: list[tuple[int, int]] = []  # (start, end) positions
+        self._occurrence_color = QColor()
         self.match_options: Callable[[], tuple[bool, bool]] = lambda: (False, False)
         self._occurrence_timer = QTimer(self)
         self._occurrence_timer.setSingleShot(True)
@@ -98,8 +101,11 @@ class CodeEditor(EditorGutterMixin, EditorIssuesMixin, MultiCursorMixin, QPlainT
         self._spelling: list = []        # the misspelled words among them, in line order (see set_lint)
         self._spelling_lines: list[int] = []
         # The highlights that only change when the markers, issues or gremlins
-        # do (rebuilt then, not on every cursor move: see update_extra_selections).
+        # do, for the lines around the view (see update_extra_selections).
         self._fixed_selections: list[QTextEdit.ExtraSelection] = []
+        self._fixed_key: tuple | None = None   # (what they were made for: the data's version, the lines)
+        self._highlights_version = 0
+        self._issue_lines: dict[int, list] = {}  # line -> its underlined issues (not spelling)
         self.gremlins: dict[int, list[gremlins_mod.Gremlin]] = {}  # line -> its gremlins (View → Show Gremlins)
         # Multiple cursors: ⌥/Alt-click adds one, ⌘⇧/Ctrl+Shift-click a column
         # of them. Typing, deleting and moving happen at all of them; these
@@ -118,6 +124,7 @@ class CodeEditor(EditorGutterMixin, EditorIssuesMixin, MultiCursorMixin, QPlainT
         self.blockCountChanged.connect(self.update_gutter_width)
         self.updateRequest.connect(self._update_gutter)
         self.cursorPositionChanged.connect(lambda: self.update_extra_selections(rebuild=False))
+        self.verticalScrollBar().valueChanged.connect(self._scrolled)
         self.update_gutter_width()
         self.update_extra_selections()
 
@@ -132,6 +139,8 @@ class CodeEditor(EditorGutterMixin, EditorIssuesMixin, MultiCursorMixin, QPlainT
         self.gutter.setGeometry(QRect(cr.left(), cr.top(), self.gutter_width(), cr.height()))
         if self.lineWrapMode() != QPlainTextEdit.NoWrap:  # (lines re-wrap: highlight their new rows)
             QTimer.singleShot(0, self, self.update_extra_selections)
+        else:
+            self._scrolled()  # (more or fewer lines on view)
 
     def set_word_wrap(self, on: bool):
         """Wrap long lines at the window's edge (at a space if there is
@@ -299,12 +308,26 @@ class CodeEditor(EditorGutterMixin, EditorIssuesMixin, MultiCursorMixin, QPlainT
     # -------------------------------------------------------- highlights
     def update_extra_selections(self, rebuild: bool = True):
         """Current line, lines with errors/warnings, underlined issues,
-        gremlins, the extra cursors' selections and find matches. The
-        markers', issues' and gremlins' are kept between calls and only built
-        again with ``rebuild`` (they changed, or the colors or line wrapping
-        did): moving the cursor only moves the current line's."""
+        gremlins, the extra cursors' selections, the selection's other
+        occurrences and find matches.
+
+        Only the lines around the view get highlights (see `_line_window`):
+        each is a QTextCursor that Qt moves along at every edit and goes
+        through at every cursor move, and a big file's thousands of issues
+        made typing, and replacing its text, take seconds. Scrolling makes
+        those of the lines coming into view. ``rebuild``: the markers,
+        issues or gremlins changed (or the colors, or the line wrapping)."""
         if rebuild:
-            self._fixed_selections = self._marker_and_issue_selections()
+            self._highlights_version += 1
+            self._issue_lines = {}
+            for issue in self.lint_issues:
+                if issue.severity != "spelling":  # (drawn by paintEvent: see _paint_squiggles)
+                    self._issue_lines.setdefault(issue.line, []).append(issue)
+        window = self._line_window()
+        key = (self._highlights_version, window)
+        if key != self._fixed_key:
+            self._fixed_selections = self._marker_and_issue_selections(*window)
+            self._fixed_key = key
         selections = list(self._fixed_selections)
         if not self.isReadOnly():
             color = QColor(self.palette().color(QPalette.Highlight))
@@ -318,52 +341,83 @@ class CodeEditor(EditorGutterMixin, EditorIssuesMixin, MultiCursorMixin, QPlainT
                 sel.format.setForeground(self.palette().color(QPalette.HighlightedText))
                 sel.cursor = QTextCursor(c)
                 selections.append(sel)
-        self.setExtraSelections(selections + self.occurrence_selections + self.find_selections)
+        selections += self._span_selections(self.occurrence_selections, self._occurrence_color, window)
+        selections += self._span_selections(self.find_selections, FIND_COLOR, window)
+        self.setExtraSelections(selections)
 
-    def _marker_and_issue_selections(self) -> list:
-        selections = []
-        if self.show_coverage:  # (lines the tests didn't run: a faint red, under the problems' tints)
-            missed = QColor(COVERAGE_COLORS["missed"])
-            missed.setAlpha(26)
-            for line, count in self.coverage.items():
-                block = self.document().findBlockByNumber(line - 1)
-                if count == 0 and block.isValid():
-                    selections += self._line_highlight(block, missed)
-        for line, notes in self.markers.items():
-            block = self.document().findBlockByNumber(line - 1)
-            if not block.isValid():
-                continue
-            worst = worst_severity(notes)
-            color = QColor(MARKER_COLORS.get(worst, "#868e96"))
-            color.setAlpha(34)
-            selections += self._line_highlight(block, color)
-        for issue in self.lint_issues:
-            if issue.severity == "spelling":
-                continue  # (drawn by paintEvent: see _paint_squiggles)
-            span = self._lint_span(issue)
-            if span is None:
-                continue
+    def _line_window(self) -> tuple[int, int]:
+        """The lines (0-based, first and last) to highlight: those on view, and
+        a screenful either side, in steps of a screenful (scrolling a line
+        doesn't make them all again)."""
+        rows = max(8, self.viewport().height() // max(1, self.fontMetrics().lineSpacing()))
+        first = self.firstVisibleBlock().blockNumber() // rows * rows
+        return max(0, first - rows), first + 3 * rows
+
+    def _scrolled(self, *_):
+        if self._fixed_key is not None and self._fixed_key[1] != self._line_window():
+            self.update_extra_selections(rebuild=False)
+
+    def _span_selections(self, spans: list[tuple[int, int]], color: QColor, window: tuple[int, int]) -> list:
+        """Highlights for the (start, end) positions, in order, that are in the window's lines."""
+        if not spans:
+            return []
+        doc = self.document()
+        low = doc.findBlockByNumber(window[0]).position()
+        last = doc.findBlockByNumber(window[1])
+        high = last.position() + last.length() if last.isValid() else doc.characterCount()
+        out = []
+        for start, end in spans[bisect_left(spans, (low, 0)):]:
+            if start > high:
+                break
             sel = QTextEdit.ExtraSelection()
-            sel.format.setUnderlineStyle(QTextCharFormat.WaveUnderline)
-            sel.format.setUnderlineColor(QColor(MARKER_COLORS[issue.severity]))
-            sel.cursor = QTextCursor(self.document())
-            sel.cursor.setPosition(span[0])
-            sel.cursor.setPosition(span[1], QTextCursor.KeepAnchor)
-            selections.append(sel)
+            sel.format.setBackground(color)
+            sel.cursor = QTextCursor(doc)
+            sel.cursor.setPosition(start)
+            sel.cursor.setPosition(end, QTextCursor.KeepAnchor)
+            out.append(sel)
+        return out
+
+    def _marker_and_issue_selections(self, first: int, last: int) -> list:
+        """The highlights of lines ``first`` to ``last`` (0-based): the tests'
+        missed lines, then the markers' tints, the issues' squiggles and the
+        gremlins' tints (each drawn over the one before)."""
+        missed = QColor(COVERAGE_COLORS["missed"])
+        missed.setAlpha(26)
         tint = QColor(gremlins_mod.COLOR)
         tint.setAlpha(70)
-        for found in self.gremlins.values():  # (a tint: an invisible one would show nothing else)
-            for g in found:
-                block = self.document().findBlockByNumber(g.line - 1)
-                if not block.isValid() or g.column >= block.length() - 1:
+        coverage, markers, issues, gremlins = [], [], [], []
+        block = self.document().findBlockByNumber(first)
+        while block.isValid() and block.blockNumber() <= last:
+            line = block.blockNumber() + 1
+            if self.show_coverage and self.coverage.get(line) == 0:
+                coverage += self._line_highlight(block, missed)
+            notes = self.markers.get(line)
+            if notes:
+                color = QColor(MARKER_COLORS.get(worst_severity(notes), "#868e96"))
+                color.setAlpha(34)
+                markers += self._line_highlight(block, color)
+            for issue in self._issue_lines.get(line, ()):
+                span = self._lint_span(issue)
+                if span is None:
+                    continue
+                sel = QTextEdit.ExtraSelection()
+                sel.format.setUnderlineStyle(QTextCharFormat.WaveUnderline)
+                sel.format.setUnderlineColor(QColor(MARKER_COLORS[issue.severity]))
+                sel.cursor = QTextCursor(self.document())
+                sel.cursor.setPosition(span[0])
+                sel.cursor.setPosition(span[1], QTextCursor.KeepAnchor)
+                issues.append(sel)
+            for g in self.gremlins.get(line, ()):  # (a tint: an invisible one would show nothing else)
+                if g.column >= block.length() - 1:
                     continue
                 sel = QTextEdit.ExtraSelection()
                 sel.format.setBackground(tint)
                 sel.cursor = QTextCursor(block)
                 sel.cursor.setPosition(block.position() + g.column)
                 sel.cursor.setPosition(block.position() + g.column + 1, QTextCursor.KeepAnchor)
-                selections.append(sel)
-        return selections
+                gremlins.append(sel)
+            block = block.next()
+        return coverage + markers + issues + gremlins
 
     @staticmethod
     def _line_highlight(block, color: QColor) -> list:
@@ -386,7 +440,7 @@ class CodeEditor(EditorGutterMixin, EditorIssuesMixin, MultiCursorMixin, QPlainT
         """Highlight the other occurrences of the selected text in the file
         (single-line selections of 2 to 200 characters; Match case and Whole
         words as set in the find bar)."""
-        found: list[QTextEdit.ExtraSelection] = []
+        found: list[tuple[int, int]] = []
         cursor = self.textCursor()
         selected = cursor.selectedText()
         if (self.highlight_matches and len(self.extra_cursors) == 0 and 2 <= len(selected) <= 200
@@ -397,7 +451,7 @@ class CodeEditor(EditorGutterMixin, EditorIssuesMixin, MultiCursorMixin, QPlainT
                 pattern = rf"(?<!\w){pattern}(?!\w)"
             text = self.toPlainText()
             simple = text.isascii()  # (else Qt counts characters beyond U+FFFF twice)
-            color = occurrence_color(self.palette().color(QPalette.Base))
+            self._occurrence_color = occurrence_color(self.palette().color(QPalette.Base))
             mine = cursor.selectionStart()
             for match in re.finditer(pattern, text, 0 if case else re.IGNORECASE):
                 start, end = match.span()
@@ -405,20 +459,16 @@ class CodeEditor(EditorGutterMixin, EditorIssuesMixin, MultiCursorMixin, QPlainT
                     start, end = self._qt_position(text, start), self._qt_position(text, end)
                 if start == mine:
                     continue  # (the selection itself)
-                sel = QTextEdit.ExtraSelection()
-                sel.format.setBackground(color)
-                sel.cursor = QTextCursor(self.document())
-                sel.cursor.setPosition(start)
-                sel.cursor.setPosition(end, QTextCursor.KeepAnchor)
-                found.append(sel)
+                found.append((start, end))
                 if len(found) >= self.MAX_MATCHES:
                     break
         if found or self.occurrence_selections:
             self.occurrence_selections = found
             self.update_extra_selections(rebuild=False)
 
-    def set_find_selections(self, selections):
-        self.find_selections = selections
+    def set_find_selections(self, spans: list[tuple[int, int]]):
+        """The find bar's matches: (start, end) positions, in order."""
+        self.find_selections = spans
         self.update_extra_selections(rebuild=False)  # (kept apart: see update_extra_selections)
         self._update_minimap()
 

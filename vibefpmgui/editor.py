@@ -15,6 +15,7 @@ compiler's and the AI's markers) in `vibefpmgui.editor_checks`.
 from __future__ import annotations
 
 import html
+import re
 from pathlib import Path
 
 from qtpy.QtCore import QFileSystemWatcher, QProcess, QRect, QSize, Qt, QTimer, Signal
@@ -59,6 +60,12 @@ from .widgets import StatusLabel
 # a patch: a context line's), not trimmed on save (Edit → Trim Trailing
 # Whitespace still trims them).
 TRIM_KEEPS = {".md", ".markdown", ".diff", ".patch"}
+def _qt_length(text: str) -> int:
+    """``text``'s length as Qt counts it (UTF-16)."""
+    return len(text) if text.isascii() else len(text.encode("utf-16-le")) // 2
+
+
+TRAILING_SPACE_RE = re.compile(r"[^\S\n]+$", re.MULTILINE)  # (whitespace at a line's end, as str.rstrip strips)
 
 
 class _OutlineDelegate(QStyledItemDelegate):
@@ -137,6 +144,7 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
         self._outline: list[tuple[int, str, str, int, int]] = []
         self.editor = CodeEditor()
         self.highlighter = PygmentsHighlighter(self.editor.document(), lexer_for_path(self.path))
+        self.highlighter.line_on_view = lambda: self.editor.firstVisibleBlock().blockNumber()  # (colored first)
         self.find_bar = FindBar(self.editor)
         # A change to the text: the last test run's coverage no longer fits its lines.
         self.editor.document().contentsChange.connect(
@@ -332,25 +340,29 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
 
     def trim_trailing_whitespace(self) -> int:
         """Edit → Trim Trailing Whitespace: the spaces and tabs at the ends of
-        the lines removed (one step to undo); how many lines had them."""
+        the lines removed (one step to undo); how many lines had them. The
+        lines are found in the text at once (going through a big file's
+        every line took a tenth of a second at every save)."""
+        text = self.editor.toPlainText()
+        lines, line, at = [], 0, 0
+        for match in TRAILING_SPACE_RE.finditer(text):
+            line += text.count("\n", at, match.start())
+            at = match.start()
+            lines.append(line)
+        if not lines:
+            return 0
         document = self.editor.document()
         cursor = QTextCursor(document)
-        trimmed = 0
-        block = document.firstBlock()
-        while block.isValid():
+        cursor.beginEditBlock()
+        for number in lines:
+            block = document.findBlockByNumber(number)
             text = block.text()
-            end = len(text.rstrip())
-            if end < len(text):
-                if not trimmed:
-                    cursor.beginEditBlock()
-                cursor.setPosition(block.position() + end)
-                cursor.setPosition(block.position() + len(text), QTextCursor.KeepAnchor)
-                cursor.removeSelectedText()
-                trimmed += 1
-            block = block.next()
-        if trimmed:
-            cursor.endEditBlock()
-        return trimmed
+            # (Qt's positions count a character beyond U+FFFF as two.)
+            cursor.setPosition(block.position() + _qt_length(text.rstrip()))
+            cursor.setPosition(block.position() + _qt_length(text), QTextCursor.KeepAnchor)
+            cursor.removeSelectedText()
+        cursor.endEditBlock()
+        return len(lines)
 
     def save(self) -> bool:
         if self.trim_on_save and self.path.suffix.lower() not in TRIM_KEEPS:

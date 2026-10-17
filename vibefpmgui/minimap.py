@@ -166,8 +166,9 @@ class Minimap(QWidget):
         if editor.find_selections:
             found = QColor("#f2c94c")
             found.setAlpha(150)
-            for sel in editor.find_selections[:2000]:
-                line = sel.cursor.blockNumber()
+            doc = editor.document()
+            for start, _end in editor.find_selections[:2000]:
+                line = doc.findBlock(start).blockNumber()
                 if first <= line <= last:
                     painter.fillRect(QRectF(LEFT, line * LINE_HEIGHT - offset, self.width() - LEFT - 4,
                                             LINE_HEIGHT), found)

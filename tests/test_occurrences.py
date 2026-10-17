@@ -19,7 +19,9 @@ def select(editor, line: int, column: int, length: int):
 
 
 def highlighted(editor) -> list[tuple[int, str]]:
-    return [(s.cursor.block().blockNumber() + 1, s.cursor.selectedText()) for s in editor.editor.occurrence_selections]
+    doc = editor.editor.document()
+    text = editor.editor.toPlainText()
+    return [(doc.findBlock(start).blockNumber() + 1, text[start:end]) for start, end in editor.editor.occurrence_selections]
 
 
 def test_other_occurrences_are_highlighted(window, project):

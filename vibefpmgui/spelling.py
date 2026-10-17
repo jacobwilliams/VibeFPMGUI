@@ -167,19 +167,40 @@ def _words(segment: str):
             offset += len(part) + 1
 
 
+# A comment's or string's words not in the dictionary, by its text: checked
+# again after each edit, a big file's tens of thousands of them took a
+# quarter of a second, though few had changed. (None: the dictionary they're for.)
+_segments: dict = {}
+MAX_SEGMENTS = 200_000
+
+
+def _unknown_words(segment: str) -> tuple[tuple[int, str], ...]:
+    if DIRECTIVE_RE.match(segment):
+        return ()
+    return tuple((offset, word) for offset, word in _words(segment) if not is_known(word))
+
+
 def check(text: str, prose: list[tuple[int, int]], names: set[str] = frozenset()) -> list[SpellingIssue]:
     """The misspelled words in ``text``'s ``prose`` ((position, length) of
     each comment or string). ``names``: words the file uses as names
     or keywords (lowercase), which aren't misspellings."""
     if not available():
         return []
+    state = (language, frozenset(user_words))
+    if _segments.get(None) != state:  # (another dictionary: what's known changed)
+        _segments.clear()
+        _segments[None] = state
     found: list[tuple[int, str]] = []
     for pos, length in prose:
         segment = text[pos:pos + length]
-        if DIRECTIVE_RE.match(segment):
-            continue
-        for offset, word in _words(segment):
-            if word.lower() not in names and not is_known(word):
+        unknown = _segments.get(segment)
+        if unknown is None:
+            if len(_segments) > MAX_SEGMENTS:
+                _segments.clear()
+                _segments[None] = state
+            unknown = _segments[segment] = _unknown_words(segment)
+        for offset, word in unknown:
+            if word.lower() not in names:
                 found.append((pos + offset, word))
                 if len(found) >= MAX_ISSUES:
                     break

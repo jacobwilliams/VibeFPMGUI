@@ -2,22 +2,24 @@
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 from qtpy.QtCore import QRegularExpression, Qt
-from qtpy.QtGui import QColor, QTextCharFormat, QTextCursor, QTextDocument
+from qtpy.QtGui import QTextCursor, QTextDocument
 from qtpy.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QTextEdit,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from .editor_shared import MAX_FIND_HIGHLIGHTS
+
+BEYOND_BMP_RE = re.compile("[\U00010000-\U0010FFFF]")  # (characters Qt counts as two)
 
 if TYPE_CHECKING:
     from .code_editor import CodeEditor
@@ -171,15 +173,34 @@ class FindBar(QWidget):
     def _matches(self, selected: str, text: str) -> bool:
         return selected == text if self.case_check.isChecked() else selected.lower() == text.lower()
 
-    def _all_matches(self) -> list:
-        text = self.find_edit.text()
-        if not text:
+    def _all_matches(self) -> list[tuple[int, int]]:
+        """The matches' (start, end) positions (not cursors: a cursor kept is
+        one more that Qt moves along at every edit), found in the text at
+        once (Qt's find, match by match, took a fifth of a second for a big
+        file's 2000)."""
+        needle = self.find_edit.text()
+        if not needle:
             return []
+        text = self.editor.toPlainText()
+        if BEYOND_BMP_RE.search(text):  # (Qt counts those characters twice: its own find, then)
+            return self._qt_matches()
+        pattern = re.escape(needle)
+        if self.word_check.isChecked():
+            pattern = rf"(?<!\w){pattern}(?!\w)"
+        flags = 0 if self.case_check.isChecked() else re.IGNORECASE
+        out = []
+        for match in re.finditer(pattern, text, flags):
+            out.append(match.span())
+            if len(out) >= MAX_FIND_HIGHLIGHTS:
+                break
+        return out
+
+    def _qt_matches(self) -> list[tuple[int, int]]:
         doc = self.editor.document()
         out = []
         found = doc.find(self._needle(), 0, self._flags())
         while not found.isNull() and len(out) < MAX_FIND_HIGHLIGHTS:
-            out.append(found)
+            out.append((found.selectionStart(), found.selectionEnd()))
             found = doc.find(self._needle(), found.selectionEnd(), self._flags())
         return out
 
@@ -189,17 +210,7 @@ class FindBar(QWidget):
 
     def _update_highlights(self):
         matches = self._all_matches()
-        fmt = QTextCharFormat()
-        color = QColor("#fcc419")
-        color.setAlpha(110)
-        fmt.setBackground(color)
-        selections = []
-        for cursor in matches:
-            sel = QTextEdit.ExtraSelection()
-            sel.format = fmt
-            sel.cursor = cursor
-            selections.append(sel)
-        self.editor.set_find_selections(selections)
+        self.editor.set_find_selections(matches)
         self._matches_cache = matches
         self._update_count()
 
@@ -212,7 +223,7 @@ class FindBar(QWidget):
             self.count_label.setText("no matches")
             return
         pos = self.editor.textCursor().selectionStart()
-        index = next((i for i, c in enumerate(matches) if c.selectionStart() == pos), None)
+        index = next((i for i, (start, _end) in enumerate(matches) if start == pos), None)
         more = "+" if len(matches) >= MAX_FIND_HIGHLIGHTS else ""
         self.count_label.setText(f"{index + 1} of {len(matches)}{more}" if index is not None
                                  else f"{len(matches)}{more} matches")

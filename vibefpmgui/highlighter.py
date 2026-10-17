@@ -241,6 +241,7 @@ def _quick_thread_switching(interval: float = 0.0005):
 
 
 QUICK_LINES = 50  # lines colored on their own per edit (more, e.g. the whole text replaced: wait for the lexing)
+CHUNK_LINES = 2000  # recolored at a time (more: the lines on view first, the rest a chunk at a time)
 
 
 class PygmentsHighlighter(QSyntaxHighlighter):
@@ -262,6 +263,9 @@ class PygmentsHighlighter(QSyntaxHighlighter):
         self._busy = False
         self._closed = False      # its tab is closed (see close): a lexing thread then drops its answer
         self._quick_budget = QUICK_LINES  # (see _quick_line)
+        self._pending: list[tuple[int, int]] = []  # lines (0-based, first and last) still to recolor
+        self._job = 0            # (a recoloring a chunk at a time: changes when it's dropped)
+        self.line_on_view = None  # () -> the first line on view (0-based), set by the editor: colored first
         self.style = None
         self._style_name = None
         # While typing, wait for a short pause before lexing again.
@@ -275,6 +279,10 @@ class PygmentsHighlighter(QSyntaxHighlighter):
 
     def _schedule(self, *_):
         if not self._busy:
+            if self._pending:  # (edited while recoloring a chunk at a time: everything again, once lexed)
+                self._pending = []
+                self._job += 1
+                self._full = True
             self._timer.start()
 
     def close(self):
@@ -283,6 +291,8 @@ class PygmentsHighlighter(QSyntaxHighlighter):
         self._closed = True
         self._timer.stop()
         self._generation += 1
+        self._job += 1
+        self._pending = []
 
     def set_lexer(self, lexer):
         self.lexer = keep_positions(lexer)
@@ -311,7 +321,7 @@ class PygmentsHighlighter(QSyntaxHighlighter):
     def is_current(self) -> bool:
         """Whether the colors are for the document as it is now: no lexing
         waiting or running (and once that's done, `relexed` is emitted)."""
-        return not (self._timer.isActive() or self._lexing or self._full)
+        return not (self._timer.isActive() or self._lexing or self._full or self._pending)
 
     def _format(self, ttype) -> QTextCharFormat:
         fmt = self._formats.get(ttype)
@@ -427,20 +437,54 @@ class PygmentsHighlighter(QSyntaxHighlighter):
         self._formats.update(added)
         self._spans, self._starts, self._text = spans, starts, text
         self.prose, self.names = prose, names
+        document = self.document()
+        last = document.blockCount() - 1
+        if self._full or region is None:
+            first = 0
+        else:
+            first = document.findBlock(region[0]).blockNumber()
+            end = document.findBlock(region[1])
+            last = end.blockNumber() if end.isValid() else last
+        self._full = False
+        self._recolor(max(first, 0), last)
+
+    def _recolor(self, first: int, last: int):
+        """Recolor lines ``first`` to ``last`` (0-based). Many (a big file
+        colored after lexing, a string opened at the top of one): those on
+        view first, then the rest a chunk at a time, the window answering in
+        between (all at once took a second for 70 000 lines)."""
+        self._job += 1
+        if last - first < CHUNK_LINES:
+            self._pending = []
+            self._recolor_lines(first, last)
+            self.relexed.emit()
+            return
+        view = self.line_on_view() if self.line_on_view is not None else first
+        low = min(max(first, view - CHUNK_LINES // 4), max(first, last - CHUNK_LINES + 1))
+        high = min(last, low + CHUNK_LINES - 1)
+        rest = [*range(first, low, CHUNK_LINES), *range(high + 1, last + 1, CHUNK_LINES)]
+        self._pending = [(low, high)] + [(a, min(a + CHUNK_LINES, low if a < low else last + 1) - 1) for a in rest]
+        self._recolor_next(self._job)
+
+    def _recolor_next(self, job: int):
+        if job != self._job or not self._pending:
+            return  # (dropped: edited, closed, or recolored again since)
+        first, last = self._pending.pop(0)
+        self._recolor_lines(first, last)
+        if self._pending:
+            QTimer.singleShot(0, self, lambda: self._recolor_next(job))
+        else:
+            self.relexed.emit()
+
+    def _recolor_lines(self, first: int, last: int):
         self._busy = True  # (recoloring changes the document's formats: not an edit)
         try:
-            if self._full or region is None:
-                self.rehighlight()
-            else:
-                document = self.document()
-                block = document.findBlock(region[0])
-                while block.isValid() and block.position() <= region[1]:
-                    self.rehighlightBlock(block)
-                    block = block.next()
+            block = self.document().findBlockByNumber(first)
+            while block.isValid() and block.blockNumber() <= last:
+                self.rehighlightBlock(block)
+                block = block.next()
         finally:
             self._busy = False
-            self._full = False
-        self.relexed.emit()
 
     def highlightBlock(self, text: str):
         start = self.currentBlock().position()
