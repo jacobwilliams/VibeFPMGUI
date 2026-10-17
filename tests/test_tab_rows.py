@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from conftest import open_editor, write_files
 from qtpy.QtCore import QPoint, Qt
 from qtpy.QtTest import QTest
@@ -239,8 +240,13 @@ def test_tabs_on_later_rows_have_their_icon_and_close(qtbot):
     assert inside.contains(rows._close_rect(option))  # (its close glyph: in it)
 
 
-def test_right_click_beside_the_tabs(qtbot, window, project):
-    """The Editor Tabs choices (as in the View menu) on a right-click beside the tabs."""
+@pytest.mark.parametrize("tight", [False, True])
+def test_right_click_beside_the_tabs(qtbot, window, project, tight):
+    """The Editor Tabs choices (as in the View menu) on a right-click beside
+    the tabs. (Tight: the tabs fit with only a few pixels to spare, as three
+    did with Linux's fonts on CI, leaving nothing beside them to click; the
+    window is made wide enough for them to leave room.)"""
+    names = NAMES[:3]
     from qtpy.QtCore import QPoint
     from qtpy.QtGui import QContextMenuEvent
     from qtpy.QtWidgets import QApplication
@@ -257,11 +263,23 @@ def test_right_click_beside_the_tabs(qtbot, window, project):
                 next(a for a in menu.actions() if a.text() == choose).trigger()
             menu.close()
 
-    write_files(project, {f"src/{name}": "! x\n" for name in NAMES[:3]})
-    for name in NAMES[:3]:
+    write_files(project, {f"src/{name}": "! x\n" for name in names})
+    for name in names:
         open_editor(window, project / "src" / name)
     tabs, bar = window.tabs, window.tabs.tabBar()
     choices = ["One Row (Scroll)", "Several Rows (Wrap)"]
+    if tight:  # (the editor's area made just wider than its tabs: a side panel widened)
+        spare = bar.width() - sum(bar.tabSizeHint(i).width() for i in range(tabs.count())) - 10
+        graph = window.docks["graph"]
+        window.resizeDocks([graph], [graph.width() + spare], Qt.Horizontal)
+        qtbot.waitUntil(lambda: bar.width() - bar.tabRect(tabs.count() - 1).right() < 20)
+    # Room beside the last tab, whatever the fonts and style make the tabs'
+    # width (cut short to fit, they grow back as the window widens: their
+    # whole width is what's needed).
+    lacking = sum(bar.tabSizeHint(i).width() for i in range(tabs.count())) + 80 - bar.width()
+    if lacking > 0:
+        window.resize(window.width() + lacking, window.height())
+    qtbot.waitUntil(lambda: bar.tabRect(tabs.count() - 1).right() + 40 < bar.width())
 
     # One row: past its last tab.
     beside = QPoint(bar.tabRect(tabs.count() - 1).right() + 20, bar.height() // 2)
