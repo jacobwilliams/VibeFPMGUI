@@ -196,6 +196,9 @@ def _object(data: dict, key: str, path: Path) -> dict | None:
     return value
 
 
+_NONE = object()  # (an option not in the file)
+
+
 class ConfigFile:
     """A project's configuration file, as the app has it: ``configurations``,
     New configuration's Build options (``new_configuration``: None if the
@@ -243,20 +246,35 @@ class ConfigFile:
                 new.setdefault(name, self.options.pop(key))
         self.new_configuration = Configuration.from_json(new, name="") if new else None
 
-    def reread(self) -> bool:
-        """Read it again (it was changed, e.g. in the editor): its
-        configurations, and its options and New configuration if they're
-        not those last read or written (True: they changed)."""
+    def reread_configurations(self):
+        """Its configurations read again (the project reloaded: the file may
+        have changed; its options and New configuration are the window's
+        until they're written, or it's saved in the editor: see reread)."""
+        try:
+            self.configurations, self.error = self._load()[0], ""
+        except ConfigError as exc:
+            self.configurations, self.error = [], str(exc)
+
+    def reread(self) -> tuple[set[str], bool]:
+        """Read it all again (it was saved in the editor): (the options
+        changed in it since it was last read or written, whether New
+        configuration was). Those changed are taken (``options`` and
+        ``new_configuration``: the file's)."""
         try:
             configurations, options, new = self._load()
         except ConfigError as exc:
             self.configurations, self.error = [], str(exc)
-            return False
+            return set(), False
         self.configurations, self.error = configurations, ""
-        if self.exists() and (options, new) != self._written:
+        if not self.exists():
+            return set(), False
+        before, before_new = self._written or (None, None)
+        before, options_now = before or {}, options or {}
+        changed = {key for key in {*before, *options_now} if before.get(key, _NONE) != options_now.get(key, _NONE)}
+        new_changed = (new or {}) != (before_new or {})
+        if changed or new_changed:
             self._take_gui(options, new)
-            return True
-        return False
+        return changed, new_changed
 
     def start_options(self):
         """It was just made (the first configuration saved): it holds the

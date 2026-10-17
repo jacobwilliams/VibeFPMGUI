@@ -326,3 +326,81 @@ def test_options_that_cant_be_read_say_why(make_window, configured, key):
     assert f'"{key}" isn\'t an object' in window.config_combo.toolTip()
     window.close()
     assert (configured / bc.FILE_NAME).read_text() == text  # (not written over)
+
+
+# ----------------------------------------------------------------- found in the second review
+def test_saving_options_in_the_editor_keeps_the_windows_other_changes(make_window, configured):
+    """Only what was changed in the file is taken: the panels' layout and
+    the View menu's choices changed since are kept."""
+    make_window(configured / "fpm.toml").close()  # (the file has the options now, the layout among them)
+    window = make_window(configured / "fpm.toml")
+    window.docks["outputs"].hide()
+    window.minimap_action.setChecked(False)
+    editor = open_editor(window, configured / bc.FILE_NAME)
+    data = json.loads(editor.editor.toPlainText())
+    data["options"]["word_wrap"] = True
+    editor.editor.setPlainText(json.dumps(data, indent=2))
+    editor.save()
+    assert window.word_wrap_action.isChecked()
+    assert window.docks["outputs"].isHidden() and not window.minimap_action.isChecked()
+    window.close()
+    options = file_options(configured)
+    assert options["word_wrap"] is True and options["minimap"] is False
+
+
+def test_a_project_without_a_file_gets_its_own_new_configuration(make_window, tmp_path):
+    """Opened after one with a file, while a saved configuration was shown:
+    its New configuration's features were read from the other project's key."""
+    from vibefpmgui.window.options import project_key
+
+    toml = 'name = "{}"\n[features]\nmpi.flags = "-DMPI"\n'
+    a = write_files(tmp_path / "a", {"fpm.toml": toml.format("a"),
+                                     bc.FILE_NAME: json.dumps({"configurations": [{"name": "c"}]})})
+    b = write_files(tmp_path / "b", {"fpm.toml": toml.format("b")})
+    window = make_window(a / "fpm.toml")
+    window.settings.app.setValue(project_key((a / "fpm.toml").resolve(), "features"), ["mpi"])  # (a's, from before)
+    window.select_configuration("c")
+    window.open_manifest(b / "fpm.toml")
+    assert window.config_combo.currentIndex() == 0 and window.selected_features == []
+
+
+def test_a_reload_reads_the_configurations_but_leaves_the_options_to_the_window(make_window, configured):
+    put(configured, {}, {"compiler": "mine"})
+    window = make_window(configured / "fpm.toml")
+    data = file_data(configured)
+    data["new_configuration"] = {"compiler": "theirs"}
+    data["configurations"].append({"name": "added"})
+    (configured / bc.FILE_NAME).write_text(json.dumps(data))  # (changed outside the app: a git pull)
+    window.reload()  # (as after a build)
+    assert window.config_combo.findText("added") > 0
+    assert window.compiler_edit.text() == "mine" and window._saved_free_options().compiler == "mine"
+
+
+def test_a_configuration_named_like_new_configuration(make_window, configured):
+    from vibefpmgui.window.configs import NEW_CONFIGURATION
+
+    bc.save(configured / bc.FILE_NAME, bc.Configuration(NEW_CONFIGURATION, compiler="ifx"))
+    window = make_window(configured / "fpm.toml")
+    window.select_configuration(NEW_CONFIGURATION)
+    assert window.config_combo.currentIndex() > 0 and window.compiler_edit.text() == "ifx"
+
+
+def test_a_file_broken_while_open_says_its_options_arent_saved(make_window, configured):
+    window = make_window(configured / "fpm.toml")
+    (configured / bc.FILE_NAME).write_text("{oops")
+    window.reload()
+    tip = window.config_combo.toolTip()
+    assert "isn't valid JSON" in tip and "options aren't saved" in tip
+    window.close()
+    assert (configured / bc.FILE_NAME).read_text() == "{oops"
+
+
+def test_a_file_fixed_in_the_editor_has_its_options_used(make_window, configured):
+    (configured / bc.FILE_NAME).write_text('{"configurations": [], "options": []}')  # (broken)
+    window = make_window(configured / "fpm.toml")
+    assert not window.options_in_use()
+    editor = open_editor(window, configured / bc.FILE_NAME)
+    editor.editor.setPlainText('{"configurations": [{"name": "a"}], "options": {"word_wrap": true}}')
+    editor.save()
+    assert window.options_in_use() and window.word_wrap_action.isChecked()
+    assert window.config_combo.findText("a") > 0

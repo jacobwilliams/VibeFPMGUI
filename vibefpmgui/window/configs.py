@@ -170,7 +170,7 @@ class ConfigsMixin:
             editing = self._editing
             if not self.maybe_save_configuration():
                 self.config_combo.blockSignals(True)  # (Cancel: still on it, its changes kept)
-                self.config_combo.setCurrentIndex(max(0, self.config_combo.findText(editing)))
+                self.config_combo.setCurrentIndex(self._index_of(editing))
                 self.config_combo.blockSignals(False)
                 return
             self._editing = ""
@@ -193,23 +193,29 @@ class ConfigsMixin:
     def _configuration(self, name: str) -> bc.Configuration | None:
         return next((c for c in self.configurations if c.name == name), None)
 
+    def _index_of(self, name: str) -> int:
+        """The list's item of the saved configuration named ``name`` (0: New
+        configuration, if there's none; one may be named like it)."""
+        combo = self.config_combo
+        return next((i for i in range(1, combo.count()) if name and combo.itemText(i) == name), 0)
+
     def select_configuration(self, name: str):
         """Show the configuration named ``name`` ("": New configuration)."""
-        index = self.config_combo.findText(name) if name else 0
-        self.config_combo.setCurrentIndex(max(0, index))
+        self.config_combo.setCurrentIndex(self._index_of(name))
 
     # ------------------------------------------------------------ the file
-    def _load_configurations(self):
+    def _load_configurations(self, reread: bool = True):
         """The list of the project's configurations (the project was opened
-        or reloaded): the file read again (not for one just opened), the one
-        shown kept (for a file just opened, the one shown last time); one
-        being edited keeps its changes."""
+        or reloaded): its configurations read again (not for a file just
+        opened, or ``reread`` False: just read), the one shown kept (for a
+        file just opened, the one shown last time); one being edited keeps
+        its changes."""
         file = self.config_file
         if file is None or self.manifest_path is None:
             return
         first = file is not self._listed_file
-        if not first:
-            file.reread()  # (its configurations: the options are the window's)
+        if reread and not first:
+            file.reread_configurations()  # (not its options: they're the window's until written)
         self._listed_file = file
         if self._editing and not first:
             self._refill_items(self._editing)
@@ -230,8 +236,8 @@ class ConfigsMixin:
         unless it's being edited: its changes are kept)."""
         if self.config_file is None or self.manifest_path is None:
             return
-        self.reload_config_file()
-        self._load_configurations()
+        self.reload_config_file()  # (it reads it all)
+        self._load_configurations(reread=False)
         if self._config_error:
             return  # (the list says why; it's empty until the file is fixed)
         count = len(self.configurations)
@@ -256,7 +262,7 @@ class ConfigsMixin:
             combo.removeItem(1)
         names = [config.name for config in self.configurations]
         combo.addItems(names + ([shown] if shown and shown not in names else []))  # (being edited: kept)
-        combo.setCurrentIndex(max(0, combo.findText(shown)) if shown else 0)
+        combo.setCurrentIndex(self._index_of(shown))
         combo.blockSignals(False)
         self._update_config_ui()
 
@@ -282,6 +288,8 @@ class ConfigsMixin:
         where = self.config_path.name if self.config_path else bc.FILE_NAME
         if self._config_error:
             tip = f"⚠ {self._config_error}"
+            if self.options_in_use():  # (read when the project was opened: kept, not written over)
+                tip += "\nThe project's options aren't saved in it until it's fixed."
         elif self.config_path and self.configurations:
             tip = f"The configurations in {self.config_path}"
         else:

@@ -27,6 +27,8 @@ from .. import spelling, themes
 from ..code_editor import CodeEditor
 from ..graph_view import EDGE_STYLES, LAYOUTS, THEME_CHOICES
 
+NEW_CONFIGURATION_KEY = "new_configuration"  # (for _apply_options: New configuration's Build options)
+
 
 def project_key(manifest: Path, prefix: str) -> str:
     """The app's settings key for a project's ``prefix`` (its session, build
@@ -63,11 +65,13 @@ class ProjectOptionsMixin:
         path = Path(remembered) if remembered and Path(remembered).is_file() else bc.default_path(manifest)
         return bc.ConfigFile(path).read()
 
-    def _use_config_file(self, file: bc.ConfigFile | None, manifest: Path | None):
-        """Use ``file`` (the project ``manifest``'s) and its options from now on."""
+    def _use_config_file(self, file: bc.ConfigFile | None, manifest: Path | None, options: dict | None = None):
+        """Use ``file`` (the project ``manifest``'s) and its options (or
+        ``options``) from now on."""
         self.config_file, self._config_manifest = file, manifest
         keys = {name: project_key(manifest, name) for name in po.PER_PROJECT} if manifest is not None else {}
-        options = file.options if file is not None else None
+        if options is None and file is not None:
+            options = file.options
         self.settings.use(options, manifest.parent if options is not None else None, keys)
 
     def _config_file_saved(self):
@@ -107,24 +111,37 @@ class ProjectOptionsMixin:
 
     def reload_config_file(self):
         """The configuration file was saved in the editor: its configurations
-        read again, and its options and New configuration, if they were
-        changed there, used and applied (the configuration shown stays)."""
+        read again, and the options changed there (and New configuration, if
+        it was) used and applied; the window's other options, changed since
+        it was read, stay (and the configuration shown)."""
         file = self.config_file
         if file is None or self.manifest_path is None:
             return
-        if file.reread():
+        changed, new_changed = file.reread()
+        if not (changed or new_changed):
+            return
+        if not self.options_in_use():  # (it couldn't be read when the project was opened: fixed now)
             self._use_config_file(file, self._config_manifest)
             self._apply_options()
+            return
+        options = dict(self.settings.options)
+        for key in changed:
+            if key in file.options:
+                options[key] = file.options[key]
+            else:
+                options.pop(key, None)
+        self._use_config_file(file, self._config_manifest, options)
+        self._apply_options(changed | ({NEW_CONFIGURATION_KEY} if new_changed else set()))
 
     # ------------------------------------------------------------ New configuration
     def _saved_free_options(self) -> bc.Configuration:
         """New configuration's Build options as kept (not as shown: see
         free_options): the file's, or the app's settings."""
-        file = self.config_file
+        file, manifest = self.config_file, self._config_manifest  # (the project the settings are for)
         if self.options_in_use() and file is not None and file.new_configuration is not None:
             return file.new_configuration
         s = self.settings.app
-        features = (s.value(self._project_key("features"), [], type=list) or []) if self.manifest_path else []
+        features = (s.value(project_key(manifest, "features"), [], type=list) or []) if manifest else []
         return bc.Configuration(
             "", profile=s.value("profile", bc.DEFAULT_PROFILE) or bc.DEFAULT_PROFILE,
             features=[str(f) for f in features], compiler=s.value("compiler", "") or "",
@@ -146,8 +163,8 @@ class ProjectOptionsMixin:
                            ("program_args", config.program_args), ("verbose", config.verbose),
                            ("coverage", config.coverage), ("test_jobs", config.parallel_tests)):
             s.setValue(key, value)
-        if self.manifest_path is not None:
-            s.setValue(self._project_key("features"), list(config.features))
+        if self._config_manifest is not None:
+            s.setValue(project_key(self._config_manifest, "features"), list(config.features))
 
     def _apply_build_options(self):
         """Build options' fields: New configuration's, as kept (a saved
@@ -206,53 +223,80 @@ class ProjectOptionsMixin:
         s.setValue("panels_front", front)
         self._keep_free_options(self.free_options())
 
-    def _apply_options(self):
-        """Every option, from the settings, to the window (another project's:
-        the window was made with the first's; or the file's, changed in the
-        editor)."""
+    def _apply_options(self, only: set[str] | None = None):
+        """Options, from the settings, to the window: every one (another
+        project's: the window was made with the first's), or ``only`` those
+        (changed in the file, in the editor; NEW_CONFIGURATION_KEY: New
+        configuration's Build options)."""
         s = self.settings
-        self._apply_build_options()
+
+        def wanted(*keys: str) -> bool:
+            return only is None or any(key in only for key in keys)
+
+        if wanted(NEW_CONFIGURATION_KEY):
+            self._apply_build_options()
         # View
-        style = str(s.value("app_style", themes.AUTOMATIC) or themes.AUTOMATIC)
-        if style != themes.chosen_style:
-            self.set_window_style(style)
-        theme = str(s.value("app_theme", themes.SYSTEM) or themes.SYSTEM)
-        if theme != themes.current:
-            self.set_theme(theme)
-        syntax = s.value("syntax_style", hl.AUTO) or hl.AUTO
-        if syntax != hl.chosen_style:
-            self.set_syntax_style(syntax)
-        family = s.value("editor_font_family", "") or ""
-        size = s.value("editor_font_size", 0.0, type=float) or 0.0
-        if (family, size) != (editor_mod.editor_font_family, editor_mod.editor_font_size):
-            self.set_editor_font(family, size)
-        delta = s.value("font_delta", 0, type=int)
-        if delta != self.font_delta:
-            self.set_font_delta(delta, announce=False)
+        if wanted("app_style"):
+            style = str(s.value("app_style", themes.AUTOMATIC) or themes.AUTOMATIC)
+            if style != themes.chosen_style:
+                self.set_window_style(style)
+        if wanted("app_theme"):
+            theme = str(s.value("app_theme", themes.SYSTEM) or themes.SYSTEM)
+            if theme != themes.current:
+                self.set_theme(theme)
+        if wanted("syntax_style"):
+            syntax = s.value("syntax_style", hl.AUTO) or hl.AUTO
+            if syntax != hl.chosen_style:
+                self.set_syntax_style(syntax)
+        if wanted("editor_font_family", "editor_font_size"):
+            family = s.value("editor_font_family", "") or ""
+            size = s.value("editor_font_size", 0.0, type=float) or 0.0
+            if (family, size) != (editor_mod.editor_font_family, editor_mod.editor_font_size):
+                self.set_editor_font(family, size)
+        if wanted("font_delta"):
+            delta = s.value("font_delta", 0, type=int)
+            if delta != self.font_delta:
+                self.set_font_delta(delta, announce=False)
         for action, key, default in self._toggles():
-            action.setChecked(s.value(key, default, type=bool))  # (its handler applies it)
-        language = str(s.value("spelling_language", "en") or "en")
-        if language != spelling.language:
-            self.set_spelling_language(language)
-        width = s.value("indent_width", 4, type=int)
-        use_tabs = s.value("indent_tabs", False, type=bool)
-        if (width, use_tabs) != (CodeEditor.indent_width, CodeEditor.use_tabs):
-            self.set_indentation(width, use_tabs)
-        self.set_tab_rows(s.value("tab_rows_wrap", False, type=bool), save=False)
+            if wanted(key):
+                action.setChecked(s.value(key, default, type=bool))  # (its handler applies it)
+        if wanted("spelling_language"):
+            language = str(s.value("spelling_language", "en") or "en")
+            if language != spelling.language:
+                self.set_spelling_language(language)
+        if wanted("indent_width", "indent_tabs"):
+            width = s.value("indent_width", 4, type=int)
+            use_tabs = s.value("indent_tabs", False, type=bool)
+            if (width, use_tabs) != (CodeEditor.indent_width, CodeEditor.use_tabs):
+                self.set_indentation(width, use_tabs)
+        if wanted("tab_rows_wrap"):
+            self.set_tab_rows(s.value("tab_rows_wrap", False, type=bool), save=False)
         # Graph
-        self._set_graph_layout(s.value("graph_layout", next(iter(LAYOUTS))))
-        self._set_graph_theme(s.value("graph_theme", next(iter(THEME_CHOICES))))
-        self._set_graph_edges(s.value("graph_edges", next(iter(EDGE_STYLES))))
-        self.dependencies_dev_action.blockSignals(True)  # (the project is loaded next anyway)
-        self.dependencies_dev_action.setChecked(s.value("graph_dependencies_dev", False, type=bool))
-        self.dependencies_dev_action.blockSignals(False)
+        if wanted("graph_layout"):
+            self._set_graph_layout(s.value("graph_layout", next(iter(LAYOUTS))))
+        if wanted("graph_theme"):
+            self._set_graph_theme(s.value("graph_theme", next(iter(THEME_CHOICES))))
+        if wanted("graph_edges"):
+            self._set_graph_edges(s.value("graph_edges", next(iter(EDGE_STYLES))))
+        if wanted("graph_dependencies_dev"):
+            dev = s.value("graph_dependencies_dev", False, type=bool)
+            if only is None:  # (another project: it's loaded next anyway)
+                self.dependencies_dev_action.blockSignals(True)
+            self.dependencies_dev_action.setChecked(dev)
+            self.dependencies_dev_action.blockSignals(False)
         # Panels' own choices
-        self.complexity_panel.tests_check.setChecked(s.value("complexity_tests", False, type=bool))
-        self.complexity_panel.dependencies_check.setChecked(s.value("complexity_dependencies", False, type=bool))
-        self.coverage_panel.tests_check.setChecked(s.value("coverage_tests", False, type=bool))
+        if wanted("complexity_tests"):
+            self.complexity_panel.tests_check.setChecked(s.value("complexity_tests", False, type=bool))
+        if wanted("complexity_dependencies"):
+            self.complexity_panel.dependencies_check.setChecked(s.value("complexity_dependencies", False, type=bool))
+        if wanted("coverage_tests"):
+            self.coverage_panel.tests_check.setChecked(s.value("coverage_tests", False, type=bool))
         for source, button in self.problems_panel.buttons.items():
-            button.setChecked(s.value(f"problems/{source}", True, type=bool))
-        self.search_panel._restore_options()
-        layout = s.value("panels")
-        if layout:
-            self.restore_layout(layout, s.value("panels_front", [], type=list) or [])
+            if wanted(f"problems/{source}"):
+                button.setChecked(s.value(f"problems/{source}", True, type=bool))
+        if any(wanted(key) for key in po.OPTIONS if key.startswith("search/")):
+            self.search_panel._restore_options()
+        if wanted("panels", "panels_front"):
+            layout = s.value("panels")
+            if layout:
+                self.restore_layout(layout, s.value("panels_front", [], type=list) or [])
