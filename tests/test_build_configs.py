@@ -378,3 +378,14 @@ def test_a_change_saved_in_the_editor_while_editing_keeps_the_changes(saved, pro
     editor.editor.setPlainText(editor.editor.toPlainText().replace('"ifx"', '"theirs"'))
     editor.save()
     assert window.compiler_edit.text() == "mine" and window.has_unsaved_configuration()
+
+
+# ----------------------------------------------------------------- the window's title
+def test_the_window_title_has_the_project_and_the_configuration(saved, project):
+    window = saved  # ("a" saved and chosen)
+    assert window.windowTitle() == "VibeFPMGUI · proj · a"
+    window.edit_configuration()
+    assert window.windowTitle() == "VibeFPMGUI · proj · a"  # (still it, being edited)
+    window.cancel_editing()
+    window.select_configuration("")
+    assert window.windowTitle() == "VibeFPMGUI · proj"

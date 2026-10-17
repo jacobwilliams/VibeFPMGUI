@@ -304,6 +304,7 @@ class ConfigsMixin:
                                      if unsaved else f"<span style='color:gray'>Editing (from {where}).</span>")
             self.config_note.setToolTip("Save puts the changes in the file; Cancel goes back to it as saved.")
         self.config_note.setVisible(locked or editing)
+        self.update_window_title()  # (the configuration chosen is in it)
 
     def _remember_config_file(self, manifest: Path, path: Path, recent: bool = True):
         """The configuration file the project uses from now on (``recent``:

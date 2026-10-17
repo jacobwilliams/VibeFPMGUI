@@ -201,12 +201,21 @@ class ProjectMixin:
         self._remember_manifest(self.manifest_path)
         self.settings.sync()  # write now, so it survives the app being killed
         self.setWindowFilePath(str(self.manifest_path))  # macOS title-bar proxy icon
-        self.setWindowTitle(f"VibeFPMGUI — {self.manifest_path.parent.name}")
+        self.update_window_title()
         self.reload()
         if new_project:
             self._restore_session()
 
     MAX_RECENT = 10
+
+    def update_window_title(self):
+        """"VibeFPMGUI · project", and " · configuration" while a saved one is chosen."""
+        parts = ["VibeFPMGUI"]
+        if self.manifest_path is not None:
+            parts.append(self.manifest_path.parent.name)
+            if self.config_shown():
+                parts.append(self.config_combo.currentText())
+        self.setWindowTitle(" · ".join(parts))
 
     def recent_manifests(self) -> list[str]:
         value = self.settings.value("recent_manifests", [], type=list) or []
