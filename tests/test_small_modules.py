@@ -320,3 +320,29 @@ def test_macos_app_name(monkeypatch):
     out = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=60,
                          check=True).stdout
     assert out.split() == ["True", "VibeFPMGUI", "True"]
+
+
+def test_the_about_window_s_typing_code(qtbot):
+    from vibefpmgui.about import TYPED_CODE, TypingCode
+
+    typing = TypingCode()
+    qtbot.addWidget(typing)
+    assert "\n".join("".join(text for text, _kind in line) for line in typing.lines) == TYPED_CODE.rstrip("\n")
+    kinds = {kind for line in typing.lines for _text, kind in line}
+    assert {"keyword", "comment", "number"} <= kinds  # (colored as code)
+    typing.resize(128, 100)
+    assert not typing.timer.isActive()
+    typing.show()
+    assert typing.timer.isActive()  # (only while shown)
+    assert typing._position() == (0, 0, 0) and typing._rows() == 1
+    first = len("".join(text for text, _kind in typing.lines[0])) + 1
+    typing.typed = first + 3  # (the first line and its end, then 3 of the second)
+    assert typing._position() == (0, 1, 3) and typing._rows() == 2
+    typing.typed = typing._chars() + typing.PAUSE * typing.CHARS_PER_SECOND + 1  # (typed, paused: again)
+    assert typing._position()[0] == 1 and typing._rows() == len(typing.lines) + 2
+    for _ in range(100):
+        typing._tick()
+    assert typing.offset > 0  # (more rows than fit: scrolled up)
+    assert not typing.grab().isNull()  # (drawn)
+    typing.hide()
+    assert not typing.timer.isActive()

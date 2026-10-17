@@ -134,3 +134,106 @@ def test_the_tab_list_and_close_all_on_rows(qtbot, window, project):
     close_all = next(a for a in menu.actions() if a.text() == "Close All Editor Tabs")
     close_all.trigger()
     assert window.tabs.count() == 0
+
+
+def test_tabs_leave_little_room_around_the_name(qtbot):
+    """(macOS's style leaves the tab's buttons at its edges and centers the name in much
+    more room than it needs; Fusion leaves none. A style made generous, on any platform.)"""
+    from qtpy.QtGui import QFontMetrics
+    from qtpy.QtWidgets import (
+        QProxyStyle,
+        QStyle,
+        QStyleFactory,
+        QStyleOptionTab,
+        QTabWidget,
+        QWidget,
+    )
+
+    from vibefpmgui.window.editor_tabs import ScrollingTabBar
+
+    class Generous(QProxyStyle):
+        def sizeFromContents(self, kind, option, size, widget=None):
+            size = super().sizeFromContents(kind, option, size, widget)
+            if kind == QStyle.CT_TabBarTab:
+                size.setWidth(size.width() + 40)  # (the extra room ends up around the name)
+            return size
+
+    kept = []  # (the tab widgets and styles: alive for the test, as Qt doesn't own a style set on a widget)
+
+    def tab_bar(style):
+        tabs = QTabWidget()
+        qtbot.addWidget(tabs)
+        bar = ScrollingTabBar()
+        bar.setStyle(style)
+        tabs.setTabBar(bar)
+        tabs.addTab(QWidget(), "mathutils.f90")
+        kept.extend((tabs, style))
+        return bar
+
+    def room(bar) -> int:
+        option = QStyleOptionTab()
+        bar.initStyleOption(option, 0)
+        option.rect.setSize(bar.tabSizeHint(0))
+        return bar.style().subElementRect(QStyle.SE_TabBarTabText, option, bar).width()
+
+    plain = tab_bar(QStyleFactory.create("Fusion"))
+    generous = tab_bar(Generous(QStyleFactory.create("Fusion")))
+    name = QFontMetrics(generous.font()).horizontalAdvance("mathutils.f90")
+    assert room(generous) <= name + 2 * ScrollingTabBar.NAME_GAP  # (the 40 spare pixels: gone)
+    assert generous.tabSizeHint(0).width() < plain.tabSizeHint(0).width() + 40
+    assert room(plain) >= name  # (no spare room: unchanged, the name still fits)
+
+
+def test_tabs_on_later_rows_have_their_icon_and_close(qtbot):
+    """(The macOS style puts a tab's buttons from the top of the bar, whatever the tab's own
+    top: on the rows after the first, they were drawn up in the first, out of their tab.
+    A style that does the same, on any platform.)"""
+    from qtpy.QtCore import QRect
+    from qtpy.QtGui import QColor, QPixmap
+    from qtpy.QtWidgets import (
+        QLabel,
+        QProxyStyle,
+        QStyle,
+        QStyleFactory,
+        QTabBar,
+        QTabWidget,
+        QWidget,
+    )
+
+    from vibefpmgui.window.editor_tabs import ScrollingTabBar
+    from vibefpmgui.wrapping_tabs import WrappingTabBar
+
+    class FromTheTop(QProxyStyle):
+        def subElementRect(self, element, option, widget=None):
+            rect = super().subElementRect(element, option, widget)
+            if element in (QStyle.SE_TabBarTabLeftButton, QStyle.SE_TabBarTabRightButton):
+                rect.moveTop(rect.top() - option.rect.top())  # (as if the tab were on the first row)
+            return rect
+
+    tabs = QTabWidget()
+    qtbot.addWidget(tabs)
+    tabs.setTabBar(ScrollingTabBar())
+    for i in range(6):
+        tabs.addTab(QWidget(), f"file_{i}.f90")
+        pixmap = QPixmap(16, 16)
+        pixmap.fill(QColor("#ff00ff"))
+        icon = QLabel()
+        icon.setFixedSize(16, 16)
+        icon.setPixmap(pixmap)
+        tabs.tabBar().setTabButton(i, QTabBar.LeftSide, icon)
+    style = FromTheTop(QStyleFactory.create("Fusion"))
+    rows = WrappingTabBar(tabs)
+    rows.setStyle(style)
+    width = tabs.tabBar().tabSizeHint(0).width() * 2 + 10  # (two to a row)
+    rows.resize(width, rows.heightForWidth(width))
+    rows.refresh()
+    later = rows.tab_rect(4)
+    assert later.top() > 0  # (on a later row)
+    image = rows.grab().toImage()
+    scale = image.devicePixelRatio()
+    inside = QRect(later.x(), later.y(), later.width(), later.height())
+    magenta = [(x / scale, y / scale) for y in range(image.height()) for x in range(image.width())
+               if image.pixelColor(x, y) == QColor("#ff00ff")]
+    assert any(inside.contains(int(x), int(y)) for x, y in magenta)  # (its icon: in it)
+    option = rows._option(4)
+    assert inside.contains(rows._close_rect(option))  # (its close glyph: in it)

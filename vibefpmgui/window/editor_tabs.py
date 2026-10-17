@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from qtpy.QtCore import QFile, QSize, Qt, QUrl, Signal
+from qtpy.QtCore import QFile, QPoint, QRect, QSize, Qt, QUrl, Signal
 from qtpy.QtGui import (
     QAction,
     QActionGroup,
@@ -76,11 +76,25 @@ class ScrollingTabBar(QTabBar):
         font.setItalic(True)
         return font
 
+    NAME_GAP = 6  # between the name and the icon or close button beside it
+
     def tabSizeHint(self, index):
         size = super().tabSizeHint(index)
         name = self.italic_name(index)
         if name is not None:  # (room for the name it doesn't have as text)
             size.setWidth(size.width() + QFontMetrics(self._italic_font()).horizontalAdvance(name) + 4)
+        # No more room around the name than NAME_GAP on each side: some styles
+        # (macOS's) leave its buttons at the tab's edges and center the name in
+        # a much wider space. As wide as the style leaves for the name, less
+        # what's spare (a style that leaves none, as Fusion, is unchanged).
+        option = QStyleOptionTab()
+        self.initStyleOption(option, index)
+        option.rect = QRect(QPoint(0, 0), size)
+        room = self.style().subElementRect(QStyle.SE_TabBarTabText, option, self).width()
+        font = self._italic_font() if name is not None else self.font()
+        spare = room - QFontMetrics(font).horizontalAdvance(self.tab_name(index)) - 2 * self.NAME_GAP
+        if spare > 0:
+            size.setWidth(size.width() - spare)
         return size
 
     def paintEvent(self, event):

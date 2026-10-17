@@ -114,8 +114,18 @@ class WrappingTabBar(QWidget):
         option.text = self.bar.tabText(index)
         return option
 
+    def _button_rect(self, element, option: QStyleOptionTab) -> QRect:
+        """Where the style puts a tab's button (``element``: its left or right
+        one), for a tab on any row. The macOS style places them from the top
+        of the bar whatever the tab's own top (one row's always 0): asked for
+        the tab on the first row, then moved down to its own."""
+        top = QStyleOptionTab(option)
+        top.rect = QRect(option.rect)
+        top.rect.moveTop(0)
+        return self.style().subElementRect(element, top, self).translated(0, option.rect.top())
+
     def _close_rect(self, option: QStyleOptionTab) -> QRect:
-        area = self.style().subElementRect(QStyle.SE_TabBarTabRightButton, option, self)
+        area = self._button_rect(QStyle.SE_TabBarTabRightButton, option)
         rect = QRect(0, 0, CLOSE_SIZE + 6, CLOSE_SIZE + 6)
         rect.moveCenter(area.center())
         return rect
@@ -139,7 +149,7 @@ class WrappingTabBar(QWidget):
             painter.drawControl(QStyle.CE_TabBarTabLabel, option)
             icon = self.bar.tabButton(index, QTabBar.LeftSide)
             if icon is not None and hasattr(icon, "pixmap") and icon.pixmap() is not None:
-                area = self.style().subElementRect(QStyle.SE_TabBarTabLeftButton, option, self)
+                area = self._button_rect(QStyle.SE_TabBarTabLeftButton, option)
                 pixmap = icon.pixmap()
                 # (Its size as drawn, not in device pixels: on a Retina screen a 16-point icon is 32 pixels.)
                 target = QRect(QPoint(0, 0), pixmap.deviceIndependentSize().toSize())
