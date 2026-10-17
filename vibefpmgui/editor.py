@@ -514,26 +514,7 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
         parts = [f"Ln {cursor.blockNumber() + 1}, Col {cursor.positionInBlock() + 1}",
                  indent, self.highlighter.lexer.name, self.encoding.upper(),
                  ("CRLF" if self.newline == "\r\n" else "LF") + (" (mixed)" if self.mixed_newlines else "")]
-        if self._compiler_markers:
-            notes = [s for ns in self._compiler_markers.values() for s, _ in ns]
-            errors = sum(1 for s in notes if s in ("error", "fatal error"))
-            warnings = sum(1 for s in notes if s == "warning")
-            parts.append(f"{errors} errors, {warnings} warnings from the last build")
-        if self._review_markers:
-            count = sum(len(ns) for ns in self._review_markers.values())
-            parts.append(f"{count} AI review note{'s' * (count != 1)}")
-        if self._lint_markers:
-            count = sum(len(ns) for ns in self._lint_markers.values())
-            parts.append(f"{count} fortitude issue{'s' * (count != 1)}")
-        if self._lsp_markers:
-            count = sum(len(ns) for ns in self._lsp_markers.values())
-            parts.append(f"{count} fortls issue{'s' * (count != 1)}")
-        if self._spelling_issues:
-            count = len(self._spelling_issues)
-            parts.append(f"{count} misspelled word{'s' * (count != 1)}")
-        if self.editor.gremlins:
-            count = sum(len(g) for g in self.editor.gremlins.values())
-            parts.append(f"{count} gremlin{'s' * (count != 1)}")
+        parts += self._issue_counts()
         if self.editor.extra_cursors:
             parts.insert(1, f"{len(self.editor.extra_cursors) + 1} cursors (Esc: back to one)")
         if note:
@@ -543,6 +524,36 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
         self.status.setToolTip(
             f"This file has more than one kind of line ending: saving makes them all {kind}, the most "
             "common one (Edit → Convert Line Endings to choose)" if self.mixed_newlines else "")
+
+    def _issue_counts(self) -> list[str]:
+        """The status line's counts ("12 fortitude issues"…). Counted again
+        only when what's counted changed (each is replaced, not changed in
+        place, when it does): the status line follows the cursor, and a big
+        file's thousands of issues were counted at every step."""
+        counted = (self._compiler_markers, self._review_markers, self._lint_markers, self._lsp_markers,
+                   self._spelling_issues, self.editor.gremlins)
+        cached = getattr(self, "_counts", None)
+        if cached is not None and all(a is b for a, b in zip(cached[0], counted, strict=True)):
+            return cached[1]
+        parts = []
+        if self._compiler_markers:
+            notes = [s for ns in self._compiler_markers.values() for s, _ in ns]
+            errors = sum(1 for s in notes if s in ("error", "fatal error"))
+            warnings = sum(1 for s in notes if s == "warning")
+            parts.append(f"{errors} errors, {warnings} warnings from the last build")
+        for markers, what in ((self._review_markers, "AI review note"), (self._lint_markers, "fortitude issue"),
+                              (self._lsp_markers, "fortls issue")):
+            if markers:
+                count = sum(len(ns) for ns in markers.values())
+                parts.append(f"{count} {what}{'s' * (count != 1)}")
+        if self._spelling_issues:
+            count = len(self._spelling_issues)
+            parts.append(f"{count} misspelled word{'s' * (count != 1)}")
+        if self.editor.gremlins:
+            count = sum(len(g) for g in self.editor.gremlins.values())
+            parts.append(f"{count} gremlin{'s' * (count != 1)}")
+        self._counts = (counted, parts)
+        return parts
 
     def replace_text(self, text: str):
         """Replace the whole text as one undoable edit, keeping the cursor

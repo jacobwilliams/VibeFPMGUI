@@ -187,3 +187,23 @@ def test_a_big_text_is_spell_checked_on_a_thread(qtbot, window, project, monkeyp
     editor.highlighter._text = editor.highlighter._text + "x"  # (edited meanwhile: the answer is for another text)
     then(work())
     assert editor._spelling_issues == []
+
+
+def test_the_status_line_counts_issues_only_when_they_change(window, project, monkeypatch):
+    write_files(project, {"src/big.f90": big_text(500)})
+    editor = open_editor(window, project / "src/big.f90")
+    issues = [lint.LintIssue(n, 1, n, 3, "C001", "an issue", "") for n in range(1, 401)]
+    editor._fortitude_issues = []
+    editor._show_lint(issues)
+    assert "400 fortitude issues" in editor.status.text()
+    counted = []
+    monkeypatch.setattr(editor, "_lint_markers", type("Markers", (dict,), {
+        "values": lambda self: counted.append(1) or dict.values(self)})(editor._lint_markers))
+    editor._counts = None  # (counted once more, with the patched markers)
+    editor.update_status()
+    counted.clear()
+    for line in range(1, 50):  # (the cursor moving: the status line follows, the issues aren't counted)
+        editor.editor.setTextCursor(QTextCursor(editor.editor.document().findBlockByNumber(line)))
+    assert counted == [] and "Ln 50," in editor.status.text() and "400 fortitude issues" in editor.status.text()
+    editor._show_lint(issues[:7])  # (new issues: counted again)
+    assert "7 fortitude issues" in editor.status.text()
