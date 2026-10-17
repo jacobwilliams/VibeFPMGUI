@@ -334,7 +334,8 @@ class ProjectMixin:
         if not self.manifest_path:
             return
         try:
-            self.graph = m.resolve(self.manifest_path)
+            self.graph = m.resolve(self.manifest_path,
+                                   dependencies_dev=self.dependencies_dev_action.isChecked())
         except (OSError, tomllib.TOMLDecodeError) as exc:
             self.graph = None
             self.graph_view.clear(f"Could not read {self.manifest_path.name}:\n{exc}")
@@ -359,9 +360,12 @@ class ProjectMixin:
         self._set_project_enabled(True)
         self._load_features_and_profiles()
         missing = sum(1 for p in self.graph.packages.values() if p.kind == m.MISSING)
-        msg = f"{len(self.graph.packages) - 1} dependencies"
+        dev_only = sum(1 for p in self.graph.packages.values() if p.kind == m.DEV_ONLY)
+        msg = f"{len(self.graph.packages) - 1 - dev_only} dependencies"
         if missing:
             msg += f" ({missing} not downloaded — run Update deps or Build)"
+        if dev_only:
+            msg += f" · {dev_only} of their dev-dependencies shown (fpm doesn't download those)"
         conflicts = m.conflicts(self.graph)
         if conflicts:
             msg += (f" · ⚠ {len(conflicts)} version conflict{'s' * (len(conflicts) != 1)}: "

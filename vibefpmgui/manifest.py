@@ -31,6 +31,7 @@ PATH = "path"
 REGISTRY = "registry"
 META = "metapackage"
 MISSING = "missing"
+DEV_ONLY = "dev-only"  # a dependency's dev-dependency: fpm doesn't download it (see resolve)
 
 
 @dataclass
@@ -50,6 +51,7 @@ class Package:
     git_ref: str = ""
     git_rev: str = ""
     error: str = ""
+    asked_kind: str = ""  # a DEV_ONLY package's: the kind it would be (GIT, PATH, REGISTRY or META)
 
 
 @dataclass
@@ -112,7 +114,8 @@ def _collect_deps(data: dict, is_root: bool) -> list[tuple[str, object, bool]]:
     """Return ``(name, spec, dev)`` for every dependency a manifest declares.
 
     Dev-dependencies and per-target dependencies are only used by fpm for the
-    root project, so they are ignored for downloaded packages.
+    root project (``is_root``); for a downloaded package they're left out
+    (``is_root`` False), though `resolve` can ask for them to show them.
     """
     deps: dict[str, tuple[object, bool]] = {}
 
@@ -144,8 +147,15 @@ def _fill_from_manifest(pkg: Package, data: dict) -> None:
     pkg.homepage = _as_text(data.get("homepage"))
 
 
-def resolve(manifest_path: str | Path) -> DependencyGraph:
+def resolve(manifest_path: str | Path, dependencies_dev: bool = False) -> DependencyGraph:
     """Build the dependency graph for the project whose manifest is given.
+
+    ``dependencies_dev``: also the dependencies' own dev-dependencies (and
+    their test and example targets' dependencies), as dev edges. fpm uses
+    only the project's own, so it never downloads these: one that isn't
+    also a dependency fpm does use is a `DEV_ONLY` package (no folder or
+    manifest), and their declarations aren't the graph's (`conflicts` is
+    about what fpm uses).
 
     Raises ``OSError``/``tomllib.TOMLDecodeError`` if the main manifest can't
     be read; problems with dependency manifests are recorded on the nodes.
@@ -171,9 +181,14 @@ def resolve(manifest_path: str | Path) -> DependencyGraph:
     # Breadth-first so the first spec seen for a package (closest to the
     # root) is the one used, which matches how fpm resolves duplicates.
     queue: list[tuple[Package, dict]] = [(root, data)]
+    unused: list[tuple[str, str, object]] = []  # (parent, name, spec) of the dependencies' dev-dependencies
     while queue:
         parent, parent_data = queue.pop(0)
         is_root = parent is root
+        if dependencies_dev and not is_root:
+            used = {name for name, _spec, _dev in _collect_deps(parent_data, False)}
+            unused += [(parent.name, name, spec) for name, spec, _dev in _collect_deps(parent_data, True)
+                       if name not in used]
         for name, spec, dev in _collect_deps(parent_data, is_root):
             graph.edges.append(Edge(parent.name, name, dev))
             graph.declarations.setdefault(name, []).append(
@@ -184,7 +199,32 @@ def resolve(manifest_path: str | Path) -> DependencyGraph:
             graph.packages[name] = pkg
             if pkg_data is not None:
                 queue.append((pkg, pkg_data))
+    # After every dependency fpm uses is in: a dev-dependency that's also one
+    # of those is that package (downloaded); only the others are DEV_ONLY.
+    for parent_name, name, spec in unused:
+        graph.edges.append(Edge(parent_name, name, True))
+        if name not in graph.packages:
+            graph.packages[name] = _dev_only(name, spec, parent_name)
     return graph
+
+
+def _dev_only(name: str, spec, parent: str) -> Package:
+    """A dependency's dev-dependency fpm doesn't download: what its manifest
+    asks for (no folder, no manifest)."""
+    pkg = Package(name, DEV_ONLY, error=f"A dev-dependency of {parent}: fpm doesn't download a dependency's "
+                                        "dev-dependencies (only the project's own).")
+    if isinstance(spec, str):
+        pkg.version = "" if spec == "*" else spec
+        pkg.asked_kind = META if name in METAPACKAGES else REGISTRY
+    elif isinstance(spec, dict):
+        pkg.asked_kind = PATH if "path" in spec else GIT if "git" in spec else REGISTRY
+        pkg.git = str(spec.get("git", ""))
+        for key in ("tag", "branch", "rev"):
+            if key in spec:
+                pkg.git_ref = f"{key} {spec[key]}"
+                break
+        pkg.version = str(spec.get("v", ""))
+    return pkg
 
 
 def _locate(name, spec, parent: Package, root_dir: Path, cached: dict):

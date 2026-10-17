@@ -418,11 +418,17 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
 * Dependency diagram (drawn with [pyqtgraph](https://www.pyqtgraph.org)) built
   from the main `fpm.toml` and the `fpm.toml` of every downloaded dependency
   (git, local path, registry and metapackages; dashed edges are dev/test
-  dependencies; dashed nodes haven't been downloaded yet).
+  dependencies, and a package only a dev-dependency has a **dev** tag;
+  dashed nodes haven't been downloaded yet).
   * **Graph** menu to choose the layout (layered
     top-down or left-right, radial tree, circular, force-directed), the theme
     (auto, light, dark, blueprint, neon) and curved or straight edges. Layout
     changes animate; choices are remembered.
+  * **Graph → Show Dependencies' Dev-Dependencies** also draws what each
+    dependency lists as its dev-dependencies. fpm downloads only the
+    project's own, so the ones nothing else uses are shown as *not
+    downloaded* (a pale dashed box): their details say what's asked for, but
+    there is no `fpm.toml` to open and nothing to update.
   * Zoom with the mouse wheel, pan by dragging the background, drag packages
     around. Click a package to highlight everything it depends on and
     everything that uses it (click the background to clear); double-click to

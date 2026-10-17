@@ -148,6 +148,14 @@ class PackagesMixin:
                 sub.addAction(action)
                 self.graph_style_actions[key][value] = action
         menu.addSeparator()
+        self.dependencies_dev_action = QAction("Show Dependencies' Dev-Dependencies", self, checkable=True)
+        self.dependencies_dev_action.setChecked(self.settings.value("graph_dependencies_dev", False, type=bool))
+        self.dependencies_dev_action.setStatusTip(
+            "Also show what the dependencies list as dev-dependencies (fpm doesn't download those: "
+            "only the project's own)")
+        self.dependencies_dev_action.toggled.connect(self._set_dependencies_dev)
+        menu.addAction(self.dependencies_dev_action)
+        menu.addSeparator()
         for text, slot, shortcut in [("Fit to window", lambda: self.graph_view.fit(), "Ctrl+0"),
                                      ("Re-layout", lambda: self.graph_view.relayout(), "Ctrl+Shift+L"),
                                      ("Export image…", self.export_graph, "Ctrl+E")]:
@@ -178,6 +186,10 @@ class PackagesMixin:
         self.graph_view.set_edge_style(value)
         self._check_style_action("edges", value)
         self.settings.setValue("graph_edges", value)
+
+    def _set_dependencies_dev(self, shown: bool):
+        self.settings.setValue("graph_dependencies_dev", shown)
+        self.reload()
 
     def _update_legend(self):
         self.legend.setText(self.graph_view.legend_html())
@@ -289,7 +301,7 @@ class PackagesMixin:
             rows.append(("Depends on", ", ".join(
                 e(d.child) + (" <i>(dev)</i>" if d.dev else "") for d in deps)))
         if users:
-            rows.append(("Used by", ", ".join(e(u.parent) for u in users)))
+            rows.append(("Used by", ", ".join(e(u.parent) + (" <i>(dev)</i>" if u.dev else "") for u in users)))
         table = "".join(f"<tr><td valign='top'><b>{k}</b>&nbsp;</td><td>{v}</td></tr>"
                         for k, v in rows)
         body = f"<h3>{e(pkg.name)}</h3>"
@@ -366,7 +378,7 @@ class PackagesMixin:
             menu.addSeparator()
             for text, url in links:
                 add(text, lambda _=False, u=url: QDesktopServices.openUrl(QUrl(u)))
-        if pkg.git and not is_root:
+        if pkg.git and not is_root and pkg.kind != m.DEV_ONLY:  # (fpm doesn't fetch a dependency's dev-dependency)
             menu.addSeparator()
             add("Check for Updates", lambda: self.check_dependency_updates(only=name))
             add("Update This Dependency", lambda: self.run_fpm(["update", name], False, True), not self.busy(),

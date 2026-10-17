@@ -73,7 +73,7 @@ def git_dependencies(graph: m.DependencyGraph) -> list[DepCheck]:
     """Every git dependency, with how it is requested and where."""
     checks = []
     for pkg in graph.packages.values():
-        if not pkg.git or pkg.kind == m.ROOT:
+        if not pkg.git or pkg.kind in (m.ROOT, m.DEV_ONLY):  # (a dependency's dev-dependency isn't fetched)
             continue
         check = DepCheck(pkg.name, pkg.git, current=pkg.git_rev)
         # Prefer a declaration in a manifest the user can edit.

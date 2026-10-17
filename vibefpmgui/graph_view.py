@@ -66,8 +66,10 @@ KIND_LABELS = {
     m.REGISTRY: "Registry",
     m.META: "Metapackage",
     m.MISSING: "Not found",
+    m.DEV_ONLY: "Not downloaded",
 }
-KIND_ORDER = (m.ROOT, m.GIT, m.PATH, m.REGISTRY, m.META, m.MISSING)
+KIND_ORDER = (m.ROOT, m.GIT, m.PATH, m.REGISTRY, m.META, m.MISSING, m.DEV_ONLY)
+DEV_COLOR = "#7048e8"  # the "dev" badge: a package only a dev-dependency (of its parents)
 
 # ----------------------------------------------------------------- styles
 LAYERED_TB, LAYERED_LR, RADIAL, CIRCULAR, FORCE = (
@@ -87,26 +89,30 @@ THEMES = {
         "name": "Light", "background": "#f8f9fa", "text": "#1b1b1b", "subtext": "#495057",
         "edge": "#8a8f98", "down": "#e8590c", "up": "#1c7ed6", "shadow": 40, "glow": False,
         "fill": {m.ROOT: "#f6c85f", m.GIT: "#9dd0f5", m.PATH: "#a8e6a1",
-              m.REGISTRY: "#d7b8f3", m.META: "#f3c6a5", m.MISSING: "#e9ecef"},
+              m.REGISTRY: "#d7b8f3", m.META: "#f3c6a5", m.MISSING: "#e9ecef",
+              m.DEV_ONLY: "#f1f3f5"},
         "border": None},
     "dark": {
         "name": "Dark", "background": "#1e1f22", "text": "#f1f3f5", "subtext": "#ced4da",
         "edge": "#6c717a", "down": "#ff922b", "up": "#4dabf7", "shadow": 90, "glow": False,
         "fill": {m.ROOT: "#b8860b", m.GIT: "#2f6aa3", m.PATH: "#2f7d43",
-              m.REGISTRY: "#6a45a0", m.META: "#a35a2a", m.MISSING: "#3d4046"},
+              m.REGISTRY: "#6a45a0", m.META: "#a35a2a", m.MISSING: "#3d4046",
+              m.DEV_ONLY: "#2b2d31"},
         "border": None},
     "blueprint": {
         "name": "Blueprint", "background": "#0b3d6b", "text": "#ffffff", "subtext": "#cfe3f7",
         "edge": "#9cc3e6", "down": "#ffd43b", "up": "#63e6be", "shadow": 0, "glow": False,
         "fill": {k: "#0e4f8a" for k in KIND_ORDER},
         "border": {m.ROOT: "#ffffff", m.GIT: "#a5d8ff", m.PATH: "#b2f2bb",
-                m.REGISTRY: "#e5dbff", m.META: "#ffd8a8", m.MISSING: "#748ba3"}},
+                m.REGISTRY: "#e5dbff", m.META: "#ffd8a8", m.MISSING: "#748ba3",
+                m.DEV_ONLY: "#5c7a96"}},
     "neon": {
         "name": "Neon", "background": "#0d0221", "text": "#ffffff", "subtext": "#c9c2e6",
         "edge": "#4a3d7a", "down": "#ff2a6d", "up": "#05d9e8", "shadow": 0, "glow": True,
         "fill": {k: "#160a3a" for k in KIND_ORDER},
         "border": {m.ROOT: "#f9f871", m.GIT: "#00f5ff", m.PATH: "#39ff14",
-                m.REGISTRY: "#ff00e6", m.META: "#ff9f1c", m.MISSING: "#6c6c8a"}},
+                m.REGISTRY: "#ff00e6", m.META: "#ff9f1c", m.MISSING: "#6c6c8a",
+                m.DEV_ONLY: "#4f4f6e"}},
 }
 AUTO_THEME = "auto"
 THEME_CHOICES = {AUTO_THEME: "Auto (follow system)", **{k: v["name"] for k, v in THEMES.items()}}
@@ -134,6 +140,20 @@ def node_border(theme: dict, kind: str) -> QColor:
 
 
 # ------------------------------------------------------------------ items
+def _asked_for(package: m.Package) -> str:
+    """The tag, branch or commit a package not downloaded asks for, or the
+    kind it would be ("Git"…) if none ("" if it's downloaded: its version
+    is shown)."""
+    if package.kind != m.DEV_ONLY:
+        return ""
+    if not package.git_ref:
+        return KIND_LABELS.get(package.asked_kind, "")
+    key, _, value = package.git_ref.partition(" ")
+    if key == "tag":
+        return f"v{value}" if value[:1].isdigit() else value  # ("1.6.1" as the others' "v1.6.1")
+    return value[:7] if key == "rev" else package.git_ref
+
+
 class NodeItem(pg.GraphicsObject):
     """A package box, positioned by its top-left corner in view coordinates."""
 
@@ -144,6 +164,7 @@ class NodeItem(pg.GraphicsObject):
         self.selected = False
         self.dimmed = False
         self.conflict: list[m.Declaration] = []  # different declarations of this package
+        self.dev = False  # only a dev-dependency (every edge to it is): a "dev" badge
         self._drag_offset = QPointF()
         self._last_click = 0.0
         self._make_fonts()
@@ -165,7 +186,8 @@ class NodeItem(pg.GraphicsObject):
 
     def set_package(self, package: m.Package):
         self.package = package
-        self.subtitle = f"v{package.version}" if package.version else KIND_LABELS[package.kind]
+        self.subtitle = (f"v{package.version}" if package.version else _asked_for(package)
+                         or KIND_LABELS[package.kind])
         tw = QFontMetricsF(self.title_font).horizontalAdvance(package.name)
         sw = QFontMetricsF(self.sub_font).horizontalAdvance(self.subtitle)
         th = QFontMetricsF(self.title_font).height()
@@ -177,6 +199,9 @@ class NodeItem(pg.GraphicsObject):
             tip.append(package.description)
         if package.error:
             tip.append(f"<i>{package.error}</i>")
+        if self.dev and package.kind != m.DEV_ONLY:
+            tip.append("<i>Only a dev-dependency: fpm fetches it to build the project's tests and "
+                       "examples.</i>")
         if self.conflict:
             tip.append("<b style='color:#e8590c'>⚠ Version conflict</b> — asked for differently:")
             used = m.spec_key(self.conflict[0])
@@ -185,6 +210,10 @@ class NodeItem(pg.GraphicsObject):
                     for i, d in enumerate(self.conflict)]
         self.setToolTip("<br>".join(tip))
         self.update()
+
+    def set_dev(self, dev: bool):
+        self.dev = dev
+        self.set_package(self.package)  # (the tooltip)
 
     def set_conflict(self, declarations: list[m.Declaration] | None):
         self.conflict = list(declarations or [])
@@ -232,7 +261,7 @@ class NodeItem(pg.GraphicsObject):
         gradient.setColorAt(0, fill.lighter(118))
         gradient.setColorAt(1, fill)
         pen = QPen(QColor(theme["down"]) if self.selected else border, 2.4 if highlight else 1.4)
-        if kind == m.MISSING:
+        if kind in (m.MISSING, m.DEV_ONLY):
             pen.setStyle(Qt.DashLine)
         painter.setPen(pen)
         painter.setBrush(QBrush(gradient))
@@ -267,6 +296,18 @@ class NodeItem(pg.GraphicsObject):
             painter.setFont(font)
             painter.setPen(QColor("white"))
             painter.drawText(badge, Qt.AlignCenter, "!")
+        if self.dev:  # a "dev" tag on the top-left corner
+            font = QFont(self.sub_font)
+            font.setBold(True)
+            fm = QFontMetricsF(font)
+            badge = QRectF(self.rect.left() - 6, self.rect.top() - fm.height() / 2 - 2,
+                           fm.horizontalAdvance("dev") + 10, fm.height() + 4)
+            painter.setPen(QPen(QColor("white"), 1.2))
+            painter.setBrush(QColor(DEV_COLOR))
+            painter.drawRoundedRect(badge, badge.height() / 2, badge.height() / 2)
+            painter.setFont(font)
+            painter.setPen(QColor("white"))
+            painter.drawText(badge, Qt.AlignCenter, "dev")
 
     # pyqtgraph mouse events
     def hoverEvent(self, ev):
@@ -713,15 +754,21 @@ class DependencyGraphView(QWidget):
         theme = self.theme
         parts = [f'<span style="background:{theme["fill"][k]}; color:{theme["text"]}">'
                  f'&nbsp;<span style="color:{node_border(theme, k).name()}">●</span>'
-                 f'&nbsp;{KIND_LABELS[k]}&nbsp;</span>' for k in KIND_ORDER]
+                 f'&nbsp;{KIND_LABELS[k]}&nbsp;</span>' for k in KIND_ORDER
+                 if k != m.DEV_ONLY or k in self._kinds_shown()]
         text = (" ".join(parts)
                 + f" &nbsp;<span style='color:{theme['down']}'>━</span> depends on"
                 + f" &nbsp;<span style='color:{theme['up']}'>━</span> used by"
                 + " &nbsp;<i>dashed = dev</i>")
+        if any(node.dev for node in self.nodes.values()):
+            text += f" &nbsp;<span style='background:{DEV_COLOR}; color:white'>&nbsp;dev&nbsp;</span> only a dev-dependency"
         if self.conflicts:
             text += (f" &nbsp;<span style='color:{CONFLICT_COLOR}'><b>!</b> version conflict"
                      f"{'s' * (len(self.conflicts) != 1)}</span>")
         return text
+
+    def _kinds_shown(self) -> set[str]:
+        return {node.package.kind for node in self.nodes.values()}
 
     # -------------------------------------------------------------- graph
     def clear(self, message="Open an fpm.toml file to see its dependency graph."):
@@ -756,6 +803,7 @@ class DependencyGraphView(QWidget):
             edge.add_to(self.vb)
             edge.apply_style()
             self.edges.append(edge)
+        self._mark_dev()
         self._mark_conflicts()
         self.relayout(animate=False)
 
@@ -767,6 +815,14 @@ class DependencyGraphView(QWidget):
                 node.set_package(graph.packages[name])
         self._mark_conflicts()
         self._update_edges()
+
+    def _mark_dev(self):
+        """The packages only dev-dependencies: every edge to them is a dev one."""
+        dev: dict[str, bool] = {}
+        for e in self.graph.edges if self.graph else []:
+            dev[e.child] = dev.get(e.child, True) and e.dev
+        for name, node in self.nodes.items():
+            node.set_dev(dev.get(name, False))
 
     def _mark_conflicts(self):
         self.conflicts = m.conflicts(self.graph) if self.graph else {}
