@@ -91,6 +91,7 @@ menu item says "not found" and the feature is off; without fprettify the
 | `vibefpmgui.find_bar` | The find and replace bar |
 | `vibefpmgui.editor_shared` | What the editor's modules share: colors, delays, severities, text helpers |
 | `vibefpmgui.source_text` | Reading source files the same way everywhere: encoding, line ends, what Search skips |
+| `vibefpmgui.command_palette` | View → Command Palette…: the menus' commands, found by typing |
 | `vibefpmgui.line_edits` | Toggle Line Comment, Move Line Up / Down, Sort Lines, Change Case |
 | `vibefpmgui.wrapping_tabs` | The editor's tabs on several rows (View → Editor Tabs) |
 | `vibefpmgui.console` | Console programs started without a console window flashing up (Windows); no Qt |

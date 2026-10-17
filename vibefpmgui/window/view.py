@@ -24,6 +24,7 @@ from .. import lint, lsp, spelling, themes
 from ..about import FPM_DOCS_URL, AboutDialog
 from ..build_monitor import set_ui_scale
 from ..code_editor import CodeEditor
+from ..command_palette import CommandPalette
 from ..editor import EditorTab, monospace_font
 from ..editor_shared import INDENT_WIDTHS
 from ..widgets import run_dialog
@@ -43,6 +44,13 @@ class ViewMixin:
         self._base_font = QFont(app.property("vibefpm_base_font"))
         self.font_delta = 0
         view_menu = self.view_menu = self.menuBar().addMenu("&View")
+        # Every command in the menus, found by typing (see vibefpmgui.command_palette).
+        self.palette_action = view_menu.addAction("Command Palette…")
+        self.palette_action.setShortcut(QKeySequence("Ctrl+Shift+P"))  # (⌘⇧P on macOS)
+        self.palette_action.setStatusTip("Find any command in the menus by typing part of its name")
+        self.palette_action.triggered.connect(self.show_command_palette)
+        self._command_palette: CommandPalette | None = None
+        view_menu.addSeparator()
         self.bigger_action = QAction("Bigger Text", self)
         self.bigger_action.setShortcuts([QKeySequence(QKeySequence.ZoomIn), QKeySequence("Ctrl+=")])
         self.bigger_action.triggered.connect(lambda: self.set_font_delta(self.font_delta + 1))
@@ -242,6 +250,14 @@ class ViewMixin:
             action.setChecked(action.data() == hl.chosen_style)
             group.addAction(action)
             action.triggered.connect(lambda _checked=False, a=action: self.set_syntax_style(a.data()))
+
+    def show_command_palette(self):
+        """View → Command Palette…: the menus' commands, found by typing."""
+        if self._command_palette is None:
+            recent = [str(t) for t in self.settings.value("palette_recent", [], type=list) or []]
+            self._command_palette = CommandPalette(self, recent)
+            self._command_palette.recent_changed = lambda titles: self.settings.setValue("palette_recent", titles)
+        self._command_palette.open()
 
     def _fill_window_style_menu(self):
         """View → Window Style: Automatic, then Qt's styles on this platform."""
