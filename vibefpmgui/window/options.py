@@ -110,6 +110,8 @@ class ProjectOptionsMixin:
         self.search_panel._save_options()
         self.snap_closed.expand_all()  # (collapsed panels are saved open: nothing comes back hidden)
         s.setValue("panels", self.saveState(self.LAYOUT_VERSION))
+        front, self._front_at_close = getattr(self, "_front_at_close", None), None
+        s.setValue("panels_front", self.front_panels() if front is None else front)
         free = self.free_options()  # (New configuration's, not a saved one's shown)
         s.setValue("profile", free.profile)
         s.setValue("compiler", free.compiler)
@@ -228,4 +230,4 @@ class ProjectOptionsMixin:
         self.search_panel._restore_options()
         layout = s.value("panels")
         if layout:
-            self.restoreState(layout, self.LAYOUT_VERSION)
+            self.restore_layout(layout, s.value("panels_front", [], type=list) or [])

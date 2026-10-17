@@ -144,7 +144,8 @@ class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
         if geometry is not None:
             self.restoreGeometry(geometry)
         layout = s.value("panels")  # (where each panel was: docked, stacked, floating, hidden)
-        self._layout_restored = layout is not None and self.restoreState(layout, self.LAYOUT_VERSION)
+        self._layout_restored = layout is not None and self.restore_layout(
+            layout, s.value("panels_front", [], type=list) or [])
         # A layout saved before a panel existed: the panel goes in the stack of
         # the one it's next to by default.
         for name, beside in (("coverage", "tests"), ("git", "search"), ("complexity", "coverage")):
@@ -186,6 +187,8 @@ class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
         clearing = getattr(self, "_clearing_settings", False)
         if not clearing:
             self._save_session()
+            # (Before closing brings other panels to the front: e.g. stopping a review shows Build.)
+            self._front_at_close = self.front_panels()
         # Every question first: answering Cancel or No leaves everything running.
         if not self.maybe_save_configuration():
             event.ignore()

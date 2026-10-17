@@ -191,7 +191,7 @@ class ProjectMixin:
                 return
             if self.busy():
                 self._stop_and_wait(3000)
-            self._clear_run_panels()
+            self._clear_run_panels(show_build=self.manifest_path is not None)
             self.search_panel.reset()
             self.references_panel.reset()
             self._switch_project_options(path)  # (this one's written, the other's applied: see window.options)
@@ -321,8 +321,10 @@ class ProjectMixin:
                 marks[str(t.path)] = "error" if t.status == "Failed" else "warning"
         self.project_tree.set_marks(marks)
 
-    def _clear_run_panels(self):
-        """Empty the output console and the build/test panels."""
+    def _clear_run_panels(self, show_build: bool = True):
+        """Empty the output console and the build/test panels (``show_build``:
+        and bring Build to the front; not for the first project opened, so
+        the panels in front are those of the layout restored)."""
         self.show_test_output("")
         self.console.clear()
         self.test_output.clear()
@@ -336,7 +338,8 @@ class ProjectMixin:
         self._ai_editor = None
         self._forget()
         self.review_monitor.reset()
-        self.show_panel(self.build_monitor)
+        if show_build:
+            self.show_panel(self.build_monitor)
 
     def reload(self):
         if not self.manifest_path:

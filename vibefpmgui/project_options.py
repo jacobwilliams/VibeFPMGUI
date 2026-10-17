@@ -36,7 +36,7 @@ OPTIONS: dict[str, object] = {
     "show_coverage": bool, "highlight_matches": bool, "word_wrap": bool, "indent_width": int,
     "indent_tabs": bool, "fortls": bool, "trim_on_save": bool,
     # The editor's tabs, the panels
-    "tab_rows_wrap": bool, "panels": BYTES, "session": JSON,
+    "tab_rows_wrap": bool, "panels": BYTES, "panels_front": list, "session": JSON,
     # Graph
     "graph_layout": str, "graph_theme": str, "graph_edges": str, "graph_dependencies_dev": bool,
     # Panels' own choices

@@ -257,6 +257,28 @@ def test_layout_is_remembered(make_window, project):
     assert areas(second)["terminal"] == "left" and second.docks["outputs"].isHidden()
 
 
+def in_front(window, name) -> bool:
+    return not window.docks[name].visibleRegion().isEmpty()
+
+
+@pytest.mark.parametrize("with_options", [False, True])
+def test_the_panel_in_front_of_a_stack_is_remembered(qtbot, make_window, project, with_options):
+    """A restored layout doesn't keep which panel is in front of a stack, and
+    each panel it showed put itself in front: the last one (Build) won."""
+    from conftest import close_window
+
+    if with_options:  # (the project's options, in its configuration file)
+        (project / "vibefpm.json").write_text('{"configurations": []}')
+    first = make_window(project / "fpm.toml")
+    first.docks["tests"].raise_()
+    qtbot.waitUntil(lambda: in_front(first, "tests"))
+    close_window(first)
+    second = make_window(project / "fpm.toml")
+    qtbot.waitUntil(lambda: in_front(second, "tests"))
+    qtbot.wait(50)  # (and nothing put Build in front after)
+    assert in_front(second, "tests") and not in_front(second, "build")
+
+
 def test_find_goes_to_the_graph_or_the_editor(window, project, monkeypatch):
     searched = []
     monkeypatch.setattr(window.graph_view, "focus_search", lambda: searched.append(True))

@@ -182,9 +182,24 @@ class PanelsMixin:
         return dock
 
     def _panel_shown(self, dock: QDockWidget):
-        """View → Panels → a panel: in front of its stack, and on a screen."""
+        """View → Panels → a panel: in front of its stack, and on a screen.
+        (Not a panel a layout being restored shows: the one in front of each
+        stack would be the last shown; see raise_panels.)"""
         self._keep_on_screen(dock)
-        QTimer.singleShot(0, dock, dock.raise_)
+        if self._docks_ready and not getattr(self, "_restoring_layout", False):
+            QTimer.singleShot(0, dock, dock.raise_)
+
+    def restore_layout(self, layout, front: list[str]) -> bool:
+        """Restore a saved layout (QMainWindow.restoreState), with ``front``
+        the panels in front of their stacks (it doesn't keep those)."""
+        self._restoring_layout = True
+        try:
+            restored = self.restoreState(layout, self.LAYOUT_VERSION)
+        finally:
+            self._restoring_layout = False
+        if restored:
+            self.raise_panels(front)
+        return restored
 
     def _panel_docked(self, dock: QDockWidget):
         """A floating panel docked again (double-clicking its title): in front
@@ -244,6 +259,18 @@ class PanelsMixin:
         self.snap_closed.expand_all()
         self.default_layout()
         self.statusBar().showMessage("Panels back in their places", 3000)
+
+    def front_panels(self) -> list[str]:
+        """The panels in front of their stacks (by name), for next time: a
+        restored layout doesn't keep them."""
+        return sorted(name for name, dock in self.docks.items()
+                      if self.tabifiedDockWidgets(dock) and dock.isVisible() and not dock.visibleRegion().isEmpty())
+
+    def raise_panels(self, names: list[str]):
+        """Put these panels in front of their stacks: after the panels a
+        restored layout shows have put themselves in front (see _panel_shown)."""
+        docks = [self.docks[name] for name in names if name in self.docks]
+        QTimer.singleShot(0, self, lambda: [dock.raise_() for dock in docks if not dock.isHidden()])
 
     def show_panel(self, widget: QWidget):
         """Show a panel and bring it to the front of its stack."""
