@@ -5,7 +5,6 @@ Also the File menu, the Project files panel and reloading the dependency graph.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import tomllib
@@ -15,6 +14,7 @@ from qtpy.QtCore import QProcess, QProcessEnvironment, QTimer
 from qtpy.QtGui import QAction, QKeySequence
 from qtpy.QtWidgets import QDialog, QFileDialog, QMessageBox, QVBoxLayout, QWidget
 
+from .. import build_configs as bc
 from .. import console
 from .. import manifest as m
 from ..background import call_in_background
@@ -23,6 +23,7 @@ from ..editor import EditorTab
 from ..new_project import NewProjectDialog
 from ..project_tree import ProjectTree
 from ..widgets import run_dialog
+from .options import project_key
 
 
 def _signature(graph: m.DependencyGraph):
@@ -35,16 +36,17 @@ class ProjectMixin:
 
     def _build_file_menu(self):
         """File menu."""
-        open_action = QAction("Open fpm.toml…", self)
+        open_action = QAction("Open Project…", self)
         open_action.setShortcut(QKeySequence.Open)
-        open_action.triggered.connect(self.browse)
+        open_action.setStatusTip("Open an fpm project: a folder with an fpm.toml (and its vibefpm.json, if it has one)")
+        open_action.triggered.connect(lambda: self.browse_project())
         reload_action = QAction("Reload", self)
         reload_action.setShortcut(QKeySequence("Ctrl+Shift+R"))  # Ctrl/⌘+R is Run
         reload_action.triggered.connect(self.reload)
-        open_new_action = QAction("Open fpm.toml in New Window…", self)
+        open_new_action = QAction("Open Project in New Window…", self)
         open_new_action.setShortcut(QKeySequence("Ctrl+Shift+N"))  # (⌘⇧O: Open File in Editor)
         open_new_action.setStatusTip("Open another project in its own window, keeping this one open")
-        open_new_action.triggered.connect(lambda: self.browse(new_window=True))
+        open_new_action.triggered.connect(lambda: self.browse_project(new_window=True))
         new_project_action = QAction("New fpm Project…", self)
         new_project_action.setStatusTip("Make a new fpm project (fpm new), and open it")
         new_project_action.triggered.connect(self.new_project)
@@ -70,11 +72,15 @@ class ProjectMixin:
         file_menu.addActions([self.new_file_action, new_project_action])
         file_menu.addSeparator()
         file_menu.addActions([open_file_action, open_action, open_new_action])
-        self.recent_menu = file_menu.addMenu("Recent Manifests")
+        self.recent_menu = file_menu.addMenu("Recent Projects")
         self.recent_menu.aboutToShow.connect(self._fill_recent_menu)
         self.recent_menu.setToolTipsVisible(True)
         file_menu.addSeparator()
-        file_menu.addActions([self.save_action, self.save_as_action])
+        self.save_config_action = QAction("Save Build Configuration…", self)
+        self.save_config_action.setStatusTip("Save the Build options as a configuration in the project's "
+                                             "vibefpm.json")
+        self.save_config_action.triggered.connect(lambda: self.save_configuration())
+        file_menu.addActions([self.save_action, self.save_as_action, self.save_config_action])
         file_menu.addSeparator()
         file_menu.addActions([reload_action, self.close_tab_action])
         file_menu.addSeparator()
@@ -126,16 +132,46 @@ class ProjectMixin:
         self.open_manifest(manifest)
         self.statusBar().showMessage(f"Made {target.name}: {target}", 6000)
 
-    def browse(self, new_window: bool = False):
-        start = str(self.manifest_path.parent) if self.manifest_path else str(Path.home())
-        filename, _ = QFileDialog.getOpenFileName(
-            self, "Open fpm manifest in a new window" if new_window else "Open fpm manifest", start,
-            "fpm manifest (fpm.toml);;TOML files (*.toml);;All files (*)")
-        if filename:
-            if new_window:
-                self.open_in_new_window(filename)
-            else:
-                self.open_manifest(filename)
+    def browse_project(self, new_window: bool = False):
+        """File → Open Project… (in New Window…): a project's folder."""
+        start = str(self.manifest_path.parent.parent) if self.manifest_path else str(Path.home())
+        folder = QFileDialog.getExistingDirectory(
+            self, "Open Project in a New Window" if new_window else "Open Project", start)
+        if folder:
+            self.open_project(folder, new_window)
+
+    def open_project(self, folder: str | Path, new_window: bool = False) -> bool:
+        """Open the project in ``folder``: with its vibefpm.json (its build
+        configurations and options) if it has one, else its fpm.toml; a
+        folder without an fpm.toml isn't one (an error message). False: not
+        opened (that, or Cancel)."""
+        folder = Path(folder).expanduser().resolve()
+        manifest, config = folder / "fpm.toml", folder / bc.FILE_NAME
+        if not manifest.is_file():
+            also = (f" It has a {bc.FILE_NAME}, but that goes beside a project's fpm.toml."
+                    if config.is_file() else "")
+            QMessageBox.warning(self, "Open Project", f"{folder}\n\nisn't an fpm project: it has no fpm.toml.{also}")
+            return False
+        key = project_key(manifest, "build_config_file")
+        before = self.settings.app.value(key, "")
+        if config.is_file():
+            self.settings.app.setValue(key, "")  # (its vibefpm.json: not another file opened for it before)
+        if new_window:
+            self.open_in_new_window(manifest)
+            return True
+        if manifest == self.manifest_path:
+            if config.is_file() and config != self.config_path:  # (it had another configuration file)
+                if not self.maybe_save_configuration():
+                    self.settings.app.setValue(key, before)
+                    return False
+                self._switch_config_file(manifest, force=True)
+                self._load_configurations()
+            return True
+        self.open_manifest(manifest)
+        if self.manifest_path != manifest:  # (not opened: Cancel, or fpm running)
+            self.settings.app.setValue(key, before)
+            return False
+        return True
 
     def open_in_new_window(self, manifest: str | Path):
         """Open a project in another VibeFPMGUI window (a separate process, so
@@ -164,8 +200,10 @@ class ProjectMixin:
         path = Path(filename).resolve()
         new_project = path != self.manifest_path
         if new_project:
-            # Both questions before anything changes: No or Cancel keeps the
+            # Every question before anything changes: No or Cancel keeps the
             # current project as it is, its files still open.
+            if not self.maybe_save_configuration():
+                return
             if self.busy():
                 answer = QMessageBox.question(
                     self, "fpm is running",
@@ -178,79 +216,87 @@ class ProjectMixin:
                 return
             if self.busy():
                 self._stop_and_wait(3000)
-            self._clear_run_panels()
+            self._clear_run_panels(show_build=self.manifest_path is not None)
             self.search_panel.reset()
             self.references_panel.reset()
+            self._switch_config_file(path)  # (this one's options written, the other's applied: see window.options)
         self.manifest_path = path
         if self.remember_last:
             self.settings.setValue("last_manifest", str(self.manifest_path))
-        self._remember_manifest(self.manifest_path)
+        self._remember_project(self.manifest_path.parent)
         self.settings.sync()  # write now, so it survives the app being killed
         self.setWindowFilePath(str(self.manifest_path))  # macOS title-bar proxy icon
-        self.setWindowTitle(f"VibeFPMGUI — {self.manifest_path.parent.name}")
+        self.update_window_title()
         self.reload()
         if new_project:
             self._restore_session()
 
     MAX_RECENT = 10
 
-    def recent_manifests(self) -> list[str]:
-        value = self.settings.value("recent_manifests", [], type=list) or []
+    def update_window_title(self):
+        """"VibeFPMGUI · project", and " · configuration" while a saved one is chosen."""
+        parts = ["VibeFPMGUI"]
+        if self.manifest_path is not None:
+            parts.append(self.manifest_path.parent.name)
+            if self.config_shown():
+                parts.append(self.config_combo.currentText())
+        self.setWindowTitle(" · ".join(parts))
+
+    def recent_projects(self) -> list[str]:
+        """The folders of the projects last opened, latest first (File → Recent Projects)."""
+        if not self.settings.contains("recent_projects"):  # (kept before as fpm.toml and .json files: their folders)
+            old = [str(Path(p).parent) for key in ("recent_manifests", "recent_configs")
+                   for p in self.settings.value(key, [], type=list) or [] if p]
+            self.settings.setValue("recent_projects", list(dict.fromkeys(old))[:self.MAX_RECENT])
+            for key in ("recent_manifests", "recent_configs"):
+                self.settings.remove(key)
+        value = self.settings.value("recent_projects", [], type=list) or []
         return [str(p) for p in value if p]
 
-    def _remember_manifest(self, path: Path):
-        recent = [p for p in self.recent_manifests() if Path(p) != path]
-        recent.insert(0, str(path))
-        self.settings.setValue("recent_manifests", recent[:self.MAX_RECENT])
+    def _remember_project(self, folder: Path):
+        recent = [p for p in self.recent_projects() if Path(p) != folder]
+        self.settings.setValue("recent_projects", [str(folder), *recent][:self.MAX_RECENT])
 
     def _fill_recent_menu(self):
-        """Rebuilt each time it opens, so missing files show as such."""
+        """Rebuilt each time it opens, so missing projects show as such."""
         menu = self.recent_menu
         menu.clear()
-        recent = self.recent_manifests()
+        recent = self.recent_projects()
         if not recent:
-            menu.addAction("No recent manifests").setEnabled(False)
+            menu.addAction("No recent projects").setEnabled(False)
         home = str(Path.home())
-        for path in recent:
-            shown = "~" + path[len(home):] if path.startswith(home + os.sep) else path
-            exists = Path(path).is_file()
-            label = f"{Path(path).parent.name} — {shown}" + ("" if exists else "  (not found)")
+        for folder in recent:
+            shown = "~" + folder[len(home):] if folder.startswith(home + os.sep) else folder
+            exists = (Path(folder) / "fpm.toml").is_file()
+            label = f"{Path(folder).name} — {shown}" + ("" if exists else "  (not found)")
             action = menu.addAction(label.replace("&", "&&"))  # "&" would be a mnemonic
-            action.setToolTip(path if exists else f"{path}\nThis file no longer exists.")
+            action.setToolTip(folder if exists else f"{folder}\nIt's not there any more (or has no fpm.toml).")
             action.setEnabled(exists)
             action.setCheckable(True)
-            action.setChecked(self.manifest_path is not None and Path(path) == self.manifest_path)
-            action.triggered.connect(lambda _=False, p=path: self.open_recent(p))
+            action.setChecked(self.manifest_path is not None and Path(folder) == self.manifest_path.parent)
+            action.triggered.connect(lambda _=False, f=folder: self.open_recent(f))
         menu.addSeparator()
         clear = menu.addAction("Clear Menu")
         clear.setEnabled(bool(recent))
-        clear.triggered.connect(self.clear_recent_manifests)
+        clear.triggered.connect(self.clear_recent_projects)
 
-    def open_recent(self, path: str):
-        if not Path(path).is_file():
+    def open_recent(self, folder: str):
+        if not (Path(folder) / "fpm.toml").is_file():
             # It was there when the menu opened, but not any more.
-            QMessageBox.warning(self, "File not found",
-                                f"{path}\n\nno longer exists, so it was removed from Recent Manifests.")
-            self.settings.setValue("recent_manifests",
-                                   [p for p in self.recent_manifests() if p != path])
+            QMessageBox.warning(self, "Project not found",
+                                f"{folder}\n\nisn't there any more, so it was removed from Recent Projects.")
+            self.settings.setValue("recent_projects", [p for p in self.recent_projects() if p != folder])
             return
-        self.open_manifest(path)
+        self.open_project(folder)
 
-    def clear_recent_manifests(self):
-        self.settings.setValue("recent_manifests", [])
+    def clear_recent_projects(self):
+        self.settings.setValue("recent_projects", [])
 
     # Per project: the files open in the editor (with cursor and scroll
     # positions), the tab in front, and the Project files tree's open
     # folders, restored when the project is opened again.
-    def _project_key(self, prefix: str) -> str:
-        """A settings key for this project's ``prefix`` (its session, build
-        configurations, features, test durations): "prefix/" and a short hash
-        of its fpm.toml's path. (A name, not security: SHA-1 is fine.)"""
-        digest = hashlib.sha1(str(self.manifest_path).encode(), usedforsecurity=False).hexdigest()[:16]
-        return f"{prefix}/{digest}"
-
     def _session_key(self) -> str:
-        return self._project_key("session")
+        return "session"  # (the project's: see project_options.PER_PROJECT)
 
     def _save_session(self):
         if self.manifest_path is None or self._session_busy:
@@ -314,8 +360,10 @@ class ProjectMixin:
                 marks[str(t.path)] = "error" if t.status == "Failed" else "warning"
         self.project_tree.set_marks(marks)
 
-    def _clear_run_panels(self):
-        """Empty the output console and the build/test panels."""
+    def _clear_run_panels(self, show_build: bool = True):
+        """Empty the output console and the build/test panels (``show_build``:
+        and bring Build to the front; not for the first project opened, so
+        the panels in front are those of the layout restored)."""
         self.show_test_output("")
         self.console.clear()
         self.test_output.clear()
@@ -329,7 +377,8 @@ class ProjectMixin:
         self._ai_editor = None
         self._forget()
         self.review_monitor.reset()
-        self.show_panel(self.build_monitor)
+        if show_build:
+            self.show_panel(self.build_monitor)
 
     def reload(self):
         if not self.manifest_path:
@@ -360,6 +409,7 @@ class ProjectMixin:
         self.refresh_complexity()
         self._set_project_enabled(True)
         self._load_features_and_profiles()
+        self._load_configurations()  # (after: a configuration's profile may be one of fpm.toml's)
         missing = sum(1 for p in self.graph.packages.values() if p.kind == m.MISSING)
         dev_only = sum(1 for p in self.graph.packages.values() if p.kind == m.DEV_ONLY)
         msg = f"{len(self.graph.packages) - 1 - dev_only} dependencies"

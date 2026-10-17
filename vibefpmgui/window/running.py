@@ -19,8 +19,8 @@ from qtpy.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
     QMessageBox,
     QSpinBox,
@@ -37,6 +37,7 @@ from ..compat import join_args, quote_arg, split_args
 from ..fpm_args import split_runner, with_link_flag
 from ..icons import make_icon
 from ..processes import kill_process_tree
+from ..widgets import MenuButton, StayOpenMenu
 
 # (label, fpm sub-command, uses build options, refresh graph afterwards, icon, shortcut, description)
 COMMANDS = [
@@ -68,10 +69,10 @@ class RunningMixin:
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         self.profile_combo = QComboBox()
         self.profile_combo.addItems(BUILTIN_PROFILES)
+        self._build_config_row(form)  # (see vibefpmgui.window.configs)
         form.addRow("Profile:", self.profile_combo)
-        self.features_label = QLabel()
-        self.features_label.setWordWrap(True)
-        form.addRow("Features:", self.features_label)
+        self.features_button = MenuButton()  # (its menu: see _build_features_menu)
+        form.addRow("Features:", self.features_button)
         self.compiler_edit = QLineEdit()
         env_fc = os.environ.get("FPM_FC", "").strip()
         self.compiler_edit.setPlaceholderText(f"{env_fc} (from FPM_FC)" if env_fc else "gfortran (default)")
@@ -105,14 +106,19 @@ class RunningMixin:
         fpm_browse.clicked.connect(self._browse_fpm)
         fpm_row.addWidget(self.fpm_edit)
         fpm_row.addWidget(fpm_browse)
+        # A line above it: the fpm executable isn't part of a build configuration (a path on this computer).
+        divider = QFrame()
+        divider.setFrameShape(QFrame.HLine)
+        divider.setFrameShadow(QFrame.Sunken)
+        form.addRow(divider)
         form.addRow("fpm executable:", fpm_row)
 
         # Hovering an option (or its label) shows the fpm flag it becomes.
         for widget, flag, text in [
             (self.profile_combo, "--profile PROF",
              "Build profile: debug or release. (default) leaves it to fpm, which uses debug."),
-            (self.features_label, "--features LIST",
-             "Features to enable, chosen in the Features menu. Can't be combined with a profile."),
+            (self.features_button, "--features LIST",
+             "Features to enable (the project's fpm.toml declares them). Can't be combined with a profile."),
             (self.compiler_edit, "--compiler NAME", "Fortran compiler to use. fpm uses gfortran by default."),
             (self.flag_edit, "--flag FFLAGS", "Extra Fortran compiler flags."),
             (self.target_edit, "fpm run|test NAME…",
@@ -128,13 +134,16 @@ class RunningMixin:
              ("Build with gfortran's coverage counting (a build of its own): after Test, the Coverage panel "
               "and the editor's gutter show which lines the tests ran.")),
             (self.verbose_check, "--verbose", "Print more detail about what fpm is doing."),
-            (self.fpm_edit, "(not a flag)", "The fpm program to run. Leave empty to use the fpm on your PATH."),
+            (self.fpm_edit, "(not a flag)",
+             ("The fpm program to run. Leave empty to use the fpm on your PATH. Not part of a build "
+              "configuration: it's kept for this computer.")),
         ]:
             tip = f"<b><code>{html.escape(flag)}</code></b><br>{html.escape(text)}"
             widget.setToolTip(tip)
             label = form.labelForField(widget) or form.labelForField(fpm_row)
             if label is not None and widget is not self.verbose_check:
                 label.setToolTip(tip)
+        self._watch_option_fields()
 
         return options
 
@@ -275,8 +284,9 @@ class RunningMixin:
         return args
 
     def _build_features_menu(self):
-        """The Features menu (filled from the project's manifest)."""
-        self.features_menu = self.menuBar().addMenu("Fea&tures")
+        """The Features button's menu in Build options (filled from the project's manifest)."""
+        self.features_menu = StayOpenMenu(self)
+        self.features_button.setMenu(self.features_menu)
         self.project_features: dict[str, list[str]] = {}
         self.selected_features: list[str] = []
         self._wanted_profile = "(default)"
@@ -306,12 +316,10 @@ class RunningMixin:
             self.profile_combo.setCurrentText(current)
         self.profile_combo.blockSignals(False)
 
-        saved = self.settings.value(self._features_key(), [], type=list) or []
-        self.selected_features = [f for f in saved if f in self.project_features]
+        if not self.config_shown():  # (a configuration's own features stay; see vibefpmgui.window.configs)
+            saved = self._saved_free_options().features
+            self.selected_features = [f for f in saved if f in self.project_features]
         self._rebuild_features_menu()
-
-    def _features_key(self) -> str:
-        return self._project_key("features")
 
     def _rebuild_features_menu(self):
         menu = self.features_menu
@@ -355,30 +363,37 @@ class RunningMixin:
         self._update_features_ui()
 
     def _save_features(self):
-        if self.manifest_path:
-            self.settings.setValue(self._features_key(), self.selected_features)
+        """New configuration's features (not a saved configuration's, being edited)."""
+        if self.manifest_path and not self.config_shown():
+            self._keep_free_options(self.current_options())
 
     def _update_features_ui(self):
         """Show the selection, and disable Profile while features are on."""
+        locked = self.options_locked()  # (a saved configuration's: read-only)
         for name, action in getattr(self, "feature_actions", {}).items():
             if action.isChecked() != (name in self.selected_features):
                 action.blockSignals(True)
                 action.setChecked(name in self.selected_features)
                 action.blockSignals(False)
+            action.setEnabled(not locked)
         if getattr(self, "clear_features_action", None) is not None:
-            self.clear_features_action.setEnabled(bool(self.selected_features))
+            self.clear_features_action.setEnabled(bool(self.selected_features) and not locked)
         if self.selected_features:
-            self.features_label.setText(", ".join(self.selected_features))
-        elif self.project_features:
-            self.features_label.setText("<span style='color:gray'>none (see Features menu)</span>")
+            shown = ", ".join(self.selected_features)
         else:
-            self.features_label.setText("<span style='color:gray'>none defined</span>")
+            shown = "none" if self.project_features else "none defined in fpm.toml"
+        self.features_button.set_full_text(shown)
+        self.features_button.setEnabled(bool(self.project_features) and not locked)
+        self.features_button.setToolTip(f"<b><code>--features LIST</code></b><br>{html.escape(shown)}<br>"
+                                        "Features to enable (the project's fpm.toml declares them). Can't be "
+                                        "combined with a profile.")
         using = bool(self.selected_features)
-        self.profile_combo.setEnabled(not using)
+        self.profile_combo.setEnabled(not using and not locked)
         self.profile_combo.setToolTip(
             "<b><code>--profile PROF</code></b><br>"
             + ("Disabled while features are selected: fpm can't combine --profile and --features."
                if using else "Build profile: debug, release, or a feature profile from fpm.toml."))
+        self._options_changed()  # (the features are options too)
 
     def _build_description(self) -> str:
         compiler, _source = self.effective_compiler()
@@ -447,6 +462,10 @@ class RunningMixin:
 
     def stop(self):
         if self.process is not None:
+            # (Remembered: the process may still end normally. Its children go first,
+            # and fpm, seeing its test program killed, can exit with its code before
+            # it's killed too: the run is the one stopped, not a failure.)
+            self._stop_requested = True
             kill_process_tree(self.process)
         if self.parallel_tests is not None:
             self.parallel_tests.stop()
@@ -518,7 +537,7 @@ class RunningMixin:
 
     def _finished(self, code: int, status):
         self._read_output(final=True)
-        crashed = status == QProcess.CrashExit
+        crashed = status == QProcess.CrashExit or self._stop_requested  # (stopped)
         self._flush_monitor(code, crashed)
         self._end_output()
         if crashed:
@@ -558,6 +577,7 @@ class RunningMixin:
             return
         self.process.deleteLater()
         self.process = None
+        self._stop_requested = False
         self.stop_action.setEnabled(False)
         self._set_project_enabled(self.graph is not None)
         if self._refresh_after:

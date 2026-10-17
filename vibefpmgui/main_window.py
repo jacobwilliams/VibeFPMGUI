@@ -24,15 +24,18 @@ from .compat import set_macos_bundle_name, set_macos_display_name, set_windows_a
 from .graph_view import EDGE_STYLES, LAYOUTS, THEME_CHOICES
 from .icons import app_icon
 from .parallel_tests import ParallelTests
+from .project_options import LayeredSettings
 from .window.ai import AIMixin
 from .window.ai_chat import AIChatMixin
 from .window.build_outputs import BuildOutputsMixin
 from .window.complexity import ComplexityMixin
+from .window.configs import ConfigsMixin
 from .window.coverage import CoverageMixin
 from .window.editing import EditingMixin
 from .window.editor_tabs import EditorTabsMixin
 from .window.git import GitMixin
 from .window.language import LanguageMixin
+from .window.options import ProjectOptionsMixin
 from .window.output import OUTPUT_TAIL_LINES, OutputMixin
 from .window.packages import PackagesMixin
 from .window.panels import PanelsMixin
@@ -45,7 +48,7 @@ from .window.view import ViewMixin
 
 class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
                  EditorTabsMixin, EditingMixin, LanguageMixin, SearchMixin, GitMixin,
-                 RunningMixin, BuildOutputsMixin, OutputMixin, TestingMixin, CoverageMixin, ComplexityMixin,
+                 RunningMixin, ConfigsMixin, ProjectOptionsMixin, BuildOutputsMixin, OutputMixin, TestingMixin, CoverageMixin, ComplexityMixin,
                  AIMixin, AIChatMixin,
                  QMainWindow):
     """The window. Each part of it is a mixin in `vibefpmgui.window`; this
@@ -58,7 +61,12 @@ class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
         self.remember_last = remember_last
         self.setWindowTitle("VibeFPMGUI")
         self.resize(1300, 850)
-        self.settings = make_settings()
+        self.settings = LayeredSettings(make_settings())
+        # The project opened first: its options (if its configuration file has
+        # them) are the settings the window is made with.
+        start = manifest_path or self.settings.value("last_manifest", "")
+        start = Path(start).resolve() if start and Path(start).is_file() else None
+        self._use_config_file(self._config_file_for(start) if start is not None else None, start)
         themes.chosen_style = str(self.settings.value("app_style", themes.AUTOMATIC) or themes.AUTOMATIC)
         themes.apply(str(self.settings.value("app_theme", themes.SYSTEM) or themes.SYSTEM))  # (before the widgets)
         self._session_busy = False  # restoring the open files (don't save meanwhile)
@@ -72,6 +80,7 @@ class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
         self.process: QProcess | None = None
         self.parallel_tests: ParallelTests | None = None  # tests run by us, several at once
         self._refresh_after = False
+        self._stop_requested = False  # Stop was pressed for the running process (see stop)
         self._monitoring = False
         self._partial = ""  # output text after the last newline
         # The running command's output as text: a character whose bytes arrive
@@ -97,8 +106,7 @@ class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
         self._restore_settings()
         self._update_editor_actions()
 
-        start = manifest_path or self.settings.value("last_manifest", "")
-        if start and Path(start).is_file():
+        if start is not None:
             self.open_manifest(start)
 
     # ------------------------------------------------------------------ UI
@@ -137,7 +145,8 @@ class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
         if geometry is not None:
             self.restoreGeometry(geometry)
         layout = s.value("panels")  # (where each panel was: docked, stacked, floating, hidden)
-        self._layout_restored = layout is not None and self.restoreState(layout, self.LAYOUT_VERSION)
+        self._layout_restored = layout is not None and self.restore_layout(
+            layout, s.value("panels_front", [], type=list) or [])
         # A layout saved before a panel existed: the panel goes in the stack of
         # the one it's next to by default.
         for name, beside in (("coverage", "tests"), ("git", "search"), ("complexity", "coverage")):
@@ -146,15 +155,8 @@ class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
                 self.addDockWidget(Qt.BottomDockWidgetArea, dock)
                 self.tabifyDockWidget(self.docks[beside], dock)
         # Applied once the project's own [profiles] are in the list.
-        self._wanted_profile = s.value("profile", "(default)")
-        self.profile_combo.setCurrentText(self._wanted_profile)
-        self.compiler_edit.setText(s.value("compiler", ""))
-        self.flag_edit.setText(s.value("flags", ""))
-        self.extra_edit.setText(s.value("extra", ""))
+        self._apply_build_options()
         self.fpm_edit.setText(s.value("fpm", ""))
-        self.verbose_check.setChecked(s.value("verbose", False, type=bool))
-        self.coverage_check.setChecked(s.value("coverage", False, type=bool))
-        self.test_jobs_spin.setValue(s.value("test_jobs", 1, type=int))
         self.set_font_delta(s.value("font_delta", 0, type=int), announce=False)
         self._set_graph_layout(s.value("graph_layout", next(iter(LAYOUTS))))
         self._set_graph_theme(s.value("graph_theme", next(iter(THEME_CHOICES))))
@@ -184,9 +186,14 @@ class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
 
     def closeEvent(self, event):
         clearing = getattr(self, "_clearing_settings", False)
+        # (Before closing brings other panels to the front: e.g. stopping a review shows Build.)
+        front = self.front_panels()
         if not clearing:
             self._save_session()
         # Every question first: answering Cancel or No leaves everything running.
+        if not self.maybe_save_configuration():
+            event.ignore()
+            return
         for editor in self.editors():
             self.tabs.setCurrentWidget(editor)
             if not editor.maybe_save():
@@ -213,16 +220,9 @@ class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
             return
         s = self.settings
         s.setValue("geometry", self.saveGeometry())
-        self.snap_closed.expand_all()  # (collapsed panels are saved open: nothing comes back hidden)
-        s.setValue("panels", self.saveState(self.LAYOUT_VERSION))
-        s.setValue("profile", self.profile_combo.currentText())
-        s.setValue("compiler", self.compiler_edit.text())
-        s.setValue("flags", self.flag_edit.text())
-        s.setValue("extra", self.extra_edit.text())
         s.setValue("fpm", self.fpm_edit.text())
-        s.setValue("verbose", self.verbose_check.isChecked())
-        s.setValue("coverage", self.coverage_check.isChecked())
-        s.setValue("test_jobs", self.test_jobs_spin.value())
+        self._store_window_options(front)  # (the project's options, or the app's settings)
+        self._write_config_file()
         super().closeEvent(event)
 
 

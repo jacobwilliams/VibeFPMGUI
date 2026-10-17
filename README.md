@@ -25,6 +25,55 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   Stop ⌘.; Ctrl on Linux/Windows), with live output and the usual options
   (profile, compiler, flags, target, extra arguments, program arguments).
   Hover an option to see the fpm flag it becomes.
+* Build configurations: named sets of Build options, saved in `vibefpm.json`
+  beside the project's `fpm.toml` (so they can be committed with it). The
+  list at the top of *Build options* chooses one: its options are shown
+  read-only (the fpm executable, a path on this computer, isn't part of
+  one). *New configuration* is the options as you set them, editable;
+  *Save…* adds what's shown to the file under a name, as a configuration
+  from then on. *Edit* makes a saved configuration's options editable;
+  *Save* puts the changes back in the file under its name, and *Cancel*
+  drops them. Leaving it with changes not saved (choosing another, opening
+  another project or configuration file, quitting) asks to save them first.
+  *⋯* saves under another name (*Save As…*), edits a copy as New
+  configuration, deletes one, shows the file in the editor, or opens
+  another configuration file (any `.json` of them beside the `fpm.toml`). A
+  project opened with *File → Open Project…* comes with its
+  `vibefpm.json`. The configuration chosen is remembered for each project.
+  The configurations are read again when the project reloads (after a
+  build, say); saving the file in the editor applies it, taking the options
+  changed there.
+
+  The file's `options` are the GUI's settings for the project, one set for
+  every configuration in it: the View menu's choices (word wrap, linting,
+  minimap, indentation…), the editor's tabs (the files open, the one in
+  front, where each is scrolled to; one row or several), the panels' layout
+  and their own choices (Search, Problems, Complexity, Coverage, the graph's
+  layout, theme and edges), and the configuration chosen. New
+  configuration's Build options and features (those not saved as a
+  configuration) aren't among the options but beside the configurations, as
+  one without a name: `new_configuration`. While a project has a configuration file,
+  these are read from it (the app's own settings for any it doesn't have
+  yet) and written back when the window closes or another project is opened
+  (only if they changed); open files inside the project are written relative
+  to it, so the file works wherever the project is. Opening another project
+  in the same window applies its options. Kept out of the file, for this
+  computer: how the app looks (theme, window style, syntax colors, editor
+  font, text size: yours, in every project), the window's size and place, the recent lists, the spelling
+  dictionary, the AI choices and the fpm executable. A project without a
+  configuration file uses the app's settings as before (nothing is written
+  in it); saving its first configuration starts its options.
+
+  ```json
+  {"vibefpm": 1, "configurations": [
+    {"name": "release (ifx)", "profile": "release", "features": [], "compiler": "ifx",
+     "flags": "-O3", "target": "", "extra_args": "", "program_args": "",
+     "parallel_tests": 4, "coverage": false, "verbose": false}],
+   "new_configuration": {"profile": "", "features": [], "compiler": "", "flags": "-g", "…": "…"},
+   "options": {"word_wrap": true, "minimap": false, "indent_width": 4, "…": "…",
+     "session": {"files": [{"path": "src/main.f90", "line": 12, "column": 0, "scroll": 0}],
+                 "current": "src/main.f90"}}}
+  ```
   Very long output is cut short so the app stays responsive (an lfortran
   crash, for one, can print 100+ MB): after about 2 MB the Output panel
   stops, shows the last 200 lines when the command ends, and *Full Output…*
@@ -39,17 +88,20 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   `fpm.toml` and every folder, `--full`; only the folders chosen; or
   *Bare*), with *Backfill* to add only what an existing folder is missing;
   the dialog shows the command it will run.
-  *File → Recent Manifests* reopens any of the last 10 projects (missing
-  ones are greyed out); the last one is reopened at startup. Each project
+  *File → Open Project…* (⌘O) opens a project's folder: with its
+  `vibefpm.json` (its build configurations and options) if it has one, else
+  its `fpm.toml`; a folder without an `fpm.toml` isn't a project, and says
+  so. *File → Recent Projects* reopens any of the last 10 project folders
+  (missing ones are greyed out); the last one is reopened at startup. Each project
   remembers the files open in the editor (with their cursor and scroll
   positions), the tab in front and the folders open in the *Project files*
-  tree, and restores them when it is opened again. *File → Open fpm.toml in
-  New Window…* (⇧⌘O) opens another project in its own window (a separate
+  tree, and restores them when it is opened again. *File → Open Project in
+  New Window…* (⇧⌘N) opens another project in its own window (a separate
   process, so each has its own builds and language server); such windows
   don't change which project is reopened at startup.
-* *Features* menu: tick any of the features declared in the project's
-  `[features]` table to build/run/test with `--features …` (remembered per
-  project). The *Profile* list also offers the project's own `[profiles]`;
+* *Build options → Features*: tick any of the features declared in the
+  project's `[features]` table (the menu stays open to tick several) to
+  build/run/test with `--features …` (remembered per project). The *Profile* list also offers the project's own `[profiles]`;
   since fpm can't combine the two, Profile is disabled while features are on.
 * Build status grid next to the output: every file/target fpm compiles is
   listed live (works with parallel/OpenMP builds) with its package, status

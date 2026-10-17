@@ -445,6 +445,8 @@ class EditorTabsMixin:
         self._complexity_file_saved(path)
         if self.manifest_path and Path(path) == self.manifest_path:
             self.reload()  # graph, features and profiles may have changed
+        elif self.config_path is not None and Path(path).resolve() == self.config_path.resolve():
+            self.reload_configurations()  # (the build configurations, edited as text)
 
     def rename_file(self, path: str):
         """Project files → Rename…: rename a file on disk; a tab it's open in

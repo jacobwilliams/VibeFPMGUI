@@ -143,19 +143,6 @@ def test_package_menu_for_the_project_and_a_path_dependency(conflict_window, mon
 
 
 # ------------------------------------------------------------- window menus
-def test_recent_manifests(make_window, project, conflict_project):
-    window = make_window(project / "fpm.toml")
-    window.open_manifest(conflict_project / "fpm.toml")
-    window._fill_recent_menu()
-    labels = [a.text() for a in window.recent_menu.actions()]
-    assert any(label.startswith("proj") for label in labels) and any("conflict" in label for label in labels)
-    window.open_recent(str(project / "fpm.toml"))
-    assert window.manifest_path == (project / "fpm.toml").resolve() or window.manifest_path.name == "fpm.toml"
-    window.clear_recent_manifests()
-    window._fill_recent_menu()
-    assert window.recent_menu.actions()[0].text() == "No recent manifests"
-
-
 def test_syntax_colors_menu(window, project):
     editor = open_editor(window, project / "src/foo.f90")
     window._fill_style_menu()
@@ -255,6 +242,28 @@ def test_layout_is_remembered(make_window, project):
     close_window(first)
     second = make_window(project / "fpm.toml")
     assert areas(second)["terminal"] == "left" and second.docks["outputs"].isHidden()
+
+
+def in_front(window, name) -> bool:
+    return not window.docks[name].visibleRegion().isEmpty()
+
+
+@pytest.mark.parametrize("with_options", [False, True])
+def test_the_panel_in_front_of_a_stack_is_remembered(qtbot, make_window, project, with_options):
+    """A restored layout doesn't keep which panel is in front of a stack, and
+    each panel it showed put itself in front: the last one (Build) won."""
+    from conftest import close_window
+
+    if with_options:  # (the project's options, in its configuration file)
+        (project / "vibefpm.json").write_text('{"configurations": []}')
+    first = make_window(project / "fpm.toml")
+    first.docks["tests"].raise_()
+    qtbot.waitUntil(lambda: in_front(first, "tests"))
+    close_window(first)
+    second = make_window(project / "fpm.toml")
+    qtbot.waitUntil(lambda: in_front(second, "tests"))
+    qtbot.wait(50)  # (and nothing put Build in front after)
+    assert in_front(second, "tests") and not in_front(second, "build")
 
 
 def test_find_goes_to_the_graph_or_the_editor(window, project, monkeypatch):
