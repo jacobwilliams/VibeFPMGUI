@@ -79,7 +79,7 @@ class SearchMixin:
         if self.manifest_path is None:
             return [], {}, None
         project_dir = self.manifest_path.parent
-        texts = {e.path: e.editor.toPlainText() for e in self.editors()}
+        texts = {e.path: e.editor.toPlainText() for e in self.editors() if not e.untitled}
         return search_roots(self.graph, project_dir), texts, project_dir
 
     def _problems_shown(self, shown: bool):

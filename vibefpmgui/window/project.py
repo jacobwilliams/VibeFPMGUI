@@ -49,6 +49,11 @@ class ProjectMixin:
         self.recent_menu.setToolTipsVisible(True)
         file_menu.addAction(reload_action)
         file_menu.addSeparator()
+        self.new_file_action = QAction("New File", self)
+        self.new_file_action.setShortcut(QKeySequence.New)
+        self.new_file_action.setStatusTip("An empty file in a new editor tab (it gets its name, and its type, "
+                                          "when it's saved)")
+        self.new_file_action.triggered.connect(self.new_file)
         open_file_action = QAction("Open File in Editor…", self)
         open_file_action.setShortcut(QKeySequence("Ctrl+Shift+O"))
         open_file_action.triggered.connect(self.browse_file)
@@ -61,7 +66,7 @@ class ProjectMixin:
         self.close_tab_action = QAction("Close Tab", self)
         self.close_tab_action.setShortcut(QKeySequence.Close)
         self.close_tab_action.triggered.connect(lambda: self.close_editor(self.tabs.currentIndex()))
-        file_menu.addActions([open_file_action, self.save_action, self.save_as_action,
+        file_menu.addActions([self.new_file_action, open_file_action, self.save_action, self.save_as_action,
                               self.close_tab_action])
         file_menu.addSeparator()
         clear_settings_action = QAction("Clear Settings and Quit…", self)
@@ -221,12 +226,14 @@ class ProjectMixin:
             return
         files = []
         for editor in self.editors():
+            if editor.untitled:
+                continue  # (nothing on disk to open next time)
             cursor = editor.editor.textCursor()
             files.append({"path": str(editor.path), "line": cursor.blockNumber() + 1,
                           "column": cursor.positionInBlock(),
                           "scroll": editor.editor.verticalScrollBar().value()})
         current = self.current_editor()
-        state = {"files": files, "current": str(current.path) if current else None}
+        state = {"files": files, "current": str(current.path) if current and not current.untitled else None}
         tree = self.project_tree.view_state()
         if tree is None:  # filtered: keep what was saved before
             try:
@@ -265,7 +272,7 @@ class ProjectMixin:
 
     def _reveal_current_file(self, *_):
         editor = self.current_editor()
-        if editor is not None:
+        if editor is not None and not editor.untitled:
             self.project_tree.reveal(str(editor.path))
 
     def _update_tree_marks(self):

@@ -168,7 +168,11 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
 * Built-in editor: double-clicking a file (a row in the Build tab, or a
   package in the graph for its `fpm.toml`) opens it in a tab with syntax
   highlighting chosen by file extension, line numbers, find/replace, go to
-  line, undo/redo and save. With many files open the tabs scroll on one row
+  line, undo/redo and save. *File → New File* (⌘N or Ctrl+N) opens an empty
+  tab for a file not saved yet ("Untitled-1"): plain text, without syntax
+  colors or checks, until saving it (Save As, in the project's folder by
+  default) gives it a name and so a type; closing it with something typed
+  asks whether to save it. With many files open the tabs scroll on one row
   (the arrow at its end lists them all), or, with *View → Editor Tabs →
   Several Rows (Wrap)*, wrap onto as many rows as they need. Files opened from the Build tab show the last
   build's warnings and errors as markers in the gutter (hover for the

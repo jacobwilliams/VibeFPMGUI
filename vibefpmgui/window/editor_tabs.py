@@ -281,11 +281,11 @@ class EditorTabsMixin:
         ``preview``: in the preview tab (see preview_file), and the keyboard
         stays where it is."""
         file = Path(path).resolve()
+        editor = next((e for e in self.editors() if e.path == file), None)  # (open already: there, even unsaved)
         use_editor = force_editor or self.use_editor_action.isChecked()
-        if not use_editor or not file.is_file() or not EditorTab.is_probably_text(file):
+        if editor is None and (not use_editor or not file.is_file() or not EditorTab.is_probably_text(file)):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(file)))
             return
-        editor = next((e for e in self.editors() if e.path == file), None)
         if editor is not None and not preview:
             self._make_permanent(editor)  # (opened for real: a preview no longer)
         if editor is None:
@@ -297,40 +297,66 @@ class EditorTabsMixin:
             # A new preview takes the old one's place (unless that one has changes: then it stays).
             replaced = self._preview_editor() if preview else None
             index = self.tabs.indexOf(replaced) if replaced is not None and not replaced.is_dirty() else -1
-            editor.set_font(self._mono_font(editor=True))
-            self._show_coverage(editor)
-            editor.dirty_changed.connect(lambda _dirty, e=editor: self._update_editor_title(e))
-            editor.path_changed.connect(lambda _p, e=editor: self._update_editor_title(e))
-            editor.path_changed.connect(self._update_editor_actions)
-            editor.saved.connect(self._editor_saved)
-            editor.navigate_requested.connect(self.navigate_to)
-            editor.references_found.connect(self._show_references)
-            editor.rename_ready.connect(self._preview_rename)
-            editor.editor.word_added.connect(self.add_spelling_word)
-            editor.explain_requested.connect(lambda problem, e=editor: self.explain_problem(e, problem))
-            editor.editor.edit_selection_requested.connect(lambda e=editor: self.edit_with_ai(e))
-            editor.problems_changed.connect(lambda e=editor: self._problems_timer.start() if e is self.current_editor()
-                                            else None)
-            editor.editor.textChanged.connect(lambda e=editor: self.search_panel.file_changed(e.path))
-            editor.attach_lsp(self.lsp_client)
-            # (Changing a preview's text keeps it open.)
-            editor.dirty_changed.connect(lambda dirty, e=editor: dirty and self._make_permanent(e))
             if preview:
                 self._preview = editor
+            self._add_editor(editor, index)
             if index >= 0:
-                self.tabs.insertTab(index, editor, file.name)
                 self._close_tab(replaced)
-            else:
-                self.tabs.addTab(editor, file.name)
-            self._add_close_button(editor)
-            self._update_editor_title(editor)
-            self._save_session()
         self.tabs.setCurrentWidget(editor)
         if diagnostics:
             editor.show_diagnostics(diagnostics)
             editor.editor.go_to_line(diagnostics[0].line)
         elif not preview:
             editor.editor.setFocus()
+
+    def new_file(self):
+        """File → New File: an empty tab for a file not saved yet ("Untitled-1"…,
+        in the project's folder when it's saved, unless another is chosen).
+        Plain text until Save As gives it a name, and with it a file type."""
+        folder = self.manifest_path.parent if self.manifest_path else Path.home()
+        taken = {e.path.name for e in self.editors()}
+        number = 1
+        while f"Untitled-{number}" in taken or (folder / f"Untitled-{number}").exists():
+            number += 1
+        editor = EditorTab(folder / f"Untitled-{number}", untitled=True)
+        self._add_editor(editor)
+        self.tabs.setCurrentWidget(editor)
+        editor.editor.setFocus()
+
+    def _file_created(self, path: str):
+        """Save As made a new file: in Project files now."""
+        self.project_tree.refresh()
+        self.project_tree.reveal(path)
+
+    def _add_editor(self, editor: EditorTab, index: int = -1):
+        """A new tab for ``editor`` (at ``index``, or the end), connected to the window."""
+        editor.set_font(self._mono_font(editor=True))
+        self._show_coverage(editor)
+        editor.dirty_changed.connect(lambda _dirty, e=editor: self._update_editor_title(e))
+        editor.path_changed.connect(lambda _p, e=editor: self._update_editor_title(e))
+        editor.path_changed.connect(self._update_editor_actions)
+        editor.saved.connect(self._editor_saved)
+        editor.created.connect(self._file_created)
+        editor.navigate_requested.connect(self.navigate_to)
+        editor.references_found.connect(self._show_references)
+        editor.rename_ready.connect(self._preview_rename)
+        editor.editor.word_added.connect(self.add_spelling_word)
+        editor.explain_requested.connect(lambda problem, e=editor: self.explain_problem(e, problem))
+        editor.editor.edit_selection_requested.connect(lambda e=editor: self.edit_with_ai(e))
+        editor.problems_changed.connect(lambda e=editor: self._problems_timer.start() if e is self.current_editor()
+                                        else None)
+        editor.editor.textChanged.connect(  # (a new file not saved yet: not in Find in Files)
+            lambda e=editor: None if e.untitled else self.search_panel.file_changed(e.path))
+        editor.attach_lsp(self.lsp_client)
+        # (Changing a preview's text keeps it open.)
+        editor.dirty_changed.connect(lambda dirty, e=editor: dirty and self._make_permanent(e))
+        if index >= 0:
+            self.tabs.insertTab(index, editor, editor.path.name)
+        else:
+            self.tabs.addTab(editor, editor.path.name)
+        self._add_close_button(editor)
+        self._update_editor_title(editor)
+        self._save_session()
 
     def _close_tab(self, editor: EditorTab):
         """Close an editor tab without asking (see close_editor for that)."""
@@ -409,7 +435,7 @@ class EditorTabsMixin:
         if index >= 0:
             self.tabs.tabBar().set_tab_name(index, ("• " if editor.is_dirty() else "") + editor.path.name,
                                             italic=editor is self._preview)
-            self.tabs.setTabToolTip(index, str(editor.path))
+            self.tabs.setTabToolTip(index, editor.display_path())
             self._set_tab_icon(editor)
         self._update_editor_actions()
 

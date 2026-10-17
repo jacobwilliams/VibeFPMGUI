@@ -15,6 +15,7 @@ compiler's and the AI's markers) in `vibefpmgui.editor_checks`.
 from __future__ import annotations
 
 import html
+import os
 import re
 from pathlib import Path
 
@@ -115,6 +116,7 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
 
     dirty_changed = Signal(bool)
     saved = Signal(str)
+    created = Signal(str)  # Save As made a file that wasn't there (a new file's, or another name's)
     path_changed = Signal(str)
     navigate_requested = Signal(str, int, int)  # go to file, line (1-based), column (0-based)
     references_found = Signal(str, object)  # name, [(file, line, start column, end column)]
@@ -122,9 +124,13 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
     problems_changed = Signal()  # (see problems)
     explain_requested = Signal(object)  # a Problem to Explain with AI (from the editor's menu)
 
-    def __init__(self, path: Path, parent=None):
+    def __init__(self, path: Path, parent=None, untitled: bool = False):
+        """``untitled``: a new file, not saved yet (File → New File): ``path``
+        is only its name for now (no such file); it has no file type, so no
+        colors or checks, until Save As gives it a name."""
         super().__init__(parent)
         self.path = Path(path).resolve()
+        self.untitled = untitled
         self.encoding = "utf-8"
         self.newline = "\n"
         self._disk_newline = "\n"  # the line end of the file as saved (see is_dirty)
@@ -306,7 +312,10 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
         return read_source(self.path)
 
     def load(self):
-        text, self.encoding, self.newline, self.mixed_newlines = self._read()
+        if self.untitled:  # (nothing on disk yet: empty, saved as UTF-8 with this platform's line ends)
+            text, self.encoding, self.newline, self.mixed_newlines = "", "utf-8", os.linesep, False
+        else:
+            text, self.encoding, self.newline, self.mixed_newlines = self._read()
         self._disk_newline = self.newline  # (a converted file is unsaved: see is_dirty)
         self._disk_mixed = self.mixed_newlines
         self._disk_text = text
@@ -367,6 +376,8 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
         return len(lines)
 
     def save(self) -> bool:
+        if self.untitled:
+            return self.save_as()  # (a name first)
         if self.trim_on_save and self.path.suffix.lower() not in TRIM_KEEPS:
             self.trim_trailing_whitespace()
         text = self.editor.toPlainText()
@@ -404,8 +415,12 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
             return False
         client = self.lsp
         self.detach_lsp()  # (under the old name)
-        self._set_path(filename)
+        self.untitled = False
+        new = not Path(filename).exists()
+        self._set_path(filename)  # (its type known now: colors, comments…)
         saved = self.save()
+        if saved and new:
+            self.created.emit(str(self.path))
         self.lint()  # it may (no longer) be a Fortran file
         self.attach_lsp(client)
         return saved
@@ -437,6 +452,10 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
         if answer == QMessageBox.Save:
             return self.save()
         return answer == QMessageBox.Discard
+
+    def display_path(self) -> str:
+        """Where the file is, as told to the user (a tab's tooltip)."""
+        return f"{self.path.name} (not saved yet)" if self.untitled else str(self.path)
 
     def _file_changed(self, _path: str):
         self._check_timer.start()

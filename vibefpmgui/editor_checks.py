@@ -133,7 +133,8 @@ class EditorChecksMixin:
         """Spell check the comments and strings (as the highlighter last
         found them: it lexes again after each edit, then this runs)."""
         self._spelling_timer.stop()
-        if not (self.spelling_enabled and spelling.available()):
+        if not (self.spelling_enabled and spelling.available()) or getattr(self, "untitled", False):
+            # (A new file not saved yet is "plain text", all prose: its code isn't, until it has a type.)
             self._show_spelling([])
             return
         hl = self.highlighter
