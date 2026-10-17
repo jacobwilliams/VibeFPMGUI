@@ -42,11 +42,12 @@ from .editor_shared import (
 )
 from .highlighter import document_text
 from .hover_popup import HoverPopup
+from .line_edits import LineEditsMixin
 from .multi_cursor import MultiCursorMixin
 
 FIND_COLOR = QColor(252, 196, 25, 110)  # the find bar's matches
 
-class CodeEditor(EditorGutterMixin, EditorIssuesMixin, MultiCursorMixin, QPlainTextEdit):
+class CodeEditor(EditorGutterMixin, EditorIssuesMixin, MultiCursorMixin, LineEditsMixin, QPlainTextEdit):
     """Plain-text editor with a line-number gutter, current-line highlight,
     auto-indent and soft tabs."""
 
@@ -513,6 +514,11 @@ class CodeEditor(EditorGutterMixin, EditorIssuesMixin, MultiCursorMixin, QPlainT
                 return
         if key == Qt.Key_Escape and self.signature_popup.isVisible():
             self.signature_popup.hide()
+            return
+        if key in (Qt.Key_Up, Qt.Key_Down) and event.modifiers() == Qt.AltModifier:
+            # ⌥↑ / ⌥↓ (Alt+↑ / ↓): Move Line Up / Down. (Here too, not only as the
+            # menu's shortcut: on macOS the text field takes these keys for itself.)
+            self.move_lines(down=key == Qt.Key_Down)
             return
         before = self.document().revision()
         self._edit_key(event)

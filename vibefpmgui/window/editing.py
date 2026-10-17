@@ -7,7 +7,7 @@ import sys
 from qtpy.QtGui import QAction, QKeySequence
 from qtpy.QtWidgets import QApplication, QMessageBox
 
-from .. import formatter, lint
+from .. import formatter, line_edits, lint
 from ..background import call_in_background
 from ..editor import EditorTab
 
@@ -117,6 +117,30 @@ class EditingMixin:
         self.complete_action.setStatusTip("Offer completions for the name being typed "
                                           "(they also appear by themselves as you type)")
         menu.addSeparator()
+        # Lines and selections (see vibefpmgui.line_edits). Ctrl+/ is ⌘/ on macOS.
+        self.comment_action = editor_action("Toggle Line Comment", "Ctrl+/", lambda e: e.editor.toggle_comment())
+        self.comment_action.setStatusTip("Comment out the selected lines (with ! in Fortran, # in fpm.toml), "
+                                         "or uncomment them if they all are")
+        lines_menu = self.lines_menu = menu.addMenu("Lines")  # (kept: PySide would let it go)
+        self.move_up_action = editor_action("Move Line Up", "Alt+Up", lambda e: e.editor.move_lines(down=False),
+                                            lines_menu)
+        self.move_down_action = editor_action("Move Line Down", "Alt+Down",
+                                              lambda e: e.editor.move_lines(down=True), lines_menu)
+        for action in (self.move_up_action, self.move_down_action):
+            action.setStatusTip("Move the selected lines (or the cursor's) past the line above or below")
+        lines_menu.addSeparator()
+        self.sort_up_action = editor_action("Sort Lines Ascending", "",
+                                            lambda e: e.editor.sort_selected_lines(descending=False), lines_menu)
+        self.sort_down_action = editor_action("Sort Lines Descending", "",
+                                              lambda e: e.editor.sort_selected_lines(descending=True), lines_menu)
+        for action in (self.sort_up_action, self.sort_down_action):
+            action.setStatusTip("Sort the selected lines, ignoring case (select two or more lines)")
+        case_menu = self.case_menu = menu.addMenu("Change Case")  # (kept: PySide would let it go)
+        for case, text in ((line_edits.UPPER, "UPPER CASE"), (line_edits.LOWER, "lower case"),
+                           (line_edits.TITLE, "Title Case")):
+            action = editor_action(text, "", lambda e, c=case: e.editor.change_selection_case(c), case_menu)
+            action.setStatusTip(f"Make the selection (or the word at the cursor) {text}")
+        menu.addSeparator()
         self.format_action = editor_action("Format with fprettify", "Ctrl+Shift+I", self.format_file)
         self.format_action.setIconText("Format")
         keys = self.format_action.shortcut().toString(QKeySequence.NativeText)
@@ -195,6 +219,9 @@ class EditingMixin:
         for action in (self.fix_safe_action, self.fix_all_action):
             action.setEnabled(editor is not None and editor.can_lint())
         self.line_endings_menu.setEnabled(editor is not None)
+        self.comment_action.setEnabled(editor is not None and bool(editor.editor.comment_prefix))
+        for submenu in (self.lines_menu, self.case_menu):
+            submenu.setEnabled(editor is not None)
         self.trim_action.setEnabled(editor is not None)
         for action in (self.definition_action, self.implementation_action, self.references_action,
                        self.rename_action, self.complete_action):

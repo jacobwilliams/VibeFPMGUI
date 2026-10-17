@@ -196,7 +196,11 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   and tabs are trimmed when a file is saved (*Edit → Trim Trailing
   Whitespace on Save*, on by default; not Markdown or patch files, where
   they mean something); *Edit → Trim Trailing Whitespace* trims them now
-  (Undo reverts). Multiple cursors: ⌥/Alt-click adds a
+  (Undo reverts). *Edit → Toggle Line Comment* (⌘/ or Ctrl+/) comments the
+  selected lines out or back (`!` in Fortran, in the first column in fixed
+  form; `#` in `fpm.toml`); *Edit → Lines* moves them up or down (⌥↑/⌥↓ or
+  Alt+↑/↓) and sorts them; *Edit → Change Case* makes the selection (or the
+  word at the cursor) UPPER, lower or Title Case. Multiple cursors: ⌥/Alt-click adds a
   cursor (again to remove it); ⌘⇧/Ctrl+Shift-click adds one on every line
   from the cursor to the clicked line: in the same column, or, clicked in
   another column, with each line selected between the two columns (a box

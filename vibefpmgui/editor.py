@@ -52,6 +52,7 @@ from .editor_shared import (
 from .find_bar import FindBar
 from .highlighter import PygmentsHighlighter, apply_style, lexer_for_path
 from .icons import SYMBOL_INDENT
+from .line_edits import comment_style
 from .minimap import Minimap
 from .source_text import read_source
 from .widgets import StatusLabel
@@ -144,6 +145,7 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
         self._outline: list[tuple[int, str, str, int, int]] = []
         self.editor = CodeEditor()
         self.highlighter = PygmentsHighlighter(self.editor.document(), lexer_for_path(self.path))
+        self.editor.comment_prefix, self.editor.fixed_form = comment_style(self.path)  # (Toggle Line Comment)
         self.highlighter.line_on_view = lambda: self.editor.firstVisibleBlock().blockNumber()  # (colored first)
         self.find_bar = FindBar(self.editor)
         # A change to the text: the last test run's coverage no longer fits its lines.
@@ -422,6 +424,7 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
     def _set_path(self, path: str | Path):
         self.path = Path(path).resolve()
         self.highlighter.set_lexer(lexer_for_path(self.path))
+        self.editor.comment_prefix, self.editor.fixed_form = comment_style(self.path)
         self.path_changed.emit(str(self.path))
 
     def maybe_save(self) -> bool:
