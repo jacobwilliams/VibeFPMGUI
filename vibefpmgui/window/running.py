@@ -19,6 +19,7 @@ from qtpy.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -106,6 +107,11 @@ class RunningMixin:
         fpm_browse.clicked.connect(self._browse_fpm)
         fpm_row.addWidget(self.fpm_edit)
         fpm_row.addWidget(fpm_browse)
+        # A line above it: the fpm executable isn't part of a build configuration (a path on this computer).
+        divider = QFrame()
+        divider.setFrameShape(QFrame.HLine)
+        divider.setFrameShadow(QFrame.Sunken)
+        form.addRow(divider)
         form.addRow("fpm executable:", fpm_row)
 
         # Hovering an option (or its label) shows the fpm flag it becomes.
@@ -129,7 +135,9 @@ class RunningMixin:
              ("Build with gfortran's coverage counting (a build of its own): after Test, the Coverage panel "
               "and the editor's gutter show which lines the tests ran.")),
             (self.verbose_check, "--verbose", "Print more detail about what fpm is doing."),
-            (self.fpm_edit, "(not a flag)", "The fpm program to run. Leave empty to use the fpm on your PATH."),
+            (self.fpm_edit, "(not a flag)",
+             ("The fpm program to run. Leave empty to use the fpm on your PATH. Not part of a build "
+              "configuration: it's kept for this computer.")),
         ]:
             tip = f"<b><code>{html.escape(flag)}</code></b><br>{html.escape(text)}"
             widget.setToolTip(tip)
