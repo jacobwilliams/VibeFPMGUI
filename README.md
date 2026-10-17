@@ -43,8 +43,8 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   again when the project reloads.
 
   The file's `options` are the GUI's settings for the project, one set for
-  every configuration in it: the View menu's choices (theme, fonts, text
-  size, word wrap, linting…), the editor's tabs (the files open, the one in
+  every configuration in it: the View menu's choices (word wrap, linting,
+  minimap, indentation…), the editor's tabs (the files open, the one in
   front, where each is scrolled to; one row or several), the panels' layout
   and their own choices (Search, Problems, Complexity, Coverage, the graph's
   layout, theme and edges), and the configuration chosen. New
@@ -56,7 +56,8 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   (only if they changed); open files inside the project are written relative
   to it, so the file works wherever the project is. Opening another project
   in the same window applies its options. Kept out of the file, for this
-  computer: the window's size and place, the recent lists, the spelling
+  computer: how the app looks (theme, window style, syntax colors, editor
+  font, text size: yours, in every project), the window's size and place, the recent lists, the spelling
   dictionary, the AI choices and the fpm executable. A project without a
   configuration file uses the app's settings as before (nothing is written
   in it); saving its first configuration starts its options.
@@ -67,7 +68,7 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
      "flags": "-O3", "target": "", "extra_args": "", "program_args": "",
      "parallel_tests": 4, "coverage": false, "verbose": false}],
    "new_configuration": {"profile": "", "features": [], "compiler": "", "flags": "-g", "…": "…"},
-   "options": {"word_wrap": true, "font_delta": 1, "app_theme": "system", "…": "…",
+   "options": {"word_wrap": true, "minimap": false, "indent_width": 4, "…": "…",
      "session": {"files": [{"path": "src/main.f90", "line": 12, "column": 0, "scroll": 0}],
                  "current": "src/main.f90"}}}
   ```

@@ -30,15 +30,16 @@ def test_options_go_to_the_project_the_rest_to_the_app(layered, tmp_path):
     layered.setValue("word_wrap", False)
     layered.use({}, tmp_path)
     assert layered.value("word_wrap", True, type=bool) is False  # (not in its options yet: the app's)
-    for key, value in (("word_wrap", True), ("font_delta", 3), ("problems/fortitude", False),
+    for key, value in (("word_wrap", True), ("indent_width", 3), ("problems/fortitude", False),
                        ("search/include", "*.f90")):
         layered.setValue(key, value)
         assert layered.options[key] == value
     assert layered.app.value("word_wrap", type=bool) is False  # (the app's unchanged)
-    assert layered.value("font_delta", 0, type=int) == 3
+    assert layered.value("indent_width", 0, type=int) == 3
     # Not options: the app's, for this computer.
     for key in ("geometry", "recent_manifests", "last_manifest", "spelling_words", "ai_model", "fpm",
-                "palette_recent", "build_config_file/abc"):
+                "palette_recent", "build_config_file/abc", "app_theme", "app_style", "syntax_style",
+                "editor_font_family", "editor_font_size", "font_delta"):
         layered.setValue(key, "x")
         assert key not in layered.options and layered.app.value(key) == "x"
 
@@ -59,10 +60,10 @@ def test_the_panels_layout_and_the_session(layered, tmp_path):
 
 
 def test_a_value_of_the_wrong_type_gets_the_default(layered, tmp_path):
-    layered.use({"word_wrap": "yes", "font_delta": "big", "features": "mpi"}, tmp_path)
+    layered.use({"word_wrap": "yes", "indent_width": "big", "panels_front": "build"}, tmp_path)
     assert layered.value("word_wrap", False, type=bool) is False
-    assert layered.value("font_delta", 1, type=int) == 1
-    assert layered.value("features", [], type=list) == []
+    assert layered.value("indent_width", 1, type=int) == 1
+    assert layered.value("panels_front", [], type=list) == []
 
 
 def test_the_options_written_have_them_all(layered, tmp_path):
@@ -185,7 +186,8 @@ def test_closing_writes_the_options_in_the_file(make_window, configured):
     assert {"compiler", "flags", "profile", "parallel_tests", "features", "extra_args", "target",
             "program_args", "coverage", "verbose"} <= set(new) and "name" not in new
     assert all(f"problems/{source}" in options for source in window.problems_panel.buttons)
-    for kept_out in ("geometry", "recent_manifests", "fpm", "spelling_words", "ai_model"):
+    for kept_out in ("geometry", "recent_manifests", "fpm", "spelling_words", "ai_model", "app_theme",
+                     "app_style", "syntax_style", "editor_font_family", "editor_font_size", "font_delta"):
         assert kept_out not in options
     assert not window.settings.app.value("word_wrap", False, type=bool)  # (the app's own: unchanged)
     assert [c.name for c in bc.load(configured / bc.FILE_NAME)] == ["a"]
@@ -456,3 +458,26 @@ def test_the_configuration_chosen_changed_in_the_editor_is_chosen(make_window, c
     editor.editor.setPlainText(json.dumps(data, indent=2))
     editor.save()
     assert window.config_combo.currentText() == "b" and window.compiler_edit.text() == "nvfortran"
+
+
+# ----------------------------------------------------------------- the look: the person's, not the project's
+def test_the_look_isnt_the_projects(make_window, configured, conflict_project):
+    """Theme, window style, syntax colors, the editor's font and the text
+    size are the app's settings: the same in every project, never in a file."""
+    from vibefpmgui import themes
+
+    put(configured, {"app_theme": "dark", "font_delta": 4, "word_wrap": True})  # (an older file had them)
+    window = make_window(configured / "fpm.toml")
+    assert window.word_wrap_action.isChecked()  # (an option: the file's)
+    assert themes.current != "dark" and window.font_delta == 0  # (not the file's: the app's)
+    window.set_font_delta(2, announce=False)
+    window.set_syntax_style("monokai")
+    window.open_manifest(conflict_project / "fpm.toml")  # (no configuration file)
+    assert window.font_delta == 2 and window.settings.app.value("syntax_style") == "monokai"
+    window.open_manifest(configured / "fpm.toml")
+    assert window.font_delta == 2
+    window.close()
+    options = file_options(configured)
+    assert not {"app_theme", "app_style", "syntax_style", "editor_font_family", "editor_font_size",
+                "font_delta"} & set(options)
+    assert window.settings.app.value("font_delta", type=int) == 2

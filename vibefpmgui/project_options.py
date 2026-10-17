@@ -1,11 +1,13 @@
 """A project's GUI options, in its build configuration file's "options"
 (see `vibefpmgui.build_configs`): the View menu's choices, the panels'
 layout, the editor's tabs and the files open in them… everything the app
-keeps in its settings that's about how the project is worked on. (New
+keeps in its settings that's about how the project is worked on (not how
+the app looks: that's the person's, wherever they work). (New
 configuration's Build options are in the file too, but as a configuration:
 see `vibefpmgui.window.options`.)
 
-Not in it (kept in the app's settings, for this computer): the window's size
+Not in it (kept in the app's settings, for this computer): the look (theme,
+window style, syntax colors, editor font, text size), the window's size
 and place, the recent lists and the last project, the command palette's
 recent commands, the spelling dictionary, the AI choices, the fpm executable,
 which configuration file a project uses, and what the app has learned (tests'
@@ -33,8 +35,7 @@ BYTES, JSON = "bytes", "json"  # (kinds besides bool, int, float, str and list)
 # Each option, by its settings key, and the kind of value it has.
 OPTIONS: dict[str, object] = {
     # View
-    "app_style": str, "app_theme": str, "syntax_style": str, "font_delta": int,
-    "editor_font_family": str, "editor_font_size": float, "use_editor": bool, "lint": bool,
+    "use_editor": bool, "lint": bool,
     "lsp_diagnostics": bool, "spelling": bool, "spelling_language": str, "gremlins": bool, "minimap": bool,
     "show_coverage": bool, "highlight_matches": bool, "word_wrap": bool, "indent_width": int,
     "indent_tabs": bool, "fortls": bool, "trim_on_save": bool,

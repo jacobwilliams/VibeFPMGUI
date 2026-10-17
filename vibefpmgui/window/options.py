@@ -20,10 +20,8 @@ import hashlib
 from pathlib import Path
 
 from .. import build_configs as bc
-from .. import editor as editor_mod
-from .. import highlighter as hl
 from .. import project_options as po
-from .. import spelling, themes
+from .. import spelling
 from ..code_editor import CodeEditor
 from ..graph_view import EDGE_STYLES, LAYOUTS, THEME_CHOICES
 
@@ -194,12 +192,6 @@ class ProjectOptionsMixin:
         their stacks (as they were before closing began: see closeEvent).
         (Collapsed panels are opened first: a layout is saved with them open.)"""
         s = self.settings
-        s.setValue("app_style", themes.chosen_style)
-        s.setValue("app_theme", themes.current)
-        s.setValue("syntax_style", hl.chosen_style)
-        s.setValue("editor_font_family", editor_mod.editor_font_family)
-        s.setValue("editor_font_size", editor_mod.editor_font_size)
-        s.setValue("font_delta", self.font_delta)
         for action, key, _default in self._toggles():
             s.setValue(key, action.isChecked())
         s.setValue("spelling_language", spelling.language)
@@ -236,27 +228,6 @@ class ProjectOptionsMixin:
         if wanted(NEW_CONFIGURATION_KEY):
             self._apply_build_options()
         # View
-        if wanted("app_style"):
-            style = str(s.value("app_style", themes.AUTOMATIC) or themes.AUTOMATIC)
-            if style != themes.chosen_style:
-                self.set_window_style(style)
-        if wanted("app_theme"):
-            theme = str(s.value("app_theme", themes.SYSTEM) or themes.SYSTEM)
-            if theme != themes.current:
-                self.set_theme(theme)
-        if wanted("syntax_style"):
-            syntax = s.value("syntax_style", hl.AUTO) or hl.AUTO
-            if syntax != hl.chosen_style:
-                self.set_syntax_style(syntax)
-        if wanted("editor_font_family", "editor_font_size"):
-            family = s.value("editor_font_family", "") or ""
-            size = s.value("editor_font_size", 0.0, type=float) or 0.0
-            if (family, size) != (editor_mod.editor_font_family, editor_mod.editor_font_size):
-                self.set_editor_font(family, size)
-        if wanted("font_delta"):
-            delta = s.value("font_delta", 0, type=int)
-            if delta != self.font_delta:
-                self.set_font_delta(delta, announce=False)
         for action, key, default in self._toggles():
             if wanted(key):
                 action.setChecked(s.value(key, default, type=bool))  # (its handler applies it)
