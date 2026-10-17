@@ -128,3 +128,62 @@ def test_the_find_bar_finds_as_qt_does(window, project):
             assert fast == bar._qt_matches(), (case, word)
     editor.editor.setPlainText("! 😀 count count\n")  # (beyond U+FFFF: Qt's own search, its positions)
     assert bar._all_matches() == bar._qt_matches() and len(bar._all_matches()) == 2
+
+
+def test_a_big_lint_answer_is_read_on_a_thread_and_a_late_one_dropped(qtbot, window, project, monkeypatch):
+    from vibefpmgui import editor_checks
+
+    write_files(project, {"src/big.f90": big_text(200)})
+    editor = open_editor(window, project / "src/big.f90")
+    issue = '{"code": "C001", "message": "m", "location": {"line": %d, "column": 1}, ' \
+            '"end_location": {"line": %d, "column": 2}, "fix": null}'
+    output = "[" + ", ".join(issue % (n, n) for n in range(1, 101)) + "]"
+    monkeypatch.setattr(editor_checks, "PARSE_APART", 10)  # (any answer: "big")
+    monkeypatch.setattr(type(editor), "can_lint", lambda self: True)
+    later = []
+    monkeypatch.setattr(editor_checks, "call_in_background", lambda work, then, parent: later.append((work, then)))
+
+    class Answer:
+        def readAllStandardOutput(self):
+            return output.encode()
+
+        def deleteLater(self):
+            pass
+
+    editor._lint_sent_text = editor.editor.toPlainText()  # (as a run sets it)
+    for _ in range(2):  # (two answers, the first one's reading done last)
+        editor._lint_process = answer = Answer()
+        editor._lint_finished(answer)
+    assert editor._fortitude_issues == [] and len(later) == 2  # (not read here)
+    work, then = later[1]
+    then(work())
+    assert len(editor._fortitude_issues) == 100
+    editor._fortitude_issues = []
+    work, then = later[0]
+    then(work())  # (the older answer, late: dropped)
+    assert editor._fortitude_issues == []
+
+
+def test_a_big_text_is_spell_checked_on_a_thread(qtbot, window, project, monkeypatch):
+    from vibefpmgui import editor_checks
+
+    if not spelling.available():
+        return
+    write_files(project, {"src/big.f90": big_text(300) + "! a mispeled word\n"})
+    editor = open_editor(window, project / "src/big.f90")
+    qtbot.waitUntil(editor.highlighter.is_current, timeout=10_000)
+    monkeypatch.setattr(editor_checks, "PARSE_APART", 10)
+    later = []
+    monkeypatch.setattr(editor_checks, "call_in_background", lambda work, then, parent: later.append((work, then)))
+    editor._spelling_issues = []
+    editor.check_spelling()
+    assert later and editor._spelling_issues == []  # (on a thread)
+    work, then = later[-1]
+    then(work())
+    assert [i.word for i in editor._spelling_issues] == ["mispeled"]
+    editor._spelling_issues = []
+    editor.check_spelling()
+    work, then = later[-1]
+    editor.highlighter._text = editor.highlighter._text + "x"  # (edited meanwhile: the answer is for another text)
+    then(work())
+    assert editor._spelling_issues == []

@@ -8,8 +8,11 @@ from qtpy.QtCore import QProcess
 
 from . import gremlins as gremlins_mod
 from . import lint, spelling
+from .background import call_in_background
 from .editor_shared import MARKER_COLORS, PROBLEM_SOURCES
 from .result_tree import Problem
+
+PARSE_APART = 200_000  # (characters) fortitude's answer, or a text to spell check, bigger: on a pool thread
 
 
 class EditorChecksMixin:
@@ -68,11 +71,22 @@ class EditorChecksMixin:
         self._lint_process = None
         output = bytes(process.readAllStandardOutput()).decode("utf-8", errors="replace")
         process.deleteLater()
-        if self.can_lint():
-            self._show_lint(lint.parse(output))
-            self._lint_text = self._lint_sent_text  # the text the issues are about
+        self._lint_answer = serial = getattr(self, "_lint_answer", 0) + 1
+        sent = self._lint_sent_text
+        if len(output) > PARSE_APART:  # (a big file's thousands of issues: read on a pool thread)
+            call_in_background(lambda: lint.parse(output),
+                               lambda issues: self._lint_parsed(serial, sent, issues), self)
+        else:
+            self._lint_parsed(serial, sent, lint.parse(output))
         if self._lint_again:
             self._lint_timer.start()
+
+    def _lint_parsed(self, serial: int, sent: str, issues: list):
+        if serial != self._lint_answer:
+            return  # (a newer answer came meanwhile)
+        if self.can_lint():
+            self._show_lint(issues)
+            self._lint_text = sent  # the text the issues are about
 
     def apply_lint_fix(self, issue):
         """Apply fortitude's fix for one issue (one Undo step). Only if the
@@ -125,7 +139,17 @@ class EditorChecksMixin:
         hl = self.highlighter
         if not hl.is_current():
             return  # (the highlighter is behind: it calls again when it's caught up)
-        self._show_spelling(spelling.check(hl.text, hl.prose, hl.names))
+        text, prose, names = hl.text, hl.prose, hl.names
+        self._spelling_check = serial = getattr(self, "_spelling_check", 0) + 1
+        if len(text) > PARSE_APART:  # (a big file's first check reads every comment: on a pool thread)
+            call_in_background(lambda: spelling.check(text, prose, names),
+                               lambda issues: self._spelling_checked(serial, text, issues), self)
+        else:
+            self._spelling_checked(serial, text, spelling.check(text, prose, names))
+
+    def _spelling_checked(self, serial: int, text: str, issues: list):
+        if serial == self._spelling_check and self.highlighter.text is text:  # (not since edited, or asked again)
+            self._show_spelling(issues)
 
     def _show_spelling(self, issues: list):
         if issues == self._spelling_issues:

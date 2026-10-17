@@ -250,7 +250,7 @@ def panel_stylesheet(object_name: str, pal: dict) -> str:
     return f"""
         {n} {{ background: {pal['bg']}; }}
         {n} QLabel {{ color: {pal['text']}; background: transparent; }}
-        {n} QTableWidget {{ background: {pal['bg']}; border: none; }}
+        {n} QTableView {{ background: {pal['bg']}; border: none; }}
         {n} QHeaderView {{ background: {pal['bg']}; }}
         {n} QAbstractScrollArea::corner {{ background: transparent; border: none; }}
         {n} QScrollBar:vertical {{ background: transparent; width: 8px; margin: 2px; }}
