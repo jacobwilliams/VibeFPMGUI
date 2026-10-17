@@ -119,6 +119,8 @@ def lexer_for_path(path) -> object:
     """A Pygments lexer chosen from the file name (plain text if unknown),
     which keeps the text's positions (see keep_positions)."""
     name = str(path)
+    if not name:  # (no file, e.g. an empty diff pane: Pygments would go through every lexer to find none)
+        return keep_positions(TextLexer())
     suffix = ("." + name.rsplit(".", 1)[-1].lower()) if "." in name else ""
     if suffix in _FIXED_FORM:
         return keep_positions(FortranFixedLexer())

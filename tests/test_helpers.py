@@ -107,6 +107,12 @@ def test_lexer_for_path(name, lexer):
     assert hl.lexer_for_path(name).name == lexer
 
 
+def test_no_file_name_is_plain_text_without_a_search(monkeypatch):
+    """(Pygments went through every lexer for "": the Git panel's empty diff panes, 40 ms at start-up.)"""
+    monkeypatch.setattr(hl, "get_lexer_for_filename", lambda name: pytest.fail("looked up"))
+    assert hl.lexer_for_path("").name == "Text only"
+
+
 def test_token_format():
     from pygments.styles import get_style_by_name
     from pygments.token import Comment, Keyword
