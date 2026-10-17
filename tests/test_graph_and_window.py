@@ -195,7 +195,7 @@ def test_editor_in_the_middle(window, project):
     tabs = window.tabs
     assert tabs.count() == 0 and window.central.currentWidget() is window.no_file_hint  # (a hint, no tabs)
     open_editor(window, project / "fpm.toml")  # (the manifest: an ordinary, closable editor tab)
-    assert window.central.currentWidget() is tabs and tabs.tabText(0).endswith("fpm.toml")
+    assert window.central.currentWidget() is window.editor_area and tabs.tabText(0).endswith("fpm.toml")
     menu = QMenu()
     window._fill_tab_list(menu)
     assert [a.text() for a in menu.actions() if a.text()][:1] == ["fpm.toml"]

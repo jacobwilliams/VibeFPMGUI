@@ -105,7 +105,7 @@ class PanelsMixin:
         self.no_file_hint.setStyleSheet("color: gray;")
         self.central = QStackedWidget()
         self.central.addWidget(self.no_file_hint)
-        self.central.addWidget(self.tabs)
+        self.central.addWidget(self.editor_area)  # (the tabs, and their rows when they wrap)
         self.setCentralWidget(self.central)
 
     def _build_docks(self, options: QWidget, files_box: QWidget, graph_tab: QWidget, console_box: QWidget):
@@ -266,7 +266,7 @@ class PanelsMixin:
 
     def _update_central(self, *_):
         """The editor's tabs, or a hint while no file is open."""
-        self.central.setCurrentWidget(self.tabs if self.tabs.count() else self.no_file_hint)
+        self.central.setCurrentWidget(self.editor_area if self.tabs.count() else self.no_file_hint)
 
     def _terminal_dock_shown(self, shown: bool):
         # Choosing the Terminal tab: type there straight away (after the click

@@ -8,8 +8,16 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from qtpy.QtCore import QFile, QSize, Qt, QUrl
-from qtpy.QtGui import QColor, QDesktopServices, QFont, QFontMetrics, QKeySequence
+from qtpy.QtCore import QFile, QSize, Qt, QUrl, Signal
+from qtpy.QtGui import (
+    QAction,
+    QActionGroup,
+    QColor,
+    QDesktopServices,
+    QFont,
+    QFontMetrics,
+    QKeySequence,
+)
 from qtpy.QtWidgets import (
     QFileDialog,
     QInputDialog,
@@ -22,16 +30,21 @@ from qtpy.QtWidgets import (
     QTabBar,
     QTabWidget,
     QToolButton,
+    QVBoxLayout,
+    QWidget,
 )
 
 from ..editor import EditorTab
 from ..icons import make_icon
+from ..wrapping_tabs import WrappingTabBar
 
 
 class ScrollingTabBar(QTabBar):
     """A tab bar where the mouse wheel or a trackpad scrolls the tabs
     sideways when they don't all fit, rather than switching tabs; a preview
     tab's name is in italics (see set_italic)."""
+
+    changed = Signal()  # a tab added, removed or renamed (for the tabs on several rows: WrappingTabBar)
 
     def set_tab_name(self, index: int, name: str, italic: bool = False):
         """A tab's name, in italics or not. Qt has no font per tab: an italic
@@ -40,6 +53,15 @@ class ScrollingTabBar(QTabBar):
         self.setTabText(index, "" if italic else name)
         self.updateGeometry()
         self.update()
+        self.changed.emit()
+
+    def tabInserted(self, index):
+        super().tabInserted(index)
+        self.changed.emit()
+
+    def tabRemoved(self, index):
+        super().tabRemoved(index)
+        self.changed.emit()
 
     def tab_name(self, index: int) -> str:
         return self.italic_name(index) or self.tabText(index)
@@ -127,6 +149,41 @@ class EditorTabsMixin:
         self.tabs.currentChanged.connect(self._reveal_current_file)
         self.tabs.currentChanged.connect(self._update_central)
         self.tabs.currentChanged.connect(self._update_problems)
+        # The tabs on several rows instead of one that scrolls (View → Editor Tabs):
+        # above the tabs, which then hide their own bar.
+        self.tab_rows = WrappingTabBar(self.tabs)
+        self.tab_rows.close_requested.connect(self.close_editor)
+        self.tabs.tabBar().changed.connect(self.tab_rows.refresh)
+        self.editor_area = QWidget()
+        area = QVBoxLayout(self.editor_area)
+        area.setContentsMargins(0, 0, 0, 0)
+        area.setSpacing(0)
+        area.addWidget(self.tab_rows)
+        area.addWidget(self.tabs, 1)
+        menu = self.tab_rows_menu = self.view_menu.addMenu("Editor Tabs")  # (kept: PySide would let it go)
+        group = QActionGroup(menu)
+        self.tab_rows_actions: dict[bool, QAction] = {}
+        for wrap, text, tip in ((False, "One Row (Scroll)", ("The editor's tabs side by side, scrolling when they "
+                                 "don't all fit (the wheel or a trackpad scrolls them)")),
+                                (True, "Several Rows (Wrap)", ("The editor's tabs on as many rows as they need, "
+                                 "all in view"))):
+            action = menu.addAction(text)
+            action.setCheckable(True)
+            action.setStatusTip(tip)
+            action.triggered.connect(lambda _=False, w=wrap: self.set_tab_rows(w))
+            group.addAction(action)
+            self.tab_rows_actions[wrap] = action
+        self.set_tab_rows(self.settings.value("tab_rows_wrap", False, type=bool), save=False)
+
+    def set_tab_rows(self, wrap: bool, save: bool = True):
+        """View → Editor Tabs: one row that scrolls, or several rows."""
+        self.tab_rows_actions[wrap].setChecked(True)
+        if save:
+            self.settings.setValue("tab_rows_wrap", wrap)
+        self.tabs.tabBar().setVisible(not wrap)
+        self.tab_list_button.setVisible(not wrap)  # (every tab is in view)
+        self.tab_rows.setVisible(wrap)
+        self.tab_rows.refresh()
 
     def editors(self) -> list[EditorTab]:
         return [w for i in range(self.tabs.count())

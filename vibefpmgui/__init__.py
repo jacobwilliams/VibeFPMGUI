@@ -91,11 +91,13 @@ menu item says "not found" and the feature is off; without fprettify the
 | `vibefpmgui.find_bar` | The find and replace bar |
 | `vibefpmgui.editor_shared` | What the editor's modules share: colors, delays, severities, text helpers |
 | `vibefpmgui.source_text` | Reading source files the same way everywhere: encoding, line ends, what Search skips |
+| `vibefpmgui.wrapping_tabs` | The editor's tabs on several rows (View → Editor Tabs) |
 | `vibefpmgui.console` | Console programs started without a console window flashing up (Windows); no Qt |
 | `vibefpmgui.git_status` | A repository's status and the versions of a changed file (the git program; no Qt) |
 | `vibefpmgui.git_panel` | The *Git* tab: the branch, the changed files, and the selected one's diff |
 | `vibefpmgui.diff_view` | Two versions of a file side by side or unified: aligning them, folding unchanged lines |
 | `vibefpmgui.complexity` | Fortran code complexity, lizard's metrics (CCN, NLOC, tokens, parameters, length, depth); no Qt |
+| `vibefpmgui.metrics_table` | A sortable table drawn on demand (the Complexity tab's procedures and files) |
 | `vibefpmgui.complexity_panel` | The *Complexity* tab: each procedure's metrics and each file's totals |
 | `vibefpmgui.control_flow` | A procedure's control-flow graph (blocks, decisions, loops, exits) and its layered layout; no Qt |
 | `vibefpmgui.cfg_view` | Drawing a control-flow graph (pyqtgraph) |
