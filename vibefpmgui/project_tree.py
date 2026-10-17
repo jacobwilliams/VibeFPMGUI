@@ -119,6 +119,7 @@ class GitIgnore:
         self.package_dir = package_dir.resolve()
         self.root = self._repo_root(self.package_dir)
         self._specs: dict[Path, object] = {}
+        self._chains: dict[Path, list] = {}  # folder -> the rules that apply to its entries (see _chain)
 
     @staticmethod
     def _repo_root(start: Path) -> Path:
@@ -154,28 +155,40 @@ class GitIgnore:
 
     def check(self, path: Path, is_dir: bool) -> str | None:
         """Where ``path`` is ignored ("…/.gitignore:LINE"), or None if it isn't."""
-        path = path.resolve()
-        try:
-            path.relative_to(self.root)
-        except ValueError:
-            return None
-        # Folders from the repository root down to the entry's parent; the
-        # deepest .gitignore with a matching rule decides.
-        chain = [path.parent, *path.parent.parents]
-        chain = [f for f in chain if f == self.root or self.root in f.parents]
-        for folder in chain:  # deepest first
-            entry = self._spec(folder)
-            if entry is None:
-                continue
-            spec, line_of = entry
-            rel = path.relative_to(folder).as_posix() + ("/" if is_dir else "")
-            result = spec.check_file(rel)
+        path = Path(path)
+        return self.check_name(path.parent.resolve(), path.name, is_dir)
+
+    def check_name(self, folder: Path, name: str, is_dir: bool) -> str | None:
+        """Where the entry ``name`` of ``folder`` (resolved) is ignored, or None.
+        The deepest .gitignore with a matching rule decides."""
+        suffix = "/" if is_dir else ""
+        for ignore_folder, spec, line_of, prefix in self._chain(folder):  # (deepest first)
+            result = spec.check_file(prefix + name + suffix)
             if result.include is not None:
                 if not result.include:
                     return None  # re-included by a "!" rule
                 line = line_of[result.index] if result.index is not None and result.index < len(line_of) else None
-                return f"{folder / '.gitignore'}:{line}" if line else str(folder / ".gitignore")
+                return f"{ignore_folder / '.gitignore'}:{line}" if line else str(ignore_folder / ".gitignore")
         return None
+
+    def _chain(self, folder: Path) -> list[tuple[Path, object, list[int], str]]:
+        """The .gitignore files that apply to ``folder``'s entries, deepest
+        first: (their folder, rules, rules' lines, ``folder``'s path from there
+        with a "/"). Worked out once per folder: per entry, its paths and
+        parents took most of a big project's first filter."""
+        chain = self._chains.get(folder)
+        if chain is None:
+            chain = []
+            if folder == self.root or self.root in folder.parents:
+                for above in (folder, *folder.parents):
+                    entry = self._spec(above)
+                    if entry is not None:
+                        relative = folder.relative_to(above).as_posix()
+                        chain.append((above, *entry, "" if relative == "." else relative + "/"))
+                    if above == self.root:
+                        break
+            self._chains[folder] = chain
+        return chain
 
 
 def reveal_in_file_manager(path: str):
@@ -410,7 +423,11 @@ class ProjectTree(QWidget):
         except OSError:
             return
         rules = self._rules_for(folder)
+        real_folder = folder.resolve()
         parent_ignored = item.data(IGNORED_ROLE)  # inside an ignored folder
+
+        def ignored(name: str, is_dir: bool) -> str | None:
+            return parent_ignored or (rules.check_name(real_folder, name, is_dir) if rules else None)
         for entry in entries:
             name = entry.name
             path = Path(entry.path)
@@ -423,13 +440,12 @@ class ProjectTree(QWidget):
                 if name.startswith(".") or name in SKIP_DIRS:
                     why = ("fpm's build output — see the Build outputs tab" if name == "build"
                            else "Hidden folder" if name.startswith(".") else "Generated folder")
-                    self._add_hidden(item, path, "dir", why,
-                                     ignored=parent_ignored or (rules.check(path, True) if rules else None))
+                    self._add_hidden(item, path, "dir", why, ignored=ignored(name, True))
                     continue
                 child = QStandardItem(name)
                 child.setData(str(path), PATH_ROLE)
                 child.setData("dir", KIND_ROLE)
-                self._set_ignored(child, path, True, rules, parent_ignored)
+                self._set_ignored(child, path, ignored(name, True))
                 role = self._roles.get(str(path.resolve()))
                 if role:
                     child.setIcon(self._role_icon(role))
@@ -447,13 +463,12 @@ class ProjectTree(QWidget):
                           "Compiled / generated file"
                           if path.suffix in SKIP_SUFFIXES or path.suffix.lower() in SKIP_SUFFIXES else "")
                 if hidden:
-                    self._add_hidden(item, path, "file", hidden,
-                                     ignored=parent_ignored or (rules.check(path, False) if rules else None))
+                    self._add_hidden(item, path, "file", hidden, ignored=ignored(name, False))
                     continue
                 child = QStandardItem(name)
                 child.setData(str(path), PATH_ROLE)
                 child.setData("file", KIND_ROLE)
-                self._set_ignored(child, path, False, rules, parent_ignored)
+                self._set_ignored(child, path, ignored(name, False))
                 child.setIcon(self._manifest_icon() if name == "fpm.toml" else self._file_icon(path))
                 item.appendRow(child)
                 self._items[str(path)] = child
@@ -470,8 +485,8 @@ class ProjectTree(QWidget):
                 best = rules
         return best
 
-    def _set_ignored(self, item: QStandardItem, path: Path, is_dir: bool, rules, parent_ignored):
-        source = parent_ignored or (rules.check(path, is_dir) if rules else None)
+    def _set_ignored(self, item: QStandardItem, path: Path, source: str | None):
+        """``source``: the .gitignore (and line) that ignores it, if one does."""
         if source:
             item.setData(str(source), IGNORED_ROLE)
             item.setForeground(self._ignored_grey())

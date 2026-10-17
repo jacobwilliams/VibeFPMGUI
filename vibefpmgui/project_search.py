@@ -141,23 +141,26 @@ def iter_files(roots: list[Root], query: Query, cancelled: Callable[[], bool] = 
         for folder, dirs, files in os.walk(top):
             if cancelled():
                 return
-            here = Path(folder)
+            here = Path(folder)  # (resolved: the walk starts at a resolved folder, and doesn't follow links)
             keep = []
             for name in sorted(dirs, key=str.lower):
                 path = here / name
                 if name == ".git" or name in SKIP_DIRS or path in others:
                     continue  # (other packages are searched as themselves)
-                if not query.ignored and (name.startswith(".") or rules.check(path, True)):
+                if not query.ignored and (name.startswith(".") or rules.check_name(here, name, True)):
                     continue
                 keep.append(name)
             dirs[:] = keep
+            prefix = here.relative_to(top).as_posix()
+            prefix = "" if prefix == "." else prefix + "/"
             for name in sorted(files, key=str.lower):
+                suffix = os.path.splitext(name)[1]
+                if suffix in SKIP_SUFFIXES or suffix.lower() in SKIP_SUFFIXES:
+                    continue
+                if not query.ignored and (name.startswith(".") or rules.check_name(here, name, False)):
+                    continue
                 path = here / name
-                if path.suffix in SKIP_SUFFIXES or path.suffix.lower() in SKIP_SUFFIXES:
-                    continue
-                if not query.ignored and (name.startswith(".") or rules.check(path, False)):
-                    continue
-                relative = path.relative_to(top).as_posix()
+                relative = prefix + name
                 if include and not glob_matches(relative, include):
                     continue
                 if exclude and glob_matches(relative, exclude):
@@ -314,6 +317,7 @@ class SearchWorker(QThread):
 
 
 # ------------------------------------------------------------------- panel
+STOPPED = ("stopped",)  # (SearchPanel._ending: stopped, not finished)
 # Saved options: settings key -> SearchPanel attribute.
 OPTIONS = {"case": "case_button", "word": "word_button", "regex": "regex_button",
            "dependencies": "deps_check", "ignored": "ignored_check"}
@@ -350,6 +354,14 @@ class SearchPanel(QWidget):
         self._worker: SearchWorker | None = None
         self._old_workers: set[SearchWorker] = set()
         self._changed: set[Path] = set()
+        # Results not listed yet: added a slice at a time (a batch of a
+        # thousand files at once held the window a tenth of a second).
+        self._incoming: list[FileResult] = []
+        self._ending: tuple | None = None  # (the search's end, shown once the last are listed)
+        self._adding = QTimer(self)
+        self._adding.setSingleShot(True)
+        self._adding.setInterval(0)
+        self._adding.timeout.connect(self._add_some)
 
         self.replace_toggle = QToolButton()
         self.replace_toggle.setCheckable(True)
@@ -565,7 +577,9 @@ class SearchPanel(QWidget):
             self._worker.done.disconnect()
             self._worker = None
             self.stop_button.hide()
-            if self._results:
+            if self._incoming:
+                self._ending = STOPPED  # (those found are still listed, then "stopped")
+            elif self._results:
                 self._show_counts(stopped=True)
             else:
                 self.status.setText("Stopped.")
@@ -580,17 +594,39 @@ class SearchPanel(QWidget):
     def _show_error(self, text: str):
         self.status.setText(f"<span style='color:#e03131'>{text}</span>")
 
+    ADD_SECONDS = 0.015  # listed at a time before the window gets its turn
+
     def _add_results(self, results: list[FileResult]):
-        for result in results:
+        self._incoming += results
+        self._add_some()
+
+    def _add_some(self):
+        started = time.monotonic()
+        while self._incoming:  # (at least one each time: always getting on)
+            result = self._incoming.pop(0)
             self._results[result.path] = result
             self._add_file_item(result)
-        self._show_counts(searching=True)
+            if time.monotonic() - started >= self.ADD_SECONDS:
+                break
+        if self._incoming:
+            self._adding.start()
+            self._show_counts(searching=True)
+        elif self._ending == STOPPED:
+            self._ending = None
+            self._show_counts(stopped=True)
+        elif self._ending is not None:
+            searched, truncated = self._ending
+            self._ending = None
+            self._searched = searched
+            self._show_counts(truncated=truncated)
+        else:
+            self._show_counts(searching=self._worker is not None)
 
     def _finished(self, searched: int, truncated: bool):
         self._worker = None
         self.stop_button.hide()
-        self._searched = searched
-        self._show_counts(truncated=truncated)
+        self._ending = (searched, truncated)
+        self._add_some()
 
     def _show_counts(self, searching=False, truncated=False, stopped=False):
         matches = sum(len(r.matches) for r in self._results.values())
@@ -610,7 +646,7 @@ class SearchPanel(QWidget):
 
     def _update_buttons(self):
         has = bool(self._results)
-        self.replace_all_button.setEnabled(has and self._worker is None)
+        self.replace_all_button.setEnabled(has and self._worker is None and not self._incoming)  # (all listed)
         self.collapse_button.setEnabled(has)
         self.clear_button.setEnabled(has)
 
@@ -629,6 +665,9 @@ class SearchPanel(QWidget):
         self.clear()
 
     def _clear_results(self):
+        self._incoming.clear()
+        self._ending = None
+        self._adding.stop()
         self.collapse_button.setText("Collapse All")
         self.tree.clear_results()
         self._results.clear()

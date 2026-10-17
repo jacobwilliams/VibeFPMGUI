@@ -3,11 +3,8 @@ file to compare, from the git program (``git status --porcelain=v2``, a
 format made for programs; ``git cat-file``). Git must be installed (on the
 PATH); without it the Git panel says so.
 
-git runs as a process of its own, its output going to temporary files: this
-process only waits for it (without Python's lock: the window goes on), and
-only for it (a pipe is only done when every process holding it has closed
-it, and one started meanwhile by another thread, e.g. the Terminal's shell
-or fortls, could hold it too, for as long as it runs).
+git runs as a process of its own (see `vibefpmgui.console.run`): this
+process only waits for it, without Python's lock, so the window goes on.
 
 No Qt: `vibefpmgui.git_panel` shows it, `vibefpmgui.window.git` reads the
 status on a pool thread.
@@ -17,12 +14,10 @@ from __future__ import annotations
 
 import os
 import shutil
-import subprocess
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .console import NO_WINDOW
+from . import console
 from .source_text import decode
 
 # Where a change is: what `git status` calls "Changes to be committed",
@@ -102,23 +97,12 @@ def _git(folder: Path, *args: str, limit: int | None = None) -> tuple[int, bytes
     if git is None:
         raise GitError("git isn't installed")
     env = dict(os.environ, GIT_OPTIONAL_LOCKS="0", GIT_TERMINAL_PROMPT="0")
-    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
-        try:
-            process = subprocess.Popen([git, "-C", str(folder), *args], stdin=subprocess.DEVNULL,
-                                       stdout=out, stderr=err, env=env, **NO_WINDOW)
-        except OSError as error:
-            raise GitError(f"couldn't run git: {error}") from None
-        try:
-            code = process.wait(timeout=TIMEOUT)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-            raise GitError(f"git {args[0]} took over {TIMEOUT} s") from None
-        size = out.seek(0, os.SEEK_END)
-        out.seek(0)
-        err.seek(0)
-        output = None if limit is not None and size > limit else out.read()
-        message = err.read().decode("utf-8", "replace").strip()
+    try:
+        code, output, message = console.run([git, "-C", str(folder), *args], TIMEOUT, limit, env)
+    except OSError as error:
+        raise GitError(f"couldn't run git: {error}") from None
+    except TimeoutError as error:
+        raise GitError(str(error)) from None
     return code, output, message
 
 

@@ -214,8 +214,15 @@ class EditorGutterMixin:
         return [f"Gremlin at column {g.column + 1}: {g.message} ({g.code})" for g in self.gremlins.get(line, [])]
 
     def update_gutter_width(self, *_):
+        # (Called at every repaint of the whole view: recoloring a big file
+        # repaints it once per line. Worked out again only when the number of
+        # digits, the font or the columns may have changed.)
+        key = (len(str(self.blockCount())), self.font().key(), self._coverage_column(), self._gremlin_column())
+        if key == getattr(self, "_gutter_key", None):
+            return
+        self._gutter_key = key
         width = self.gutter_width()
-        if width != self.viewportMargins().left():  # (called on every repaint of the whole view)
+        if width != self.viewportMargins().left():
             self.setViewportMargins(width, 0, 0, 0)
 
     def _update_gutter(self, rect, dy):

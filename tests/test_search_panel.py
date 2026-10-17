@@ -13,7 +13,7 @@ def search_for(qtbot, window, text: str, **checks):
         getattr(panel, name).setChecked(value)
     panel.find_edit.setText(text)
     panel.start_search()
-    qtbot.waitUntil(lambda: panel._worker is None, timeout=10_000)
+    qtbot.waitUntil(lambda: panel._worker is None and not panel._incoming, timeout=10_000)  # (all listed)
     return panel
 
 
@@ -155,3 +155,28 @@ def test_replace_writes_a_mixed_file_s_most_common_line_end(qtbot, window, proje
     path = mixed.resolve()
     panel._replace({path: {(m.line, m.column) for m in panel._results[path].matches}})
     assert mixed.read_bytes() == b"program mixed\n  integer :: total\n  total = 1\nend program mixed\n"
+
+
+def test_many_results_are_listed_a_slice_at_a_time(qtbot, window, project, monkeypatch):
+    """(A batch of a thousand files at once held the window a tenth of a second.)"""
+    from pathlib import Path
+
+    from vibefpmgui.project_search import FileResult, Match, Root, SearchPanel
+
+    panel = search_for(qtbot, window, "count")
+    found = dict(panel._results)
+    root = Root("proj", project, False)
+    many = [FileResult(Path(project / f"src/f{i}.f90"), root, [Match(1, 0, 1, 1, "", "x", "")]) for i in range(300)]
+    added = []
+    real = panel._add_file_item
+    monkeypatch.setattr(panel, "_add_file_item", lambda result: added.append(result) or real(result))
+    monkeypatch.setattr(SearchPanel, "ADD_SECONDS", 0.0)  # (one at a time)
+    panel._worker = object()  # (as if still searching)
+    panel._add_results(many)
+    assert len(added) == 1 and panel._incoming and "searching" in panel.status.text()
+    panel._worker = None
+    panel._finished(500, False)
+    assert not panel.replace_all_button.isEnabled()  # (not until all are listed: it would miss them)
+    qtbot.waitUntil(lambda: not panel._incoming, timeout=10_000)
+    assert len(added) == 300 and len(panel._results) == len(found) + 300
+    assert panel.status.text().startswith(f"{7 + 300} results") and panel.replace_all_button.isEnabled()
