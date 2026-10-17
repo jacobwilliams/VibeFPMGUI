@@ -22,6 +22,7 @@ from qtpy.QtWidgets import QDockWidget, QMainWindow, QStyle, QTabBar, QWidget
 SLACK = 3  # (pixels around a separator still counted as on it)
 SEPARATOR_NAME = "qt_qmainwindow_extended_splitter"  # (Qt's widget over a thin separator)
 GRIP = 7  # a collapsed panel's thickness
+REOPEN = 12  # (pixels past where it collapses that a collapsed panel opens again: not at every wobble)
 
 
 class _NoTitle(QWidget):
@@ -178,7 +179,8 @@ class SnapClosed(QObject):
                 if len(areas) != 1:
                     continue
                 (here,) = areas
-                if central in others or any(area(d) != here for d in others):
+                if central in others or any(area(d) != here for d in others) \
+                        or self._outside(pos, [rects[d] for d in front if area(d) == here], horizontal):
                     # The edge of a side of the window: all of that side
                     # collapses, moved the way it opens (the left one sideways).
                     if (here in (Qt.LeftDockWidgetArea, Qt.RightDockWidgetArea)) != horizontal:
@@ -191,12 +193,24 @@ class SnapClosed(QObject):
                             group.append(member)
                 spans = [along(rects[d], horizontal) for d in docks]
                 size = max(span[1] for span in spans) - min(span[0] for span in spans) + 1
+                # (All its tabs': Qt keeps a stack as big as its biggest tab needs.)
                 minimum = max((d.minimumSizeHint().width() if horizontal else d.minimumSizeHint().height())
                               for d in group)
                 sides.append(Side(docks, group, size, max(minimum, 1), sign, horizontal))
             if sides:
                 return sides
         return []
+
+    @staticmethod
+    def _outside(pos: QPoint, rects: list[QRect], horizontal: bool) -> bool:
+        """Whether ``pos`` is beyond all of a side's panels, along the drag: the
+        side's own edge, whatever's beyond it. (Not found beyond: a row past
+        where the editor ends, which the macOS style's widget over a thin
+        separator reaches; only the panel there was taken, and one of two
+        side by side collapsed, leaving the side as tall, blank.)"""
+        spans = [along(rect, horizontal) for rect in rects]
+        p = pos.x() if horizontal else pos.y()
+        return bool(spans) and (p < min(span[0] for span in spans) or p > max(span[1] for span in spans))
 
     # ------------------------------------------------------------ collapsing
     def _collapse(self, side: Side):
@@ -311,13 +325,21 @@ class SnapClosed(QObject):
         sizes = []
         for side in self._sides:
             size = side.size_at(moved.x() if side.horizontal else moved.y())
-            small, collapsed = size < side.minimum / 2, side in self.collapsed
-            if small and not collapsed:
+            collapsed = side in self.collapsed
+            # (Opening again a little further than it collapsed: the mouse wobbling
+            # where it collapses would swap it back and forth at every move.)
+            if not collapsed and size < side.minimum / 2:
                 side.size = side.press_size  # (to open at, later)
                 self._collapse(side)
-            elif collapsed and not small:
+            elif collapsed and size >= side.minimum / 2 + REOPEN:
                 self._open(side)
-            sizes.append((side, size))
-        # One side sized: the other side of the separator takes the rest.
-        side, size = next(((s, n) for s, n in sizes if s in self.collapsed), sizes[0])
-        self._resize(side, GRIP if side in self.collapsed else max(size, side.minimum))
+            sizes.append((side, GRIP if side in self.collapsed else max(size, side.minimum)))
+        # Both sides of the separator sized (one alone, and Qt shares the change
+        # between both: the separator moved half as far as the mouse), the
+        # collapsed one first: the other takes what's left.
+        sizes.sort(key=lambda pair: pair[0] not in self.collapsed)
+        docks, lengths = [], []
+        for side, size in sizes:
+            docks += side.docks
+            lengths += [max(size, 1)] * len(side.docks)
+        self.window.resizeDocks(docks, lengths, Qt.Horizontal if sizes[0][0].horizontal else Qt.Vertical)

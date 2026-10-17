@@ -397,3 +397,84 @@ def test_collapsing_panels_with_one_already_collapsed(any_style, qtbot, window):
     assert window.docks["build"].widget() is window.build_monitor
     for name, dock in window.docks.items():
         assert isinstance(dock.widget(), Grip) == collapsed(window, name), name
+
+
+@pytest.mark.parametrize("first, edge", [("options", "bottom")])
+def test_a_divider_between_two_panels_follows_the_mouse(any_style, qtbot, window, first, edge):
+    """(Only the panels on one side were resized: Qt shared the change
+    between both sides, and the divider moved half as far as the mouse.)"""
+    ready(qtbot, window)
+    snap = window.snap_closed
+    stack = [window.docks[first], *window.tabifiedDockWidgets(window.docks[first])]
+    dock = next(d for d in stack if not d.visibleRegion().isEmpty())  # (its stack's tab in front)
+    g = dock.geometry()
+    horizontal = edge == "right"
+    # (The separator beside it: where it is depends on the style.)
+    points = ([QPoint(x, g.center().y()) for x in range(g.right(), g.right() + 12)] if horizontal
+              else [QPoint(g.center().x(), y) for y in range(g.bottom(), g.bottom() + 12)])
+    pos = next(p for p in points if snap._on_separator(p)
+               and any(dock in side.docks for side in snap._sides_at(p)) and len(snap._sides_at(p)) == 2)
+    for delta in (30, -30):  # (the panel above at about its smallest: it grows first)
+        before = dock.geometry().right() if horizontal else dock.geometry().bottom()
+        target = pos + (QPoint(delta, 0) if horizontal else QPoint(0, delta))
+        drag(qtbot, window, pos, pos + (target - pos) / 2, target)
+        moved = (dock.geometry().right() if horizontal else dock.geometry().bottom()) - before
+        assert abs(moved - delta) <= 2, (delta, moved)
+        pos = target
+
+
+def test_wobbling_at_the_threshold_doesnt_flicker(qtbot, window):
+    """The mouse a pixel either side of where a panel collapses: it
+    collapsed and opened again at every move (swapping its content for its
+    grip, and its size between the grip's and its smallest)."""
+    from qtpy.QtTest import QTest
+
+    ready(qtbot, window)
+    snap = window.snap_closed
+    flips = []
+    collapse, open_ = snap._collapse, snap._open
+    snap._collapse = lambda side: (flips.append("collapse"), collapse(side))[1]
+    snap._open = lambda side: (flips.append("open"), open_(side))[1]
+    files = window.docks["files"]
+    y, edge = files.geometry().center().y(), files.geometry().right() + 3
+    side = snap._sides_at(QPoint(edge, y))[0]
+    threshold = edge - (side.size - side.minimum // 2)
+    QTest.mousePress(window, Qt.LeftButton, Qt.NoModifier, QPoint(edge, y))
+    for x in [threshold + 20, threshold - 1, threshold + 1, threshold - 1, threshold + 1, threshold - 1]:
+        QTest.mouseMove(window, QPoint(x, y))
+        qtbot.wait(5)
+    QTest.mouseRelease(window, Qt.LeftButton, Qt.NoModifier, QPoint(threshold - 1, y))
+    assert flips == ["collapse"]
+    assert collapsed(window, "files")
+
+
+
+def test_the_bottom_collapses_whole_from_anywhere_on_its_edge(any_style, qtbot, window):
+    """Two panels side by side at the bottom: pressed on the bottom's top
+    edge where nothing above was near enough to be found, only the left one
+    was taken: it collapsed but the bottom couldn't shrink (the right one
+    kept its height), leaving a blank space. Any press on a side's edge
+    takes the whole side."""
+    ready(qtbot, window)
+    terminal = window.docks["terminal"]
+    window.removeDockWidget(terminal)
+    window.addDockWidget(Qt.BottomDockWidgetArea, terminal)
+    window.splitDockWidget(window.docks["output"], terminal, Qt.Horizontal)
+    window.tabifyDockWidget(window.docks["build"], window.docks["output"])
+    terminal.show()
+    qtbot.wait(50)
+    snap = window.snap_closed
+    build = window.docks["build"]
+    front = next(d for d in [build, *window.tabifiedDockWidgets(build)] if not d.visibleRegion().isEmpty())
+    x, top = front.geometry().center().x(), min(front.geometry().top(), terminal.geometry().top())
+    # (Every row near the edge with a side found, the separator or not: with the
+    # macOS style, Qt's widget over the thin separator reaches a row or two past
+    # the editor, where it wasn't found any more.)
+    presses = [QPoint(x, yy) for yy in range(top - 40, top + 1) if snap._sides_at(QPoint(x, yy))]
+    assert presses
+    for press in presses:  # (every one: all the bottom's panels)
+        (side,) = snap._sides_at(press)
+        assert front in side.docks and terminal in side.docks, press.y()
+    presses = [p for p in presses if snap._on_separator(p)]
+    drag(qtbot, window, presses[0], presses[0] + QPoint(0, 50), QPoint(x, window.height() - 5))
+    assert collapsed(window, "build") and collapsed(window, "terminal")
