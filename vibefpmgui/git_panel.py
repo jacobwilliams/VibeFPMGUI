@@ -15,6 +15,7 @@ from qtpy.QtWidgets import (
     QApplication,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QSplitter,
     QToolButton,
     QTreeWidget,
@@ -39,6 +40,7 @@ class GitPanel(QWidget):
 
     refresh_requested = Signal()
     open_requested = Signal(str, int)  # file, line
+    reveal_requested = Signal(str)  # a changed file's "Show in Project Files": its path
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -79,6 +81,9 @@ class GitPanel(QWidget):
         self.files.setColumnCount(2)
         self.files.setUniformRowHeights(True)
         self.files.currentItemChanged.connect(self._show_selected)
+        self.files.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.files.customContextMenuRequested.connect(self._file_menu)
+        self.file_menu: QMenu | None = None  # (kept while it's open)
         self.diff_title = StatusLabel()
         self.diff = DiffView()
         self.diff.open_requested.connect(self._open_line)
@@ -233,6 +238,21 @@ class GitPanel(QWidget):
         compared = f"{old_label} → {new_label}" if old_label else f"new file ({new_label})"
         self.diff_title.setText(f"<b>{change.path}</b> · {compared}")
         self.diff.show_diff(old, new, change.path)
+
+    def _file_menu(self, pos):
+        """A changed file's menu (a right-click on it): Show in Project Files."""
+        item = self.files.itemAt(pos)
+        change = item.data(0, CHANGE_ROLE) if item is not None else None
+        if change is None or self.status is None:
+            return  # (a group's title)
+        path = self.status.root / change.path
+        menu = self.file_menu = QMenu(self)
+        show = menu.addAction("Show in Project Files", lambda: self.reveal_requested.emit(str(path)))
+        if not path.exists():
+            show.setEnabled(False)
+            show.setText("Show in Project Files (deleted)")
+        menu.aboutToHide.connect(menu.deleteLater)
+        menu.popup(self.files.viewport().mapToGlobal(pos))
 
     def _open_line(self, line: int):
         change = self.selected()

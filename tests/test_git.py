@@ -264,3 +264,39 @@ def test_one_read_at_a_time_and_not_on_every_activation(qtbot, window, project, 
     window._inactive_since -= window_git.GitMixin.AWAY_SECONDS  # (a while away)
     window._app_state_changed(Qt.ApplicationActive)
     qtbot.waitUntil(lambda: len(reads) == 1 and not window._git_reading, timeout=5_000)
+
+
+def test_show_a_changed_file_in_project_files(qtbot, window, project):
+    from vibefpmgui.git_panel import CHANGE_ROLE
+
+    git(project, "init", "-q")
+    git(project, "add", "-A")
+    git(project, "commit", "-q", "-m", "first")
+    (project / "src/foo.f90").write_text((project / "src/foo.f90").read_text() + "! changed\n")
+    (project / "app/main.f90").unlink()
+    window.show_panel(window.git_panel)
+    window.refresh_git()
+    panel = window.git_panel
+    qtbot.waitUntil(lambda: panel.status is not None and len(panel.status.changes) == 2, timeout=10_000)
+    items = {}
+    for i in range(panel.files.topLevelItemCount()):
+        group = panel.files.topLevelItem(i)
+        for j in range(group.childCount()):
+            items[group.child(j).data(0, CHANGE_ROLE).path] = group.child(j)
+
+    def menu_for(path: str):
+        rect = panel.files.visualItemRect(items[path])
+        panel._file_menu(rect.center())
+        menu = panel.file_menu
+        menu.close()
+        return {a.text(): a for a in menu.actions()}
+
+    deleted = menu_for("app/main.f90")
+    assert not deleted["Show in Project Files (deleted)"].isEnabled()  # (not on disk to show)
+    changed = menu_for("src/foo.f90")
+    changed["Show in Project Files"].trigger()
+    tree = window.project_tree
+    assert window.panel_in_front(window._content(window.docks["files"]))
+    assert Path(tree._selected_path()).resolve() == (project / "src/foo.f90").resolve()  # (selected there)
+    window._show_in_project_files(str(project.parent / "elsewhere.f90"))  # (outside the project)
+    assert "isn't in Project files" in window.statusBar().currentMessage()

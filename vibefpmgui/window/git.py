@@ -38,12 +38,21 @@ class GitMixin:
         self.git_panel.set_code_font(self._mono_font(editor=True))
         self.git_panel.refresh_requested.connect(self.refresh_git)
         self.git_panel.open_requested.connect(lambda path, line: self.navigate_to(path, line, 0, preview=True))
+        self.git_panel.reveal_requested.connect(self._show_in_project_files)
         self._git_request = 0     # (an answer to an older request is dropped)
         self._git_stale = True    # (read again once the panel is on view)
         self._git_reading = False  # (a read is under way)
         self._git_again = False    # (asked again meanwhile: read again once it's done)
         self._inactive_since: float | None = None
         QApplication.instance().applicationStateChanged.connect(self._app_state_changed)
+
+    def _show_in_project_files(self, path: str):
+        """A changed file's Show in Project Files: Project files in front, the file selected in it."""
+        self.show_panel(self._content(self.docks["files"]))
+        if not self.project_tree.reveal(path):
+            name = Path(path).name
+            self.statusBar().showMessage(f"{name} isn't in Project files (it's outside the project, or filtered "
+                                         "out)", 5000)
 
     def refresh_git(self):
         """Read the repository's status again (or once the panel is on view)."""

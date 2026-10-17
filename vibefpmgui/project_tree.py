@@ -653,16 +653,17 @@ class ProjectTree(QWidget):
         self.view.setVisible(has_rows)
 
     # ---------------------------------------------------------- selection
-    def reveal(self, path: str, expand: bool = True):
-        """Select a file's row (e.g. the file in the current editor tab)."""
+    def reveal(self, path: str, expand: bool = True) -> bool:
+        """Select a file's row (e.g. the file in the current editor tab);
+        False if it isn't in the tree (outside the project, or filtered out)."""
         item = self._items.get(str(path)) or self._items.get(str(Path(path).resolve()))
         if item is None:
             item = self._load_down_to(Path(path))
         if item is None:
-            return
+            return False
         index = self.proxy.mapFromSource(item.index())
         if not index.isValid():
-            return
+            return False
         if expand:
             parent = index.parent()
             while parent.isValid():
@@ -670,6 +671,7 @@ class ProjectTree(QWidget):
                 parent = parent.parent()
         self.view.setCurrentIndex(index)
         self.view.scrollTo(index)
+        return True
 
     def reveal_package(self, directory: Path) -> bool:
         """Select a package's row (the project, or one under Dependencies),
