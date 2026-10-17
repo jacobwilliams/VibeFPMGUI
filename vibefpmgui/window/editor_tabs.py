@@ -46,6 +46,7 @@ class ScrollingTabBar(QTabBar):
     tab's name is in italics (see set_italic)."""
 
     changed = Signal()  # a tab added, removed or renamed (for the tabs on several rows: WrappingTabBar)
+    empty_menu_requested = Signal(QPoint)  # a right-click beside the tabs (on none): where, on the screen
 
     def set_tab_name(self, index: int, name: str, italic: bool = False):
         """A tab's name, in italics or not. Qt has no font per tab: an italic
@@ -111,6 +112,13 @@ class ScrollingTabBar(QTabBar):
                 option.text = name
                 painter.drawControl(QStyle.CE_TabBarTabLabel, option)
 
+    def contextMenuEvent(self, event):
+        if self.tabAt(event.pos()) < 0:
+            self.empty_menu_requested.emit(event.globalPos())
+            event.accept()
+        else:
+            super().contextMenuEvent(event)
+
     def wheelEvent(self, event):
         arrows = [b for b in self.findChildren(QToolButton) if b.isVisible() and b.arrowType() in
                   (Qt.LeftArrow, Qt.RightArrow)]
@@ -162,6 +170,9 @@ class EditorTabsMixin:
         self.tab_rows = WrappingTabBar(self.tabs)
         self.tab_rows.close_requested.connect(self.close_editor)
         self.tabs.tabBar().changed.connect(self.tab_rows.refresh)
+        # Right-click beside the tabs: the Editor Tabs choices (as in the View menu).
+        self.tabs.tabBar().empty_menu_requested.connect(self._tabs_menu)
+        self.tab_rows.empty_menu_requested.connect(self._tabs_menu)
         # (The tab list, with Close All Editor Tabs, at the rows' end: as at the one row's.)
         self.tab_rows_list_button = self._tab_list_button()
         rows = QHBoxLayout()
@@ -201,6 +212,14 @@ class EditorTabsMixin:
         button.setStyleSheet("QToolButton::menu-indicator { image: none; width: 0px; }")
         button.setMenu(self.tab_list)
         return button
+
+    def _tabs_menu(self, where: QPoint):
+        """The menu for a right-click beside the editor's tabs: View → Editor Tabs."""
+        menu = self.tabs_menu = QMenu(self)  # (kept while it's open)
+        for action in self.tab_rows_menu.actions():  # (the same actions: checked alike)
+            menu.addAction(action)
+        menu.aboutToHide.connect(menu.deleteLater)
+        menu.popup(where)
 
     def set_tab_rows(self, wrap: bool, save: bool = True):
         """View → Editor Tabs: one row that scrolls, or several rows."""

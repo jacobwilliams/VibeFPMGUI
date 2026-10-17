@@ -34,6 +34,7 @@ class WrappingTabBar(QWidget):
     """A ``QTabWidget``'s tabs, wrapped onto rows."""
 
     close_requested = Signal(int)  # a tab's close glyph clicked
+    empty_menu_requested = Signal(QPoint)  # a right-click on no tab: where, on the screen
 
     def __init__(self, tabs: QTabWidget, parent=None):
         super().__init__(parent)
@@ -204,6 +205,13 @@ class WrappingTabBar(QWidget):
         index = self.index_at(event.position().toPoint())
         if index >= 0 and not self._on_close(index, event.position().toPoint()):
             self.tabs.tabBarDoubleClicked.emit(index)
+
+    def contextMenuEvent(self, event):
+        if self.index_at(event.pos()) < 0:
+            self.empty_menu_requested.emit(event.globalPos())
+            event.accept()
+        else:
+            super().contextMenuEvent(event)
 
     def leaveEvent(self, event):
         if self._hover is not None:

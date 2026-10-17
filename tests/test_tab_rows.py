@@ -237,3 +237,46 @@ def test_tabs_on_later_rows_have_their_icon_and_close(qtbot):
     assert any(inside.contains(int(x), int(y)) for x, y in magenta)  # (its icon: in it)
     option = rows._option(4)
     assert inside.contains(rows._close_rect(option))  # (its close glyph: in it)
+
+
+def test_right_click_beside_the_tabs(qtbot, window, project):
+    """The Editor Tabs choices (as in the View menu) on a right-click beside the tabs."""
+    from qtpy.QtCore import QPoint
+    from qtpy.QtGui import QContextMenuEvent
+    from qtpy.QtWidgets import QApplication
+
+    shown = []
+
+    def right_click(widget, pos: QPoint, choose: str | None = None):
+        window.tabs_menu = None
+        QApplication.sendEvent(widget, QContextMenuEvent(QContextMenuEvent.Mouse, pos, widget.mapToGlobal(pos)))
+        menu = window.tabs_menu
+        if menu is not None:
+            shown.append([a.text() for a in menu.actions()])
+            if choose:
+                next(a for a in menu.actions() if a.text() == choose).trigger()
+            menu.close()
+
+    write_files(project, {f"src/{name}": "! x\n" for name in NAMES[:3]})
+    for name in NAMES[:3]:
+        open_editor(window, project / "src" / name)
+    tabs, bar = window.tabs, window.tabs.tabBar()
+    choices = ["One Row (Scroll)", "Several Rows (Wrap)"]
+
+    # One row: past its last tab.
+    beside = QPoint(bar.tabRect(tabs.count() - 1).right() + 20, bar.height() // 2)
+    assert bar.rect().contains(beside) and bar.tabAt(beside) < 0
+    right_click(bar, beside)
+    assert shown == [choices]
+    right_click(bar, bar.tabRect(1).center())  # (on a tab: not this menu)
+    right_click(tabs, QPoint(20, bar.geometry().bottom() + 40))  # (the editor below: not either)
+    assert len(shown) == 1
+    right_click(bar, beside, choose="Several Rows (Wrap)")  # (chosen from it: as from the View menu)
+    assert window.tab_rows.isVisible() and window.tab_rows_actions[True].isChecked()
+    # Several rows: past the last tab.
+    rows = window.tab_rows
+    last = rows.tab_rect(tabs.count() - 1)
+    right_click(rows, QPoint(last.right() + 20, last.center().y()))
+    assert shown[-1] == choices and len(shown) == 3
+    right_click(rows, rows.tab_rect(0).center())
+    assert len(shown) == 3
