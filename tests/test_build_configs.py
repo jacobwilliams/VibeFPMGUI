@@ -7,10 +7,13 @@ import json
 
 import pytest
 from conftest import write_files
+from qtpy.QtCore import QPoint, Qt
+from qtpy.QtTest import QTest
 from qtpy.QtWidgets import QInputDialog, QMessageBox
 
 from vibefpmgui import build_configs as bc
 from vibefpmgui.command_palette import collect
+from vibefpmgui.widgets import StayOpenMenu
 from vibefpmgui.window.configs import NEW_CONFIGURATION
 
 
@@ -141,7 +144,7 @@ def test_a_configurations_features_and_profile(make_window, tmp_path, monkeypatc
     window = make_window(root / "fpm.toml")
     window.select_configuration("with mpi")
     assert window.selected_features == ["mpi"]
-    assert not window.feature_actions["mpi"].isEnabled()  # (the Features menu: read-only too)
+    assert not window.feature_actions["mpi"].isEnabled()  # (Features: read-only too)
     assert window.build_arguments(["build"], True) == ["build", "--features", "mpi"]
     window.select_configuration("fast")
     assert window.build_arguments(["build"], True) == ["build", "--profile", "fast"]
@@ -312,3 +315,37 @@ def test_reloading_while_editing_keeps_the_changes(saved):
     saved.compiler_edit.setText("changed")
     saved.reload()
     assert saved.compiler_edit.text() == "changed" and editable(saved) and saved.has_unsaved_configuration()
+
+
+# ----------------------------------------------------------------- features
+def test_features_are_in_build_options_not_the_menu_bar(make_window, tmp_path, qtbot):
+    root = write_files(tmp_path / "feat", {
+        "fpm.toml": 'name = "feat"\n[features]\nmpi.flags = "-DMPI"\nopenmp_and_a_very_long_name.flags = "-x"\n'})
+    window = make_window(root / "fpm.toml")
+    assert "Features" not in {action.text().replace("&", "") for action in window.menuBar().actions()}
+    button = window.features_button
+    assert button.menu() is window.features_menu and button.isEnabled() and button.full_text() == "none"
+    window.feature_actions["mpi"].trigger()
+    window.feature_actions["openmp_and_a_very_long_name"].trigger()
+    assert button.full_text() == "mpi, openmp_and_a_very_long_name"
+    button.resize(90, button.height())
+    assert button.text().endswith("…") and button.minimumSizeHint().width() <= 60  # (the panel stays narrow)
+
+
+def test_no_features_declared(window):
+    assert not window.features_button.isEnabled()
+    assert window.features_button.full_text() == "none defined in fpm.toml"
+
+
+def test_the_features_menu_stays_open_to_tick_several(qtbot):
+    menu = StayOpenMenu()
+    qtbot.addWidget(menu)
+    first = menu.addAction("first")
+    first.setCheckable(True)
+    plain = menu.addAction("plain")
+    menu.popup(QPoint(0, 0))
+    qtbot.waitExposed(menu)
+    QTest.mouseClick(menu, Qt.LeftButton, pos=menu.actionGeometry(first).center())
+    assert first.isChecked() and menu.isVisible()
+    QTest.mouseClick(menu, Qt.LeftButton, pos=menu.actionGeometry(plain).center())
+    assert not menu.isVisible()

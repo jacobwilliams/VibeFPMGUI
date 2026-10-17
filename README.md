@@ -70,9 +70,9 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   New Window…* (⇧⌘O) opens another project in its own window (a separate
   process, so each has its own builds and language server); such windows
   don't change which project is reopened at startup.
-* *Features* menu: tick any of the features declared in the project's
-  `[features]` table to build/run/test with `--features …` (remembered per
-  project). The *Profile* list also offers the project's own `[profiles]`;
+* *Build options → Features*: tick any of the features declared in the
+  project's `[features]` table (the menu stays open to tick several) to
+  build/run/test with `--features …` (remembered per project). The *Profile* list also offers the project's own `[profiles]`;
   since fpm can't combine the two, Profile is disabled while features are on.
 * Build status grid next to the output: every file/target fpm compiles is
   listed live (works with parallel/OpenMP builds) with its package, status

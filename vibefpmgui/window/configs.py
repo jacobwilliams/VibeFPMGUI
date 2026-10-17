@@ -188,7 +188,7 @@ class ConfigsMixin:
         return next((c for c in self.configurations if c.name == name), None)
 
     def _saved_features(self) -> list[str]:
-        """New configuration's features: those last chosen in the Features menu."""
+        """New configuration's features: those last chosen (Build options → Features)."""
         if self.manifest_path is None:
             return []
         saved = self.settings.value(self._features_key(), [], type=list) or []
