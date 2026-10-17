@@ -25,6 +25,29 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   Stop ⌘.; Ctrl on Linux/Windows), with live output and the usual options
   (profile, compiler, flags, target, extra arguments, program arguments).
   Hover an option to see the fpm flag it becomes.
+* Build configurations: named sets of Build options, saved in `vibefpm.json`
+  beside the project's `fpm.toml` (so they can be committed with it). The
+  list at the top of *Build options* chooses one: its options are shown
+  read-only (the fpm executable, a path on this computer, isn't part of
+  one). *New configuration* is the options as you set them, editable;
+  *Save…* adds what's shown to the file under a name, as a configuration
+  from then on. *Edit* makes a saved configuration's options editable;
+  *Save* puts the changes back in the file under its name, and *Cancel*
+  drops them. Leaving it with changes not saved (choosing another, opening
+  another project or configuration file, quitting) asks to save them first.
+  *⋯* saves under another name (*Save As…*), edits a copy as New
+  configuration, deletes one, or shows the file in the editor. *File → Open Build Configuration…* opens
+  a configuration file (any `.json` of them beside an `fpm.toml`) and its
+  project; *Recent Build Configurations* lists the last ones. The
+  configuration chosen is remembered for each project; the file is read
+  again when the project reloads.
+
+  ```json
+  {"vibefpm": 1, "configurations": [
+    {"name": "release (ifx)", "profile": "release", "features": [], "compiler": "ifx",
+     "flags": "-O3", "target": "", "extra_args": "", "program_args": "",
+     "parallel_tests": 4, "coverage": false, "verbose": false}]}
+  ```
   Very long output is cut short so the app stays responsive (an lfortran
   crash, for one, can print 100+ MB): after about 2 MB the Output panel
   stops, shows the last 200 lines when the command ends, and *Full Output…*

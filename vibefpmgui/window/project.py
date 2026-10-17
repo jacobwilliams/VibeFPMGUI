@@ -73,8 +73,20 @@ class ProjectMixin:
         self.recent_menu = file_menu.addMenu("Recent Manifests")
         self.recent_menu.aboutToShow.connect(self._fill_recent_menu)
         self.recent_menu.setToolTipsVisible(True)
+        open_config_action = QAction("Open Build Configuration…", self)
+        open_config_action.setStatusTip("Open a project's build configurations (a .json file beside its "
+                                        "fpm.toml), and the project")
+        open_config_action.triggered.connect(lambda: self.browse_configuration())
+        file_menu.addAction(open_config_action)
+        self.recent_configs_menu = file_menu.addMenu("Recent Build Configurations")
+        self.recent_configs_menu.aboutToShow.connect(self._fill_recent_configs_menu)
+        self.recent_configs_menu.setToolTipsVisible(True)
         file_menu.addSeparator()
-        file_menu.addActions([self.save_action, self.save_as_action])
+        self.save_config_action = QAction("Save Build Configuration…", self)
+        self.save_config_action.setStatusTip("Save the Build options as a configuration in the project's "
+                                             "vibefpm.json")
+        self.save_config_action.triggered.connect(lambda: self.save_configuration())
+        file_menu.addActions([self.save_action, self.save_as_action, self.save_config_action])
         file_menu.addSeparator()
         file_menu.addActions([reload_action, self.close_tab_action])
         file_menu.addSeparator()
@@ -164,8 +176,10 @@ class ProjectMixin:
         path = Path(filename).resolve()
         new_project = path != self.manifest_path
         if new_project:
-            # Both questions before anything changes: No or Cancel keeps the
+            # Every question before anything changes: No or Cancel keeps the
             # current project as it is, its files still open.
+            if not self.maybe_save_configuration():
+                return
             if self.busy():
                 answer = QMessageBox.question(
                     self, "fpm is running",
@@ -360,6 +374,7 @@ class ProjectMixin:
         self.refresh_complexity()
         self._set_project_enabled(True)
         self._load_features_and_profiles()
+        self._load_configurations()  # (after: a configuration's profile may be one of fpm.toml's)
         missing = sum(1 for p in self.graph.packages.values() if p.kind == m.MISSING)
         dev_only = sum(1 for p in self.graph.packages.values() if p.kind == m.DEV_ONLY)
         msg = f"{len(self.graph.packages) - 1 - dev_only} dependencies"

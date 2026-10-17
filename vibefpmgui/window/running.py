@@ -68,6 +68,7 @@ class RunningMixin:
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         self.profile_combo = QComboBox()
         self.profile_combo.addItems(BUILTIN_PROFILES)
+        self._build_config_row(form)  # (see vibefpmgui.window.configs)
         form.addRow("Profile:", self.profile_combo)
         self.features_label = QLabel()
         self.features_label.setWordWrap(True)
@@ -135,6 +136,7 @@ class RunningMixin:
             label = form.labelForField(widget) or form.labelForField(fpm_row)
             if label is not None and widget is not self.verbose_check:
                 label.setToolTip(tip)
+        self._watch_option_fields()
 
         return options
 
@@ -306,8 +308,9 @@ class RunningMixin:
             self.profile_combo.setCurrentText(current)
         self.profile_combo.blockSignals(False)
 
-        saved = self.settings.value(self._features_key(), [], type=list) or []
-        self.selected_features = [f for f in saved if f in self.project_features]
+        if not self.config_shown():  # (a configuration's own features stay; see vibefpmgui.window.configs)
+            saved = self.settings.value(self._features_key(), [], type=list) or []
+            self.selected_features = [f for f in saved if f in self.project_features]
         self._rebuild_features_menu()
 
     def _features_key(self) -> str:
@@ -355,18 +358,21 @@ class RunningMixin:
         self._update_features_ui()
 
     def _save_features(self):
-        if self.manifest_path:
+        """New configuration's features (not a saved configuration's, being edited)."""
+        if self.manifest_path and not self.config_shown():
             self.settings.setValue(self._features_key(), self.selected_features)
 
     def _update_features_ui(self):
         """Show the selection, and disable Profile while features are on."""
+        locked = self.options_locked()  # (a saved configuration's: read-only)
         for name, action in getattr(self, "feature_actions", {}).items():
             if action.isChecked() != (name in self.selected_features):
                 action.blockSignals(True)
                 action.setChecked(name in self.selected_features)
                 action.blockSignals(False)
+            action.setEnabled(not locked)
         if getattr(self, "clear_features_action", None) is not None:
-            self.clear_features_action.setEnabled(bool(self.selected_features))
+            self.clear_features_action.setEnabled(bool(self.selected_features) and not locked)
         if self.selected_features:
             self.features_label.setText(", ".join(self.selected_features))
         elif self.project_features:
@@ -374,11 +380,12 @@ class RunningMixin:
         else:
             self.features_label.setText("<span style='color:gray'>none defined</span>")
         using = bool(self.selected_features)
-        self.profile_combo.setEnabled(not using)
+        self.profile_combo.setEnabled(not using and not locked)
         self.profile_combo.setToolTip(
             "<b><code>--profile PROF</code></b><br>"
             + ("Disabled while features are selected: fpm can't combine --profile and --features."
                if using else "Build profile: debug, release, or a feature profile from fpm.toml."))
+        self._options_changed()  # (the features are options too)
 
     def _build_description(self) -> str:
         compiler, _source = self.effective_compiler()

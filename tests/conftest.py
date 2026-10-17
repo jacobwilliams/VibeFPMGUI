@@ -87,6 +87,7 @@ def conflict_project(tmp_path) -> Path:
 
 def close_window(window):
     """Close without "Save changes?" questions."""
+    window._editing = ""  # (a build configuration's unsaved changes: dropped)
     for editor in window.editors():
         editor.editor.document().setModified(False)
         editor._disk_newline = editor.newline  # (converted line endings are unsaved too)

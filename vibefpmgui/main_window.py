@@ -28,6 +28,7 @@ from .window.ai import AIMixin
 from .window.ai_chat import AIChatMixin
 from .window.build_outputs import BuildOutputsMixin
 from .window.complexity import ComplexityMixin
+from .window.configs import ConfigsMixin
 from .window.coverage import CoverageMixin
 from .window.editing import EditingMixin
 from .window.editor_tabs import EditorTabsMixin
@@ -45,7 +46,7 @@ from .window.view import ViewMixin
 
 class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
                  EditorTabsMixin, EditingMixin, LanguageMixin, SearchMixin, GitMixin,
-                 RunningMixin, BuildOutputsMixin, OutputMixin, TestingMixin, CoverageMixin, ComplexityMixin,
+                 RunningMixin, ConfigsMixin, BuildOutputsMixin, OutputMixin, TestingMixin, CoverageMixin, ComplexityMixin,
                  AIMixin, AIChatMixin,
                  QMainWindow):
     """The window. Each part of it is a mixin in `vibefpmgui.window`; this
@@ -187,6 +188,9 @@ class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
         if not clearing:
             self._save_session()
         # Every question first: answering Cancel or No leaves everything running.
+        if not self.maybe_save_configuration():
+            event.ignore()
+            return
         for editor in self.editors():
             self.tabs.setCurrentWidget(editor)
             if not editor.maybe_save():
@@ -215,14 +219,15 @@ class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
         s.setValue("geometry", self.saveGeometry())
         self.snap_closed.expand_all()  # (collapsed panels are saved open: nothing comes back hidden)
         s.setValue("panels", self.saveState(self.LAYOUT_VERSION))
-        s.setValue("profile", self.profile_combo.currentText())
-        s.setValue("compiler", self.compiler_edit.text())
-        s.setValue("flags", self.flag_edit.text())
-        s.setValue("extra", self.extra_edit.text())
+        free = self.free_options()  # (New configuration's, not a saved one's shown)
+        s.setValue("profile", free.profile)
+        s.setValue("compiler", free.compiler)
+        s.setValue("flags", free.flags)
+        s.setValue("extra", free.extra_args)
         s.setValue("fpm", self.fpm_edit.text())
-        s.setValue("verbose", self.verbose_check.isChecked())
-        s.setValue("coverage", self.coverage_check.isChecked())
-        s.setValue("test_jobs", self.test_jobs_spin.value())
+        s.setValue("verbose", free.verbose)
+        s.setValue("coverage", free.coverage)
+        s.setValue("test_jobs", free.parallel_tests)
         super().closeEvent(event)
 
 
