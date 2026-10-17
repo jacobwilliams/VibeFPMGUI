@@ -30,12 +30,12 @@ def test_options_go_to_the_project_the_rest_to_the_app(layered, tmp_path):
     layered.setValue("word_wrap", False)
     layered.use({}, tmp_path)
     assert layered.value("word_wrap", True, type=bool) is False  # (not in its options yet: the app's)
-    for key, value in (("word_wrap", True), ("font_delta", 3), ("features", ["mpi"]), ("compiler", "ifx"),
-                       ("problems/fortitude", False), ("search/include", "*.f90")):
+    for key, value in (("word_wrap", True), ("font_delta", 3), ("problems/fortitude", False),
+                       ("search/include", "*.f90")):
         layered.setValue(key, value)
         assert layered.options[key] == value
     assert layered.app.value("word_wrap", type=bool) is False  # (the app's unchanged)
-    assert layered.value("font_delta", 0, type=int) == 3 and layered.value("features", [], type=list) == ["mpi"]
+    assert layered.value("font_delta", 0, type=int) == 3
     # Not options: the app's, for this computer.
     for key in ("geometry", "recent_manifests", "last_manifest", "spelling_words", "ai_model", "fpm",
                 "palette_recent", "build_config_file/abc"):
@@ -68,13 +68,34 @@ def test_a_value_of_the_wrong_type_gets_the_default(layered, tmp_path):
 def test_the_options_written_have_them_all(layered, tmp_path):
     layered.app.setValue("minimap", "false")  # (as an .ini file gives it back)
     layered.app.setValue("indent_width", "2")
-    layered.app.setValue("features/abc", ["omp"])
+    layered.app.setValue("session/abc", '{"files": []}')
     layered.app.setValue("problems/lint", "true")
     layered.app.setValue("geometry", "not an option")
+    layered.app.setValue("compiler", "a build option: not with the options")
     layered.use({"word_wrap": True}, tmp_path)
-    options = layered.complete_options({"features": "features/abc"})
-    assert options == {"word_wrap": True, "minimap": False, "indent_width": 2, "features": ["omp"],
+    options = layered.complete_options({"session": "session/abc"})
+    assert options == {"word_wrap": True, "minimap": False, "indent_width": 2, "session": {"files": []},
                        "problems/lint": True}
+
+
+def test_new_configurations_build_options_go_beside_the_configurations(layered, tmp_path):
+    layered.app.setValue("compiler", "gfortran")
+    layered.use({}, tmp_path, {"flags": "-O2"})
+    assert layered.value("compiler", "") == "gfortran"  # (not in the file yet: the app's)
+    assert layered.value("flags", "") == "-O2"
+    for key, value in (("compiler", "ifx"), ("extra", "--x"), ("test_jobs", 4), ("features", ["mpi"]),
+                       ("profile", "(default)"), ("target", "t*"), ("program_args", "-v")):
+        layered.setValue(key, value)
+        assert key not in layered.options
+    assert layered.new_configuration == {"flags": "-O2", "compiler": "ifx", "extra_args": "--x",
+                                         "parallel_tests": 4, "features": ["mpi"], "profile": "",
+                                         "target": "t*", "program_args": "-v"}
+    assert layered.value("profile", "") == "(default)" and layered.value("test_jobs", 1, type=int) == 4
+    assert layered.app.value("compiler") == "gfortran"  # (the app's unchanged)
+    # A file from before: its options' Build options move there.
+    layered.use({"compiler": "old", "word_wrap": True, "features": ["omp"]}, tmp_path, {})
+    assert layered.options == {"word_wrap": True}
+    assert layered.new_configuration == {"compiler": "old", "features": ["omp"]}
 
 
 # ----------------------------------------------------------------- the file
@@ -114,7 +135,12 @@ def test_closing_writes_the_options_in_the_file(make_window, configured):
     assert options["word_wrap"] is True
     assert options["session"]["files"][0]["path"] == "src/foo.f90"  # (relative: the file can be shared)
     assert options["session"]["current"] == "src/foo.f90"
-    assert options["panels"] and "tab_rows_wrap" in options and "compiler" in options
+    assert options["panels"] and "tab_rows_wrap" in options
+    for build_option in ("compiler", "flags", "profile", "test_jobs", "features", "extra"):
+        assert build_option not in options  # (beside the configurations: see below)
+    new = bc.load_new_configuration(configured / bc.FILE_NAME)
+    assert {"compiler", "flags", "profile", "parallel_tests", "features", "extra_args", "target",
+            "program_args", "coverage", "verbose"} <= set(new) and "name" not in new
     assert all(f"problems/{source}" in options for source in window.problems_panel.buttons)
     for kept_out in ("geometry", "recent_manifests", "fpm", "spelling_words", "ai_model"):
         assert kept_out not in options
@@ -124,12 +150,12 @@ def test_closing_writes_the_options_in_the_file(make_window, configured):
 
 def test_opening_uses_the_files_options(make_window, configured):
     bc.save_options(configured / bc.FILE_NAME, {
-        "word_wrap": True, "minimap": False, "compiler": "nvfortran", "tab_rows_wrap": True,
+        "word_wrap": True, "minimap": False, "tab_rows_wrap": True,
         "session": {"files": [{"path": "src/foo.f90", "line": 2, "column": 0, "scroll": 0}],
-                    "current": "src/foo.f90"}})
+                    "current": "src/foo.f90"}}, {"compiler": "nvfortran", "target": "check*"})
     window = make_window(configured / "fpm.toml")
     assert window.word_wrap_action.isChecked() and not window.minimap_action.isChecked()
-    assert window.compiler_edit.text() == "nvfortran"
+    assert window.compiler_edit.text() == "nvfortran" and window.target_edit.text() == "check*"
     assert window.tab_rows_actions[True].isChecked()
     editor = window.current_editor()
     assert editor is not None and editor.path == (configured / "src/foo.f90").resolve()
@@ -175,6 +201,17 @@ def test_options_changed_in_the_editor_are_applied(make_window, configured):
     editor.editor.setPlainText(json.dumps(data, indent=2))
     editor.save()
     assert window.word_wrap_action.isChecked()
+
+
+def test_a_file_from_before_has_its_build_options_moved(make_window, configured):
+    bc.save_options(configured / bc.FILE_NAME, {"word_wrap": True, "compiler": "ifx", "features": []})
+    window = make_window(configured / "fpm.toml")
+    assert window.compiler_edit.text() == "ifx" and window.word_wrap_action.isChecked()
+    window.close()
+    assert "compiler" not in file_options(configured)
+    assert bc.load_new_configuration(configured / bc.FILE_NAME)["compiler"] == "ifx"
+    data = json.loads((configured / bc.FILE_NAME).read_text())
+    assert list(data) == ["configurations", "new_configuration", "options"]  # (in the order it's read)
 
 
 def test_nothing_written_when_nothing_changed(make_window, configured):

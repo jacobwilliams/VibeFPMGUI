@@ -43,10 +43,19 @@ OPTIONS: dict[str, object] = {
     "complexity_tests": bool, "complexity_dependencies": bool, "coverage_tests": bool,
     "search/case": bool, "search/word": bool, "search/regex": bool, "search/dependencies": bool,
     "search/ignored": bool, "search/include": str, "search/exclude": str,
-    # Build options (New configuration's; not the fpm executable), features, the configuration chosen
-    "profile": str, "compiler": str, "flags": str, "extra": str, "verbose": bool, "coverage": bool,
-    "test_jobs": int, "features": list, "build_configuration": str,
+    # The configuration chosen (New configuration's Build options: see NEW_CONFIGURATION)
+    "build_configuration": str,
 }
+# New configuration's Build options (not the fpm executable) and features, by
+# their settings key: in the file, not with the options but beside the saved
+# configurations, as one ("new_configuration", their fields without a name).
+NEW_CONFIGURATION: dict[str, tuple[str, object]] = {
+    "profile": ("profile", str), "compiler": ("compiler", str), "flags": ("flags", str),
+    "extra": ("extra_args", str), "target": ("target", str), "program_args": ("program_args", str),
+    "verbose": ("verbose", bool), "coverage": ("coverage", bool), "test_jobs": ("parallel_tests", int),
+    "features": ("features", list),
+}
+DEFAULT_PROFILE = "(default)"  # (as the Profile list shows it; "" in the file)
 PREFIXES: dict[str, object] = {"problems/": bool}  # (one key per source of problems)
 # Options the app keeps per project (its settings key: "<name>/<hash of the project>").
 PER_PROJECT = ("session", "features", "build_configuration")
@@ -134,14 +143,27 @@ class LayeredSettings:
     def __init__(self, app):
         self.app = app
         self.options: dict | None = None
+        self.new_configuration: dict = {}  # (the file's "new_configuration", while options are used)
         self.root: Path | None = None  # the project's folder (the session's paths are relative to it)
 
-    def use(self, options: dict | None, root: Path | None = None):
-        """Use a project's options from now on (None: the app's settings only)."""
+    def use(self, options: dict | None, root: Path | None = None, new_configuration: dict | None = None):
+        """Use a project's options (and New configuration's Build options)
+        from now on (None: the app's settings only). Build options a file's
+        options had (before they went beside the configurations) move there."""
         self.options = None if options is None else dict(options)
+        self.new_configuration = dict(new_configuration or {})
         self.root = root
+        for key, (field, _kind) in NEW_CONFIGURATION.items():
+            if self.options is not None and key in self.options:
+                self.new_configuration.setdefault(field, self.options.pop(key))
 
     def value(self, key: str, default=None, type=None):
+        if self.options is not None and key in NEW_CONFIGURATION:
+            field, kind = NEW_CONFIGURATION[key]
+            if field in self.new_configuration:
+                fallback = default if default is not None else self._default(kind)
+                value = from_file(self.new_configuration[field], kind, fallback)
+                return DEFAULT_PROFILE if key == "profile" and not value else value
         kind = kind_of(key)
         if self.options is not None and kind is not None and key in self.options:
             value = self.options[key]
@@ -156,6 +178,11 @@ class LayeredSettings:
         return {bool: False, int: 0, float: 0.0, list: [], str: ""}.get(kind)
 
     def setValue(self, key: str, value):
+        if self.options is not None and key in NEW_CONFIGURATION:
+            field, kind = NEW_CONFIGURATION[key]
+            value = to_file(value, kind)
+            self.new_configuration[field] = "" if key == "profile" and value == DEFAULT_PROFILE else value
+            return
         kind = kind_of(key)
         if self.options is not None and kind is not None:
             value = to_file(value, kind)

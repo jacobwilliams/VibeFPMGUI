@@ -19,7 +19,9 @@ this computer, kept in the app's settings). An option left out of a
 configuration has its default; unknown keys are kept as they are.
 
 The file's "options" (one set, for every configuration in it) are the GUI's
-for the project: see `vibefpmgui.project_options`.
+for the project: see `vibefpmgui.project_options`. New configuration's Build
+options (those not saved as a configuration) aren't among them, but beside
+the configurations, as one without a name: "new_configuration".
 """
 
 from __future__ import annotations
@@ -182,10 +184,27 @@ def load_options(path: Path) -> dict | None:
     return options
 
 
-def save_options(path: Path, options: dict):
-    """Put ``options`` in the file (which must exist and be readable), its
-    configurations and anything else in it kept."""
+def load_new_configuration(path: Path) -> dict:
+    """The file's "new_configuration": New configuration's Build options
+    (what isn't saved as a configuration; a configuration's fields, without
+    a name). {} if it has none."""
+    if not Path(path).exists():
+        return {}
+    new = _read(path).get("new_configuration", {})
+    if not isinstance(new, dict):
+        raise ConfigError(f"{Path(path).name}: \"new_configuration\" isn't an object.")
+    return new
+
+
+def save_options(path: Path, options: dict, new_configuration: dict | None = None):
+    """Put ``options`` (and New configuration's Build options) in the file
+    (which must exist and be readable), its configurations and anything else
+    in it kept."""
     load(path)  # (every configuration checked first: a file that can't be read isn't written over)
     data = _read(path)
+    if new_configuration is not None:
+        # (Beside the configurations, before the options: the order it's read in.)
+        data = {k: v for k, v in data.items() if k not in ("new_configuration", "options")}
+        data["new_configuration"] = new_configuration
     data["options"] = options
     _write(path, data)

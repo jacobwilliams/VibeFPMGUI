@@ -47,8 +47,10 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   size, word wrap, linting…), the editor's tabs (the files open, the one in
   front, where each is scrolled to; one row or several), the panels' layout
   and their own choices (Search, Problems, Complexity, Coverage, the graph's
-  layout, theme and edges), New configuration's Build options and features,
-  and the configuration chosen. While a project has a configuration file,
+  layout, theme and edges), and the configuration chosen. New
+  configuration's Build options and features (those not saved as a
+  configuration) aren't among the options but beside the configurations, as
+  one without a name: `new_configuration`. While a project has a configuration file,
   these are read from it (the app's own settings for any it doesn't have
   yet) and written back when the window closes or another project is opened
   (only if they changed); open files inside the project are written relative
@@ -64,6 +66,7 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
     {"name": "release (ifx)", "profile": "release", "features": [], "compiler": "ifx",
      "flags": "-O3", "target": "", "extra_args": "", "program_args": "",
      "parallel_tests": 4, "coverage": false, "verbose": false}],
+   "new_configuration": {"profile": "", "features": [], "compiler": "", "flags": "-g", "…": "…"},
    "options": {"word_wrap": true, "font_delta": 1, "app_theme": "system", "…": "…",
      "session": {"files": [{"path": "src/main.f90", "line": 12, "column": 0, "scroll": 0}],
                  "current": "src/main.f90"}}}

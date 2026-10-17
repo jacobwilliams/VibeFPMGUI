@@ -55,16 +55,17 @@ class ProjectOptionsMixin:
     def _use_project_options(self, manifest: Path | None):
         """Read and use a project's options (none: the app's settings)."""
         path = self._options_file_for(manifest) if manifest is not None else None
-        options = None
+        options, new = None, {}
         if path is not None:
             try:
-                options = bc.load_options(path)
+                options, new = bc.load_options(path), bc.load_new_configuration(path)
             except bc.ConfigError as exc:  # (its options aren't used, nor written over)
-                self._options_problem = str(exc)
-        self.settings.use(options, manifest.parent if options is not None else None)
+                options, self._options_problem = None, str(exc)
+        self.settings.use(options, manifest.parent if options is not None else None, new)
         self._options_project = manifest
         self._options_file = path if options is not None else None
-        self._options_written = dict(options) if options is not None else None
+        # (As read: Build options moved out of the options are written again, in their place.)
+        self._options_written = (options, new) if options is not None else None
 
     def _options_file_made(self):
         """The project's configuration file was just made: its options go there from now on."""
@@ -117,21 +118,25 @@ class ProjectOptionsMixin:
         s.setValue("compiler", free.compiler)
         s.setValue("flags", free.flags)
         s.setValue("extra", free.extra_args)
+        s.setValue("target", free.target)
+        s.setValue("program_args", free.program_args)
         s.setValue("verbose", free.verbose)
         s.setValue("coverage", free.coverage)
         s.setValue("test_jobs", free.parallel_tests)
+        if self.manifest_path is not None:
+            s.setValue(self._project_key("features"), free.features)
 
     def _write_project_options(self):
         """Write the project's options to its file, if they changed."""
         if self._options_file is None or self.settings.options is None or self._options_project is None:
             return
         app_keys = {name: project_key(self._options_project, name) for name in po.PER_PROJECT}
-        options = self.settings.complete_options(app_keys)
-        if options == self._options_written:
+        written = (self.settings.complete_options(app_keys), dict(self.settings.new_configuration))
+        if written == self._options_written:
             return
         try:
-            bc.save_options(self._options_file, options)
-            self._options_written = options
+            bc.save_options(self._options_file, *written)
+            self._options_written = written
         except (OSError, bc.ConfigError) as exc:
             self.statusBar().showMessage(f"Couldn't save the options in {self._options_file.name}: {exc}", 8000)
 
@@ -154,13 +159,13 @@ class ProjectOptionsMixin:
         if self._options_file is None or self.manifest_path is None:
             return
         try:
-            options = bc.load_options(self._options_file)
+            options, new = bc.load_options(self._options_file), bc.load_new_configuration(self._options_file)
         except bc.ConfigError:
             return  # (the list says why: see reload_configurations)
-        if options is None or options == self._options_written:
+        if options is None or (options, new) == self._options_written:
             return
-        self.settings.use(options, self.manifest_path.parent)
-        self._options_written = dict(options)
+        self.settings.use(options, self.manifest_path.parent, new)
+        self._options_written = (options, new)
         self._apply_options()
 
     # ------------------------------------------------------------ applying
@@ -175,6 +180,8 @@ class ProjectOptionsMixin:
         self.verbose_check.setChecked(s.value("verbose", False, type=bool))
         self.coverage_check.setChecked(s.value("coverage", False, type=bool))
         self.test_jobs_spin.setValue(s.value("test_jobs", 1, type=int))
+        self.target_edit.setText(s.value("target", "") or "")
+        self.runner_args_edit.setText(s.value("program_args", "") or "")
 
     def _apply_options(self):
         """Every option, from the settings, to the window (another project's:
