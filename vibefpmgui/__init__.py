@@ -187,5 +187,5 @@ Fortran file icon is adapted from [vscode-icons](https://github.com/vscode-icons
 (MIT License).
 """
 
-__version__ = "0.0.5"
+__version__ = "0.0.6"
 __docformat__ = "google"  # docstrings: Markdown with Google-style sections (for pdoc)
