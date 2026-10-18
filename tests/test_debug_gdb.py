@@ -147,8 +147,10 @@ def test_gdb_debugs_a_test_and_an_example(make_window, tmp_path, qtbot, monkeypa
     window.start_debugging(kind)
     try:
         qtbot.waitUntil(lambda: window.debug_session.state == STOPPED, timeout=180_000)
-        editor = window.current_editor()
-        assert editor.path == (root / path).resolve() and editor.editor.execution_line == line
+        # (Where it stopped comes just after: the call stack is asked for once it has.)
+        qtbot.waitUntil(lambda: window.current_editor() is not None
+                        and window.current_editor().editor.execution_line == line, timeout=20_000)
+        assert window.current_editor().path == (root / path).resolve()
         panel = window.debug_panel
         qtbot.waitUntil(lambda: bool(panel.variable_rows()), timeout=20_000)
         if kind == "test":  # (b's elements)

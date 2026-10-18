@@ -50,6 +50,7 @@ class DebuggingMixin:
         """The Debug menu, its actions and the Debug panel's widget."""
         self.debug_session = DebugSession(self)
         self.breakpoints: dict[str, list[int]] = {}  # file (absolute) → lines, the closed files' too
+        self.disabled_breakpoints: dict[str, list[int]] = {}  # file → those of its lines disabled (kept, hollow)
         self._breakpoint_problems: dict[str, dict[int, str]] = {}  # file → {line: why it wasn't placed}
         self._debug_candidates: list[tuple[str, list[str]]] = []  # (name, command line) fpm said it would run
         self._debug_adapter = None  # the debugger the session being started uses
@@ -81,7 +82,14 @@ class DebuggingMixin:
         self.step_out_action = action("Step Out", "Shift+F11", self.debug_session.step_out,
                                       "On to where the current procedure returns")
         self.toggle_breakpoint_action = action("Toggle Breakpoint", "F9", self.toggle_breakpoint,
-                                               "Set or clear a breakpoint on the cursor's line")
+                                               "Set or remove a breakpoint on the cursor's line")
+        self.enable_breakpoint_action = action("Enable/Disable Breakpoint", "Ctrl+F9", self.toggle_breakpoint_enabled,
+                                               "Disable the breakpoint on the cursor's line (kept, drawn hollow: "
+                                               "the debugger doesn't stop there), or enable it again")
+        self.disable_all_breakpoints_action = action("Disable All Breakpoints", "",
+                                                     lambda: self.set_all_breakpoints_enabled(),
+                                                     "Every breakpoint, in every file, disabled (kept, hollow); "
+                                                     "Enable All Breakpoints, when none is enabled")
         self.clear_breakpoints_action = action("Remove All Breakpoints", "", self.remove_all_breakpoints,
                                                "Every breakpoint, in every file")
         menu = self.menuBar().addMenu("&Debug")
@@ -91,7 +99,8 @@ class DebuggingMixin:
         menu.addSeparator()
         menu.addActions([self.step_over_action, self.step_in_action, self.step_out_action])
         menu.addSeparator()
-        menu.addActions([self.toggle_breakpoint_action, self.clear_breakpoints_action])
+        menu.addActions([self.toggle_breakpoint_action, self.enable_breakpoint_action,
+                         self.disable_all_breakpoints_action, self.clear_breakpoints_action])
         self.debug_panel = DebugPanel(self.debug_session, [
             self.debug_start_action, self.debug_pause_action, self.step_over_action, self.step_in_action,
             self.step_out_action, self.debug_stop_action])
@@ -248,8 +257,9 @@ class DebuggingMixin:
         code.debuggable = not editor.untitled and debuggable(editor.path)
         code.update_gutter_width()
         if code.debuggable:
-            code.set_breakpoint_lines(self.breakpoints.get(str(editor.path), []))
-            code.set_breakpoint_problems(self._breakpoint_problems.get(str(editor.path), {}))
+            key = str(editor.path)
+            code.set_breakpoint_lines(self.breakpoints.get(key, []), self.disabled_breakpoints.get(key, []))
+            code.set_breakpoint_problems(self._breakpoint_problems.get(key, {}))
         code.breakpoints_changed.connect(lambda e=editor: self._editor_breakpoints_changed(e))
         editor.path_changed.connect(lambda _p, e=editor: self._debug_path_changed(e))
 
@@ -261,29 +271,44 @@ class DebuggingMixin:
     def _editor_breakpoints_changed(self, editor: EditorTab):
         if editor.untitled:
             return
-        key, lines = str(editor.path), editor.editor.breakpoint_lines()
-        if lines:
-            self.breakpoints[key] = lines
-        else:
-            self.breakpoints.pop(key, None)
+        self._keep_breakpoints(editor)
+        key = str(editor.path)
         self._breakpoint_problems.pop(key, None)
         editor.editor.set_breakpoint_problems({})
-        self.debug_session.set_breakpoints(key, lines)
+        self.debug_session.set_breakpoints(key, editor.editor.enabled_breakpoints())
+        self._update_breakpoint_actions()
+
+    def _keep_breakpoints(self, editor: EditorTab):
+        """An open file's breakpoints, where its edits moved them, kept (for
+        when it's closed, saved, or debugged)."""
+        if editor.untitled or not editor.editor.debuggable:
+            return
+        key, code = str(editor.path), editor.editor
+        for store, lines in ((self.breakpoints, code.breakpoint_lines()),
+                             (self.disabled_breakpoints, code.disabled_breakpoints())):
+            if lines:
+                store[key] = lines
+            else:
+                store.pop(key, None)
 
     def _debug_editor_closing(self, editor: EditorTab):
-        """(The file's breakpoints kept, where its edits moved them.)"""
-        if not editor.untitled and editor.editor.debuggable:
-            lines = editor.editor.breakpoint_lines()
-            if lines:
-                self.breakpoints[str(editor.path)] = lines
-            else:
-                self.breakpoints.pop(str(editor.path), None)
+        self._keep_breakpoints(editor)
+
+    def _refresh_breakpoints(self):
+        for editor in self.editors():
+            self._keep_breakpoints(editor)
 
     def all_breakpoints(self) -> dict[str, list[int]]:
-        """Every breakpoint now: the open files' where their edits moved them."""
-        for editor in self.editors():
-            self._debug_editor_closing(editor)  # (the same: their lines now)
-        return {path: list(lines) for path, lines in self.breakpoints.items() if lines}
+        """The breakpoints the debugger stops at: every enabled one (the open
+        files' where their edits moved them)."""
+        self._refresh_breakpoints()
+        out = {}
+        for path, lines in self.breakpoints.items():
+            off = set(self.disabled_breakpoints.get(path, ()))
+            enabled = [n for n in lines if n not in off]
+            if enabled:
+                out[path] = enabled
+        return out
 
     def _breakpoints_checked(self, path: str, states: dict):
         problems = self._breakpoint_problems.setdefault(path, {})
@@ -296,30 +321,80 @@ class DebuggingMixin:
         if editor is not None:
             editor.editor.set_breakpoint_problems(problems)
 
-    def toggle_breakpoint(self):
-        """Debug → Toggle Breakpoint (F9): on the cursor's line."""
+    def _cursor_line(self) -> tuple[EditorTab | None, int]:
         editor = self.current_editor()
+        return editor, (editor.editor.textCursor().blockNumber() + 1 if editor is not None else 0)
+
+    def toggle_breakpoint(self):
+        """Debug → Toggle Breakpoint (F9): set or remove the one on the cursor's line."""
+        editor, line = self._cursor_line()
         if editor is not None:
-            editor.editor.toggle_breakpoint(editor.editor.textCursor().blockNumber() + 1)
+            editor.editor.toggle_breakpoint(line)
+
+    def toggle_breakpoint_enabled(self):
+        """Debug → Enable/Disable Breakpoint (Ctrl+F9): the one on the cursor's
+        line disabled (kept, hollow) or enabled again; none there: one set."""
+        editor, line = self._cursor_line()
+        if editor is not None:
+            editor.editor.toggle_breakpoint_enabled(line)
+
+    def any_enabled_breakpoint(self) -> bool:
+        return bool(self.all_breakpoints())
+
+    def set_all_breakpoints_enabled(self, enabled: bool | None = None):
+        """Debug → Disable All Breakpoints (Enable All, when none is enabled):
+        every breakpoint, in every file, kept."""
+        if enabled is None:
+            enabled = not self.any_enabled_breakpoint()
+        self._refresh_breakpoints()
+        for path, lines in list(self.breakpoints.items()):
+            if enabled:
+                self.disabled_breakpoints.pop(path, None)
+            else:
+                self.disabled_breakpoints[path] = list(lines)
+            editor = self._open_editor_for(Path(path))
+            if editor is not None:
+                editor.editor.set_breakpoints_enabled(lines, enabled)  # (it tells the debugger)
+            else:
+                self.debug_session.set_breakpoints(path, list(lines) if enabled else [])
+        self._update_breakpoint_actions()
 
     def remove_all_breakpoints(self):
-        for path in list(self.all_breakpoints()):
+        self._refresh_breakpoints()
+        for path in list(self.breakpoints):
             self.debug_session.set_breakpoints(path, [])
         self.breakpoints.clear()
+        self.disabled_breakpoints.clear()
         self._breakpoint_problems.clear()
         for editor in self.editors():
             editor.editor.set_breakpoint_lines([])
+        self._update_breakpoint_actions()
+
+    def _update_breakpoint_actions(self):
+        """Disable All, or Enable All when none is enabled (but some are disabled)."""
+        if not hasattr(self, "disable_all_breakpoints_action"):
+            return
+        none_enabled = not self.any_enabled_breakpoint() and any(self.breakpoints.values())
+        self.disable_all_breakpoints_action.setText("Enable All Breakpoints" if none_enabled
+                                                    else "Disable All Breakpoints")
 
     def set_session_breakpoints(self, entries: list):
         """The breakpoints saved with the project's session (see _save_session)."""
-        self.breakpoints = {}
+        self.breakpoints, self.disabled_breakpoints = {}, {}
         for entry in entries or []:
             if isinstance(entry, dict) and isinstance(entry.get("path"), str):
-                lines = [int(n) for n in entry.get("lines") or [] if isinstance(n, int) and n > 0]
+                key = str(Path(entry["path"]))
+                lines = sorted({int(n) for n in entry.get("lines") or [] if isinstance(n, int) and n > 0})
+                off = sorted({int(n) for n in entry.get("disabled") or [] if isinstance(n, int)} & set(lines))
                 if lines:
-                    self.breakpoints[str(Path(entry["path"]))] = sorted(set(lines))
+                    self.breakpoints[key] = lines
+                if off:
+                    self.disabled_breakpoints[key] = off
         self._breakpoint_problems = {}
+        self._update_breakpoint_actions()
 
     def session_breakpoints(self) -> list[dict]:
-        return [{"path": path, "lines": lines} for path, lines in sorted(self.all_breakpoints().items())]
-
+        self._refresh_breakpoints()
+        return [{"path": path, "lines": lines, **({"disabled": self.disabled_breakpoints[path]}
+                                                  if self.disabled_breakpoints.get(path) else {})}
+                for path, lines in sorted(self.breakpoints.items()) if lines]

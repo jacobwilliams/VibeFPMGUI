@@ -88,7 +88,7 @@ class CodeEditor(EditorGutterMixin, EditorIssuesMixin, MultiCursorMixin, LineEdi
         self.deletions: dict[int, tuple[str, int]] = {}          # line -> (kind, lines deleted above it)
         # Breakpoints (see editor_gutter): cursors at their lines' starts, so they move with edits.
         self.debuggable = False  # a source file the debugger can stop in: a breakpoint column
-        self._breakpoints: list[QTextCursor] = []
+        self._breakpoints: list[tuple[QTextCursor, bool]] = []  # (at its line, enabled)
         self.breakpoint_problems: dict[int, str] = {}  # line -> why the debugger couldn't place it
         self.execution_line: int | None = None  # where the program is stopped (an arrow, the line tinted)
         self.minimap = None  # the vibefpmgui.minimap.Minimap beside it, if any

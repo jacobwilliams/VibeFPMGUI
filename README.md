@@ -155,9 +155,12 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   PATH); without it the panel says so.
 * Debugging, with gdb (14 or newer: Linux, and the [Docker image](docker/README.md)
   on a Mac) or lldb-dap, through their Debug Adapter Protocol. Click left of
-  a line number (or F9) for a breakpoint (hollow: the debugger couldn't place
-  it, e.g. no code on that line); breakpoints move with your edits and are
-  kept with the project. *Debug → Start Debugging* (F5) builds with the
+  a line number (or F9) for a breakpoint; ⌘-click it (Ctrl-click on Linux
+  and Windows, or Ctrl+F9) to disable it (kept, drawn hollow: the debugger
+  doesn't stop there), and *Debug → Disable All Breakpoints* does it for
+  every one (*Enable All Breakpoints* then). Grey: the debugger couldn't
+  place it (e.g. no code on that line). Breakpoints move with your edits and
+  are kept with the project. *Debug → Start Debugging* (F5) builds with the
   Build options (with the debug profile, for debug information, unless a
   profile or features are chosen) and runs the program under the debugger
   (several programs and no *Target*: it asks which). *Debug a Test…* and

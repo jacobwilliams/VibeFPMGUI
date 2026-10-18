@@ -440,3 +440,81 @@ def test_debug_from_build_outputs(window, fpm_runs):
     window.outputs_view.debug_requested.emit("example", "demo_example")
     (sub, args), = fpm_runs
     assert sub == ["run"] and "--example" in args and "demo_example" in args and "--profile" in args
+
+
+# ----------------------------------------------------------------- disabled breakpoints
+def dot_color(code, line: int) -> str:
+    """The colour at the middle of a line's breakpoint dot (the gutter's background: none, or hollow)."""
+    from vibefpmgui.editor_shared import BREAKPOINT_WIDTH
+
+    image = code.gutter.grab().toImage()
+    y = code.cursorRect(QTextCursor(code.document().findBlockByNumber(line - 1))).center().y()
+    ratio = image.devicePixelRatio()
+    return image.pixelColor(int(BREAKPOINT_WIDTH / 2 * ratio), int(y * ratio)).name()
+
+
+def test_a_disabled_breakpoint_is_hollow_and_an_unplaced_one_grey(window, project):
+    from vibefpmgui.editor_shared import BREAKPOINT_COLOR, BREAKPOINT_UNPLACED
+
+    code = open_editor(window, project / "src/foo.f90").editor
+    code.set_breakpoint_lines([2, 4, 6], disabled=[4])
+    code.set_breakpoint_problems({6: "no code on that line"})
+    empty = dot_color(code, 3)
+    assert dot_color(code, 2) == BREAKPOINT_COLOR
+    assert dot_color(code, 4) == empty  # (hollow: its middle is the gutter's)
+    assert dot_color(code, 6) == BREAKPOINT_UNPLACED
+    assert "disabled" in code.breakpoint_tip(4) and "not placed" in code.breakpoint_tip(6)
+
+
+def test_command_click_and_ctrl_f9_disable_and_enable(window, project):
+    editor = open_editor(window, project / "src/foo.f90")
+    code = editor.editor
+    code.toggle_breakpoint(3)
+    y = code.cursorRect(QTextCursor(code.document().findBlockByNumber(2))).center().y()
+    point = QPoint(4, y)
+    code.gutter.mousePressEvent(QMouseEvent(QEvent.MouseButtonPress, point, code.gutter.mapToGlobal(point),
+                                            Qt.LeftButton, Qt.LeftButton, Qt.ControlModifier))
+    assert code.breakpoint_lines() == [3] and code.disabled_breakpoints() == [3]
+    assert window.disabled_breakpoints == {str(editor.path): [3]} and window.all_breakpoints() == {}
+    code.setTextCursor(QTextCursor(code.document().findBlockByNumber(2)))
+    window.enable_breakpoint_action.trigger()  # (Ctrl+F9: enabled again)
+    assert code.disabled_breakpoints() == [] and window.all_breakpoints() == {str(editor.path): [3]}
+
+
+def test_disable_all_and_enable_all(window, project):
+    other = project / "app/main.f90"
+    window.breakpoints[str(other.resolve())] = [2]  # (a file not open)
+    editor = open_editor(window, project / "src/foo.f90")
+    for line in (2, 4, 6):
+        editor.editor.toggle_breakpoint(line)
+    assert window.disable_all_breakpoints_action.text() == "Disable All Breakpoints"
+    window.disable_all_breakpoints_action.trigger()
+    assert editor.editor.breakpoint_lines() == [2, 4, 6] and editor.editor.disabled_breakpoints() == [2, 4, 6]
+    assert window.all_breakpoints() == {} and window.disabled_breakpoints[str(other.resolve())] == [2]
+    assert window.disable_all_breakpoints_action.text() == "Enable All Breakpoints"
+    window.disable_all_breakpoints_action.trigger()
+    assert editor.editor.disabled_breakpoints() == [] and window.all_breakpoints() == {
+        str(other.resolve()): [2], str(editor.path): [2, 4, 6]}
+    assert window.disable_all_breakpoints_action.text() == "Disable All Breakpoints"
+
+
+def test_the_debugger_doesnt_stop_at_a_disabled_one(debugging, qtbot):
+    window = debugging  # (stopped at line 3)
+    code = window.current_editor().editor
+    code.toggle_breakpoint(5)
+    code.toggle_breakpoint(7)
+    code.toggle_breakpoint_enabled(5)  # (disabled: not sent)
+    assert code.breakpoint_lines() == [3, 5, 7] and code.disabled_breakpoints() == [5]
+    window.debug_start_action.trigger()
+    qtbot.waitUntil(lambda: code.execution_line == 7, timeout=10_000)  # (past 5)
+
+
+def test_disabled_breakpoints_are_kept_with_the_project(make_window, project):
+    window = make_window(project / "fpm.toml")
+    code = open_editor(window, project / "src/foo.f90").editor
+    code.set_breakpoint_lines([2, 5], disabled=[5])
+    code.breakpoints_changed.emit()
+    window.close()
+    again = make_window(project / "fpm.toml")
+    reopened = again._open_editor_for(project / "src/foo.f90").editor
+    assert reopened.breakpoint_lines() == [2, 5] and reopened.disabled_breakpoints() == [5]

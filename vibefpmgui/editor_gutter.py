@@ -4,6 +4,7 @@ A part of `vibefpmgui.code_editor.CodeEditor`."""
 
 from __future__ import annotations
 
+import sys
 from typing import TYPE_CHECKING
 
 from qtpy.QtCore import QPointF, QRect, QRectF, QSize, Qt
@@ -13,6 +14,7 @@ from qtpy.QtWidgets import QToolTip, QWidget
 from . import gremlins as gremlins_mod
 from .editor_shared import (
     BREAKPOINT_COLOR,
+    BREAKPOINT_UNPLACED,
     BREAKPOINT_WIDTH,
     CHANGE_COLORS,
     COVERAGE_COLORS,
@@ -116,7 +118,10 @@ class LineNumberArea(QWidget):
         # Clicking the breakpoint column sets or clears one; a number selects that line.
         line = self.editor.line_at_y(event.pos().y())
         if line and event.pos().x() < self.editor._breakpoint_column():
-            self.editor.toggle_breakpoint(line)
+            if event.modifiers() & Qt.ControlModifier:  # (⌘ on macOS: disable or enable it)
+                self.editor.toggle_breakpoint_enabled(line)
+            else:
+                self.editor.toggle_breakpoint(line)
         elif line:
             self.editor.go_to_line(line, select=True)
 
@@ -134,30 +139,62 @@ class EditorGutterMixin:
 
     # ------------------------------------------------------------ breakpoints
     def breakpoint_lines(self) -> list[int]:
-        """The lines (1-based) with a breakpoint, as they are now (they move with edits)."""
-        return sorted({cursor.blockNumber() + 1 for cursor in self._breakpoints})
+        """The lines (1-based) with a breakpoint, enabled or not, as they are
+        now (they move with edits)."""
+        return sorted({cursor.blockNumber() + 1 for cursor, _on in self._breakpoints})
 
-    def set_breakpoint_lines(self, lines: list[int]):
-        """Breakpoints on these lines (those past the end: dropped)."""
+    def disabled_breakpoints(self) -> list[int]:
+        """The lines whose breakpoint is disabled (kept, drawn hollow; the debugger doesn't stop there)."""
+        enabled = {cursor.blockNumber() + 1 for cursor, on in self._breakpoints if on}
+        return sorted({cursor.blockNumber() + 1 for cursor, on in self._breakpoints if not on} - enabled)
+
+    def enabled_breakpoints(self) -> list[int]:
+        disabled = set(self.disabled_breakpoints())
+        return [n for n in self.breakpoint_lines() if n not in disabled]
+
+    def set_breakpoint_lines(self, lines: list[int], disabled: list[int] | None = None):
+        """Breakpoints on these lines (those past the end: dropped); ``disabled``: these of them, disabled."""
         doc = self.document()
+        off = set(disabled or ())
         self._breakpoints = []
         for line in sorted(set(lines)):
             block = doc.findBlockByNumber(line - 1)
             if block.isValid():
-                self._breakpoints.append(QTextCursor(block))
+                self._breakpoints.append((QTextCursor(block), line not in off))
         self.breakpoint_problems = {}
         self.gutter.update()
 
     def toggle_breakpoint(self, line: int):
-        """A breakpoint on ``line`` set, or cleared (gutter click, F9)."""
+        """A breakpoint on ``line`` set, or removed (gutter click, F9)."""
         if not self.debuggable:
             return
-        lines = self.breakpoint_lines()
-        self.set_breakpoint_lines([n for n in lines if n != line] if line in lines else [*lines, line])
+        lines, off = self.breakpoint_lines(), self.disabled_breakpoints()
+        self.set_breakpoint_lines([n for n in lines if n != line] if line in lines else [*lines, line], off)
         self.breakpoints_changed.emit()
 
+    def toggle_breakpoint_enabled(self, line: int):
+        """The breakpoint on ``line`` disabled (kept, hollow), or enabled again
+        (⌘/Ctrl-click, Ctrl+F9); none there: one set."""
+        if not self.debuggable:
+            return
+        if line not in self.breakpoint_lines():
+            self.toggle_breakpoint(line)
+            return
+        self.set_breakpoints_enabled([line], line in self.disabled_breakpoints())
+
+    def set_breakpoints_enabled(self, lines: list[int], enabled: bool):
+        """These lines' breakpoints enabled, or disabled (Debug → Disable All Breakpoints)."""
+        if not self.debuggable:
+            return
+        wanted = set(lines)
+        changed = [(cursor, enabled if cursor.blockNumber() + 1 in wanted else on) for cursor, on in self._breakpoints]
+        if changed != self._breakpoints:
+            self._breakpoints = changed
+            self.gutter.update()
+            self.breakpoints_changed.emit()
+
     def set_breakpoint_problems(self, problems: dict[int, str]):
-        """Why the debugger couldn't place some of them (line -> why): drawn hollow."""
+        """Why the debugger couldn't place some of them (line -> why): drawn grey."""
         if problems != self.breakpoint_problems:
             self.breakpoint_problems = dict(problems)
             self.gutter.update()
@@ -165,10 +202,13 @@ class EditorGutterMixin:
     def breakpoint_tip(self, line: int) -> str:
         if line == self.execution_line:
             return "Stopped here (the debugger)"
+        modifier = "⌘" if sys.platform == "darwin" else "Ctrl"
+        if line in self.disabled_breakpoints():
+            return f"Breakpoint, disabled ({modifier}-click to enable it; click to remove it)"
         if line in self.breakpoint_problems:
             return f"Breakpoint not placed: {self.breakpoint_problems[line]}"
         if line in self.breakpoint_lines():
-            return "Breakpoint (click to remove)"
+            return f"Breakpoint (click to remove it; {modifier}-click to disable it)"
         return "Click to set a breakpoint (F9)" if line else ""
 
     def set_execution_line(self, line: int | None):
@@ -316,11 +356,12 @@ class EditorGutterMixin:
         painter.setRenderHint(QPainter.Antialiasing)
         origin = self._breakpoint_column()  # (the breakpoints, at the left edge: the rest after them)
         breakpoints = set(self.breakpoint_lines()) if origin else set()
+        disabled = set(self.disabled_breakpoints()) if origin else set()
         while block.isValid() and top <= event.rect().bottom():
             if block.isVisible() and bottom >= event.rect().top():
                 line = number + 1
                 if origin:
-                    self._paint_breakpoint(painter, line, line in breakpoints, top, height)
+                    self._paint_breakpoint(painter, line, line in breakpoints, line in disabled, top, height)
                 left = self._coverage_column()
                 state = self.coverage_state(line) if left else None
                 if state:  # (ran: green; ran, not every branch: amber; didn't: red)
@@ -366,19 +407,19 @@ class EditorGutterMixin:
             number += 1
         painter.end()
 
-    def _paint_breakpoint(self, painter: QPainter, line: int, on: bool, top: int, height: int):
-        """A line's breakpoint (a dot: hollow if the debugger couldn't place
-        it) and, where the program is stopped, an arrow over it."""
+    def _paint_breakpoint(self, painter: QPainter, line: int, on: bool, disabled: bool, top: int, height: int):
+        """A line's breakpoint (a red dot; hollow: disabled; grey: the debugger
+        couldn't place it) and, where the program is stopped, an arrow over it."""
         d = min(BREAKPOINT_WIDTH - 5, height - 4)
         x, y = (BREAKPOINT_WIDTH - d) / 2, top + (height - d) / 2
         if on:
             color = QColor(BREAKPOINT_COLOR)
-            if line in self.breakpoint_problems:
+            if disabled:
                 painter.setPen(QPen(color, 1.5))
                 painter.setBrush(Qt.NoBrush)
             else:
                 painter.setPen(Qt.NoPen)
-                painter.setBrush(color)
+                painter.setBrush(QColor(BREAKPOINT_UNPLACED) if line in self.breakpoint_problems else color)
             painter.drawEllipse(QRectF(x, y, d, d))
         if line == self.execution_line:
             painter.setPen(QPen(QColor(EXECUTION_COLOR).darker(140), 1))
