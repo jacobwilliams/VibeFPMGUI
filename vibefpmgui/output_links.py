@@ -1,9 +1,11 @@
-"""Clickable file locations in the Output panel.
+"""Clickable file locations in the Output panel (and the Debug panel's console).
 
 Runtime errors and compiler messages name where they happened:
 gfortran's "At line 1753 of file build/dependencies/slsqp/src/slsqp_core.f90",
 its backtraces' "… at src/foo.f90:12", compiler messages' "src/foo.f90:12:5:",
-and ifx's traceback rows ("test  00007FF7010C7F25  ROUTINE  1266  x.f90").
+ifx's traceback rows ("test  00007FF7010C7F25  ROUTINE  1266  x.f90"), and
+gdb's "Breakpoint 3 at 0x…: file test/x.f90, line 155." and "No compiled
+code for line 187 in file "/x/y.f90"." in the Debug panel.
 `OutputLinks` underlines those whose file exists (relative paths are the
 project's, where fpm runs; a bare file name, as ifx prints, is looked for in
 the project and its dependencies) and opens the file at that line when one
@@ -29,6 +31,10 @@ LOCATION_RES = [
     # Compiler messages and backtraces: "src/x.f90:12:5:", "at /abs/x.f90:12", "x.f90(12)" (Intel).
     re.compile(r"(?P<path>(?:[A-Za-z]:[\\/])?[^\s:'\"()<>]*\.(?i:" + _EXTENSIONS + r"))"
                r"(?::(?P<line2>\d+)(?::(?P<col>\d+))?|\((?P<line3>\d+)\))"),
+    # gdb (the Debug panel's console): "Breakpoint 3 at 0x…: file test/x.f90, line 155."
+    re.compile(r"\bfile (?P<path>[^\s,'\"()<>]+\.(?i:" + _EXTENSIONS + r")), line (?P<line>\d+)"),
+    # gdb, a breakpoint on a line with no code: 'No compiled code for line 187 in file "/x/y.f90".'
+    re.compile(r"\bline (?P<line>\d+) in file \"(?P<path>[^\"]+\.(?i:" + _EXTENSIONS + r"))\""),
     # ifx's traceback (image, PC, routine, line, source): "x  00007FF7010C7F25  ROUTINE  1266  x.f90".
     # The link is the line and the source.
     re.compile(r"^\s*\S+\s+[0-9A-Fa-f]{8,16}\s+\S+\s+(?P<link>(?P<line>\d+)\s+"

@@ -31,6 +31,7 @@ from ..debug_session import IDLE, STOPPED, DebugSession, Frame
 from ..editor import EditorTab
 from ..fpm_args import runner_command, with_runner
 from ..icons import make_icon
+from ..output_links import OutputLinks
 from ..test_monitor import EXE_RE
 
 # What can be debugged: fpm's command for it, and what it's called.
@@ -113,6 +114,11 @@ class DebuggingMixin:
             self.debug_start_action, self.debug_pause_action, self.step_over_action, self.step_in_action,
             self.step_out_action, self.debug_stop_action])
         self.debug_panel.frame_chosen.connect(self._frame_chosen)
+        # gdb's "Breakpoint 3 at 0x…: file test/x.f90, line 155." (and any other location) open on a click.
+        self.debug_links = OutputLinks(self.debug_panel.console,
+                                       lambda: self.manifest_path.parent if self.manifest_path else None)
+        self.debug_links.open_requested.connect(lambda path, line, column: self.navigate_to(path, line, column,
+                                                                                           preview=True))
         s = self.debug_session
         s.state_changed.connect(self._debug_state_changed)
         s.stopped_at.connect(self._debug_stopped)
@@ -150,6 +156,7 @@ class DebuggingMixin:
         self._debug_adapter, self._debug_candidates = adapter, []
         self._debug_kind, self._debug_targets = kind, targets
         self.debug_panel.begin("…")
+        self.debug_links.forget()  # (which files exist: looked at again)
         self.statusBar().showMessage("Building, to debug…")
         self.run_fpm(sub[:1], True, False, phase="debug", args=args)
 

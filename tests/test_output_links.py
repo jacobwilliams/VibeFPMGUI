@@ -34,6 +34,10 @@ def test_the_locations_in_a_line(qtbot, tmp_path):
         (f"{tmp_path}/src/foo.f90:7", "src/foo.f90", 7, 0)]  # (a backtrace's, absolute)
     assert found("src/foo.f90(30): error #6404") == [("src/foo.f90(30)", "src/foo.f90", 30, 0)]
     assert found("src/c.c:3:1: warning") == [("src/c.c:3:1", "src/c.c", 3, 0)]
+    assert found("Breakpoint 3 at 0xaaaaaaaa3998: file src/foo.f90, line 155.") == [
+        ("file src/foo.f90, line 155", "src/foo.f90", 155, 0)]  # (gdb, in the Debug panel's console)
+    assert found(f'No compiled code for line 187 in file "{tmp_path}/src/foo.f90".') == [
+        (f'line 187 in file "{tmp_path}/src/foo.f90"', "src/foo.f90", 187, 0)]  # (gdb: no code on that line)
     assert found("At line 5 of file src/missing.f90") == []  # (no such file: no link)
     assert found("x = 1:2, time: 3.5 s") == []
 
@@ -69,6 +73,20 @@ def test_the_output_panel_opens_locations(window, project):
     links.open_requested.emit(str(loc.path), loc.line, loc.column)
     editor = window.current_editor()
     assert editor.path.name == "foo.f90" and editor.editor.textCursor().blockNumber() == 4
+
+
+def test_the_debug_console_opens_gdb_s_locations(window, project):
+    """gdb's "Breakpoint 3 at 0x…: file src/foo.f90, line 2." in the Debug
+    panel's console: the project's file (where the program runs), at that line."""
+    console = window.debug_panel.console
+    window.debug_panel.append("stdout", "Breakpoint 3 at 0xaaaaaaaa3998: file src/foo.f90, line 2.\n")
+    links = window.debug_links
+    (loc,) = links.locations(console.document().findBlockByNumber(0).text())
+    underlined = [r for r in console.document().findBlockByNumber(0).layout().formats() if r.format.fontUnderline()]
+    assert loc.path == (project / "src/foo.f90") and loc.line == 2 and len(underlined) == 1
+    links.open_requested.emit(str(loc.path), loc.line, loc.column)
+    editor = window.current_editor()
+    assert editor.path.name == "foo.f90" and editor.editor.textCursor().blockNumber() == 1
 
 
 IFX_TRACEBACK = """\
