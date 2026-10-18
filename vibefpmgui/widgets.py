@@ -1,7 +1,7 @@
 """Small widgets shared by the window's parts."""
 
-from qtpy.QtCore import QSize, Qt
-from qtpy.QtWidgets import QDialog, QLabel, QMenu, QPushButton, QSizePolicy
+from qtpy.QtCore import QSize, Qt, Signal
+from qtpy.QtWidgets import QDialog, QLabel, QLineEdit, QMenu, QPushButton, QSizePolicy
 
 
 class StatusLabel(QLabel):
@@ -17,6 +17,47 @@ class StatusLabel(QLabel):
     def minimumSizeHint(self) -> QSize:
         hint = super().minimumSizeHint()
         return QSize(min(hint.width(), self.MINIMUM_WIDTH), hint.height())
+
+
+class HistoryLineEdit(QLineEdit):
+    """A field for commands, as a shell's: Enter sends its text
+    (``submitted``), remembers it, and clears the field; Up and Down go
+    through what was sent (Down past the last one: what was being typed).
+    The history is this field's own, for as long as it lives (not saved)."""
+
+    submitted = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.history: list[str] = []
+        self._index = 0  # (in history; len(history): the text being typed, not sent yet)
+        self._draft = ""
+        self.returnPressed.connect(self._submit)
+
+    def _submit(self):
+        text = self.text().strip()
+        if not text:
+            return
+        if not self.history or self.history[-1] != text:  # (the same twice in a row: kept once)
+            self.history.append(text)
+        self._index, self._draft = len(self.history), ""
+        self.clear()
+        self.submitted.emit(text)
+
+    def keyPressEvent(self, event):
+        key = event.key()
+        if key == Qt.Key_Up and self._index > 0:
+            if self._index == len(self.history):
+                self._draft = self.text()
+            self._index -= 1
+            self.setText(self.history[self._index])
+        elif key == Qt.Key_Down and self._index < len(self.history):
+            self._index += 1
+            self.setText(self._draft if self._index == len(self.history) else self.history[self._index])
+        elif key in (Qt.Key_Up, Qt.Key_Down):
+            pass  # (no earlier, or later, entry)
+        else:
+            super().keyPressEvent(event)
 
 
 def run_dialog(dialog: QDialog) -> int:

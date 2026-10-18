@@ -13,7 +13,6 @@ from qtpy.QtGui import QAction, QTextCursor
 from qtpy.QtWidgets import (
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QPlainTextEdit,
@@ -35,6 +34,7 @@ from .debug_session import (
     Scope,
     Variable,
 )
+from .widgets import HistoryLineEdit
 
 REFERENCE_ROLE = Qt.UserRole + 1  # a variable's item: its variablesReference (0: no parts)
 LOADED_ROLE = Qt.UserRole + 2  # its parts asked for already
@@ -71,9 +71,9 @@ class DebugPanel(QWidget):
         self.console = QPlainTextEdit()
         self.console.setReadOnly(True)
         self.console.setMaximumBlockCount(5000)
-        self.evaluate_edit = QLineEdit()
-        self.evaluate_edit.setPlaceholderText("Evaluate in the frame shown (e.g. a(2:3), p%x), Enter")
-        self.evaluate_edit.returnPressed.connect(self._evaluate)
+        self.evaluate_edit = HistoryLineEdit()  # (Up, Down: the expressions evaluated before)
+        self.evaluate_edit.setPlaceholderText("Evaluate in the frame shown (e.g. a(2:3), p%x), Enter; ↑↓ earlier ones")
+        self.evaluate_edit.submitted.connect(self._evaluate)
 
         left = _titled("Call Stack", self.stack)
         middle = _titled("Variables", self.variables)
@@ -199,10 +199,7 @@ class DebugPanel(QWidget):
         return rows
 
     # ---------------------------------------------------------- evaluate
-    def _evaluate(self):
-        expression = self.evaluate_edit.text().strip()
-        if not expression:
-            return
+    def _evaluate(self, expression: str):
         self.append("console", f"> {expression}\n")
         self.session.evaluate(expression, lambda ok, text, _ref: self.append("console", f"{text}\n"))
 

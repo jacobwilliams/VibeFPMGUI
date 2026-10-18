@@ -12,6 +12,7 @@ import pytest
 from conftest import open_editor
 from qtpy.QtCore import QEvent, QPoint, Qt
 from qtpy.QtGui import QMouseEvent, QTextCursor
+from qtpy.QtTest import QTest
 from qtpy.QtWidgets import QMessageBox
 
 from vibefpmgui import debug_adapters
@@ -312,8 +313,11 @@ def test_stepping_moves_the_arrow(debugging, qtbot):
 def test_evaluate_in_the_console(debugging, qtbot):
     panel = debugging.debug_panel
     panel.evaluate_edit.setText("n * 2")
-    panel.evaluate_edit.returnPressed.emit()
+    QTest.keyClick(panel.evaluate_edit, Qt.Key_Return)
     qtbot.waitUntil(lambda: bool("\n6\n" in panel.console.toPlainText()), timeout=10_000)
+    assert panel.evaluate_edit.text() == ""  # (cleared, for the next one)
+    QTest.keyClick(panel.evaluate_edit, Qt.Key_Up)
+    assert panel.evaluate_edit.text() == "n * 2"  # (the one before)
 
 
 def test_stop_button(debugging, qtbot):
