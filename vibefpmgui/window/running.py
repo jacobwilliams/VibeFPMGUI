@@ -42,6 +42,8 @@ from ..widgets import MenuButton, StayOpenMenu
 # (label, fpm sub-command, uses build options, refresh graph afterwards, icon, shortcut, description)
 COMMANDS = [
     ("Build", ["build"], True, True, "build", "Ctrl+B", "Compile the project"),
+    ("Build Tests", ["build", "--tests"], True, True, "build-tests", "Ctrl+Shift+B",
+     "Compile the project and all its tests, without running them"),
     ("Run", ["run"], True, True, "run", "Ctrl+R", "Build and run the program(s)"),
     ("Test", ["test"], True, True, "test", "Ctrl+U", "Build and run the tests"),
     ("Update deps", ["update"], False, True, "update", "", "Fetch or update the dependencies"),
@@ -178,7 +180,7 @@ class RunningMixin:
         self.stop_action = make("Stop", "stop", "Ctrl+.", "Stop the running fpm command", self.stop)
         self.stop_action.setEnabled(False)
 
-        groups = [[actions["build"], actions["run"], actions["test"], self.stop_action],
+        groups = [[actions["build"], actions["build-tests"], actions["run"], actions["test"], self.stop_action],
                   [actions["update"]],
                   [actions["clean"], actions["clean-all"]]]
         toolbar = QToolBar("Commands")

@@ -1,0 +1,96 @@
+{
+  "vibefpm": 1,
+  "configurations": [
+    {
+      "name": "gfortran-debug",
+      "profile": "debug",
+      "features": [],
+      "compiler": "gfortran",
+      "flags": "-fcheck=all",
+      "target": "",
+      "extra_args": "",
+      "program_args": "",
+      "parallel_tests": 1,
+      "coverage": false,
+      "verbose": false
+    }
+  ],
+  "new_configuration": {
+    "profile": "debug",
+    "features": [],
+    "compiler": "gfortran",
+    "flags": "",
+    "target": "",
+    "extra_args": "",
+    "program_args": "",
+    "parallel_tests": 1,
+    "coverage": false,
+    "verbose": false
+  },
+  "options": {
+    "build_configuration": "gfortran-debug",
+    "complexity_dependencies": false,
+    "complexity_tests": false,
+    "coverage_tests": false,
+    "fortls": true,
+    "graph_dependencies_dev": true,
+    "graph_edges": "curved",
+    "graph_layout": "layered-lr",
+    "graph_theme": "auto",
+    "gremlins": true,
+    "highlight_matches": true,
+    "indent_tabs": false,
+    "indent_width": 4,
+    "lint": true,
+    "lsp_diagnostics": true,
+    "minimap": true,
+    "panels": "AAAA/wAAAAL9AAAAAwAAAAAAAAE/AAADA/wCAAAAAfwAAAA/AAADAwAAAd8BAAAX+gAAAAEBAAAAAvsAAAAWAHAAYQBuAGUAbABfAGYAaQBsAGUAcwEAAAAA/////wAAAGkA////+wAAABoAcABhAG4AZQBsAF8AbwBwAHQAaQBvAG4AcwEAAAAAAAABNgAAATcA////AAAAAQAAAukAAAGJ/AIAAAAB/AAAAD8AAAGJAAAAqAEAABf6AAAAAQIAAAAC+wAAABYAcABhAG4AZQBsAF8AZwByAGEAcABoAQAAAAD/////AAAAkAD////7AAAAGgBwAGEAbgBlAGwAXwBvAHUAdABwAHUAdABzAQAAAAD/////AAAAkAD///8AAAADAAAEqAAAAXn8AQAAAAL8AAABQAAAAqwAAAKsAP////oAAAAAAQAAAAz7AAAAFgBwAGEAbgBlAGwAXwBiAHUAaQBsAGQBAAAAAP////8AAAECAP////sAAAAWAHAAYQBuAGUAbABfAHQAZQBzAHQAcwEAAAAA/////wAAAMYA////+wAAABIAcABhAG4AZQBsAF8AcgB1AG4BAAAAAP////8AAAC6AP////sAAAAcAHAAYQBuAGUAbABfAGMAbwB2AGUAcgBhAGcAZQEAAAAA/////wAAAaoA////+wAAACAAcABhAG4AZQBsAF8AYwBvAG0AcABsAGUAeABpAHQAeQEAAAAA/////wAAAdcA////+wAAABwAcABhAG4AZQBsAF8AcAByAG8AYgBsAGUAbQBzAQAAAAD/////AAAARwD////7AAAAGABwAGEAbgBlAGwAXwByAGUAdgBpAGUAdwEAAAAA/////wAAAlkA////+wAAACAAcABhAG4AZQBsAF8AcgBlAGYAZQByAGUAbgBjAGUAcwEAAAAA/////wAAAFcA////+wAAABgAcABhAG4AZQBsAF8AcwBlAGEAcgBjAGgBAAAAAP////8AAAEwAP////sAAAASAHAAYQBuAGUAbABfAGcAaQB0AQAAAAD/////AAABDQD////7AAAAHABwAGEAbgBlAGwAXwB0AGUAcgBtAGkAbgBhAGwBAAAAAP////8AAAIBAP////sAAAAWAHAAYQBuAGUAbABfAGQAZQBiAHUAZwEAAAAA/////wAAApAA////+wAAABgAcABhAG4AZQBsAF8AbwB1AHQAcAB1AHQBAAAD7QAAAfsAAADGAP///wAAAb4AAAGJAAAABAAAAAQAAAABAAAACPwAAAABAAAAAgAAAAEAAAAeAEMAbwBtAG0AYQBuAGQAcwBUAG8AbwBsAGIAYQByAQAAAAD/////AAAAAAAAAAA=",
+    "panels_front": [
+      "build",
+      "options",
+      "outputs"
+    ],
+    "problems/build": true,
+    "problems/fortitude": true,
+    "problems/fortls": true,
+    "problems/gremlins": true,
+    "problems/review": true,
+    "problems/spelling": true,
+    "search/case": false,
+    "search/dependencies": true,
+    "search/exclude": "",
+    "search/ignored": false,
+    "search/include": "",
+    "search/regex": false,
+    "search/word": false,
+    "session": {
+      "files": [
+        {
+          "path": "src/demo_stats.f90",
+          "line": 17,
+          "column": 0,
+          "scroll": 0
+        }
+      ],
+      "current": "src/demo_stats.f90",
+      "tree": {
+        "expanded": [
+          ".",
+          "mathutils",
+          "mathutils/src",
+          "src",
+          "group:Dependencies"
+        ],
+        "selected": "src/demo_stats.f90"
+      },
+      "breakpoints": []
+    },
+    "show_coverage": true,
+    "spelling": true,
+    "spelling_language": "en",
+    "tab_rows_wrap": false,
+    "trim_on_save": true,
+    "use_editor": true,
+    "word_wrap": false
+  }
+}

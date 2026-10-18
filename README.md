@@ -24,7 +24,9 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   from the toolbar or the *Commands* menu (Build ⌘B, Run ⌘R, Test ⌘U,
   Stop ⌘.; Ctrl on Linux/Windows), with live output and the usual options
   (profile, compiler, flags, target, extra arguments, program arguments).
-  Hover an option to see the fpm flag it becomes.
+  Hover an option to see the fpm flag it becomes. Build leaves the tests out
+  (fpm builds them only for Test); **Build Tests** (⇧⌘B) builds them too
+  (`fpm build --tests`), without running them.
 * Build configurations: named sets of Build options, saved in `vibefpm.json`
   beside the project's `fpm.toml` (so they can be committed with it). The
   list at the top of *Build options* chooses one: its options are shown

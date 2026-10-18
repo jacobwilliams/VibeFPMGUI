@@ -82,6 +82,20 @@ def _flask(p: QPainter, c: QColor):
     p.drawPath(liquid)
 
 
+def _build_tests(p: QPainter, c: QColor):
+    """The hammer, smaller, with a small flask in front of it (bottom right)."""
+    p.save()
+    p.translate(-2, -2)
+    p.scale(0.78, 0.78)
+    _hammer(p, c)
+    p.restore()
+    p.save()
+    p.translate(9.6, 9.4)
+    p.scale(0.62, 0.62)
+    _flask(p, c)
+    p.restore()
+
+
 def _download(p: QPainter, c: QColor):
     p.setPen(_pen(c, 2))
     p.drawLine(QPointF(12, 3.5), QPointF(12, 14))
@@ -228,6 +242,7 @@ def _git(p: QPainter, c: QColor):
 
 DRAWERS = {
     "build": _hammer,
+    "build-tests": _build_tests,
     "run": _play,
     "test": _flask,
     "coverage": _coverage,
