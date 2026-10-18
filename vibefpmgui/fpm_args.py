@@ -49,8 +49,12 @@ def runner_command(collect: bool = False) -> str:
     return join_args(parts)  # quoted for the platform's shell
 
 
-# Valgrind's memory check, as fpm's runner: every leak, and exit code 1 when it finds an error.
-VALGRIND_RUNNER = "valgrind --leak-check=full --show-leak-kinds=all --error-exitcode=1"
+# Valgrind's memory check, as fpm's runner: the leaks that are lost (not the
+# libraries' own, still reachable at exit), where an uninitialised value came
+# from, optimised code's bit tricks not taken for uninitialised values, deep
+# stacks, and exit code 1 when it finds an error.
+VALGRIND_RUNNER = ("valgrind --leak-check=full --show-leak-kinds=definite,possible --track-origins=yes "
+                   "--expensive-definedness-checks=yes --num-callers=30 --error-exitcode=1")
 
 
 def with_runner(args: list[str], runner: str) -> list[str]:

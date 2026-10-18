@@ -178,11 +178,15 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   outputs* (or *Run with Valgrind* on its right-click) builds it with the
   Build options (the debug profile, for files and lines, unless a profile or
   features are chosen) and has fpm run it under Valgrind's memory check:
-  `fpm test NAME --runner "valgrind --leak-check=full --show-leak-kinds=all
-  --error-exitcode=1"` (`fpm run`, `fpm run --example` for the others, with
-  the Program args). The report (leaks, invalid reads and writes, each with
-  its file and line) goes to the *Output* panel, and the status bar says how
-  many errors it found. Where Valgrind isn't found (macOS, Windows) the
+  `fpm test NAME --runner "valgrind --leak-check=full
+  --show-leak-kinds=definite,possible --track-origins=yes
+  --expensive-definedness-checks=yes --num-callers=30 --error-exitcode=1"`
+  (`fpm run`, `fpm run --example` for the others, with the Program args):
+  the leaks that are lost (not the blocks libraries such as OpenMP keep to
+  the end, "still reachable"), where an uninitialised value came from, and
+  fewer false alarms from optimised code. The report (leaks, invalid reads
+  and writes, each with its file and line) goes to the *Output* panel, and
+  the status bar says how many errors it found. Where Valgrind isn't found (macOS, Windows) the
   button is disabled; on arm64 Linux Valgrind also needs the C library's
   debug symbols (`libc6-dbg` on Debian and Ubuntu; the Docker image has it).
 * Test coverage: tick *Build options → Coverage* (gfortran) and run Test.
