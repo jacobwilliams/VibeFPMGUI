@@ -34,6 +34,10 @@ WORKDIR /app
 # The environment first, in a layer of its own: rebuilt only when pixi.toml or pixi.lock change.
 COPY pixi.toml pixi.lock ./
 RUN pixi install --locked
+# The demo project (examples/demo) in File → Recent Projects, to open it in two clicks:
+# the app's settings (root's ~/.config, kept in the image), written as the app writes them.
+RUN pixi run python -c "from qtpy.QtCore import QSettings; \
+s = QSettings('VibeFPMGUI', 'VibeFPMGUI'); s.setValue('recent_projects', ['/app/examples/demo']); s.sync()"
 COPY . .
 
 # XQuartz has no OpenGL for remote clients: Qt draws without it.

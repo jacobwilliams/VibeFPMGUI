@@ -20,8 +20,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from qtpy.QtGui import QAction, QKeySequence
-from qtpy.QtWidgets import QInputDialog, QMessageBox
+from qtpy.QtGui import QAction, QKeySequence, QPalette
+from qtpy.QtWidgets import QApplication, QInputDialog, QMessageBox
 
 from .. import ansi
 from ..complexity import FORTRAN
@@ -30,6 +30,7 @@ from ..debug_panel import DebugPanel
 from ..debug_session import IDLE, STOPPED, DebugSession, Frame
 from ..editor import EditorTab
 from ..fpm_args import runner_command, with_runner
+from ..icons import make_icon
 from ..test_monitor import EXE_RE
 
 # What can be debugged: fpm's command for it, and what it's called.
@@ -101,6 +102,13 @@ class DebuggingMixin:
         menu.addSeparator()
         menu.addActions([self.toggle_breakpoint_action, self.enable_breakpoint_action,
                          self.disable_all_breakpoints_action, self.clear_breakpoints_action])
+        # Icons (the panel's buttons show only them; their tooltips say what they do), drawn
+        # in the theme's text color as the toolbar's are, and again when it changes.
+        for item, icon in ((self.debug_start_action, "run"), (self.debug_pause_action, "pause"),
+                           (self.step_over_action, "step-over"), (self.step_in_action, "step-into"),
+                           (self.step_out_action, "step-out"), (self.debug_stop_action, "stop")):
+            self.command_icons[item] = icon
+        self._update_command_icons()
         self.debug_panel = DebugPanel(self.debug_session, [
             self.debug_start_action, self.debug_pause_action, self.step_over_action, self.step_in_action,
             self.step_out_action, self.debug_stop_action])
@@ -215,7 +223,13 @@ class DebuggingMixin:
     # ---------------------------------------------------------- while debugging
     def _debug_state_changed(self, state: str):
         active, stopped = state != IDLE, state == STOPPED
-        self.debug_start_action.setText("Continue" if stopped else "Start Debugging")
+        start = self.debug_start_action
+        start.setText("Continue" if stopped else "Start Debugging")
+        start.setToolTip(f"{start.text()} ({start.shortcut().toString(QKeySequence.NativeText)})")
+        icon = "continue" if stopped else "run"
+        if self.command_icons.get(start) != icon:
+            self.command_icons[start] = icon
+            start.setIcon(make_icon(icon, QApplication.palette().color(QPalette.WindowText)))
         self.debug_start_action.setEnabled(stopped or not active)
         self.debug_test_action.setEnabled(not active)
         self.debug_example_action.setEnabled(not active)

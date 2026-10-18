@@ -8,7 +8,7 @@ shown. It shows what `vibefpmgui.debug_session.DebugSession` says; the window
 
 from __future__ import annotations
 
-from qtpy.QtCore import Qt, Signal
+from qtpy.QtCore import QSize, Qt, Signal
 from qtpy.QtGui import QAction, QTextCursor
 from qtpy.QtWidgets import (
     QHBoxLayout,
@@ -54,9 +54,11 @@ class DebugPanel(QWidget):
         header = QHBoxLayout()
         header.setContentsMargins(8, 4, 6, 2)
         header.addWidget(self.title, 1)
-        for action in actions:  # (the Debug menu's: Continue, Step Over…)
+        for action in actions:  # (the Debug menu's: Continue, Step Over…; their icons, tooltips saying which)
             button = QToolButton()
             button.setDefaultAction(action)
+            button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+            button.setIconSize(QSize(18, 18))
             button.setAutoRaise(True)
             header.addWidget(button)
 

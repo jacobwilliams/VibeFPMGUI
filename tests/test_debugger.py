@@ -271,6 +271,31 @@ def test_stopped_at_a_breakpoint(debugging, project, qtbot):
     qtbot.waitUntil(lambda: bool(("2", "2.5") in panel.variable_rows()), timeout=10_000)
 
 
+def panel_buttons(window) -> list:
+    from qtpy.QtWidgets import QToolButton
+
+    return [b for b in window.debug_panel.findChildren(QToolButton) if b.defaultAction() is not None]
+
+
+def test_the_panel_s_buttons_are_icons_with_tooltips(window):
+    buttons = panel_buttons(window)
+    assert [b.defaultAction().text() for b in buttons] == [
+        "Start Debugging", "Pause", "Step Over", "Step Into", "Step Out", "Stop Debugging"]
+    for button in buttons:
+        assert button.toolButtonStyle() == Qt.ToolButtonIconOnly and not button.icon().isNull()
+        assert button.toolTip().startswith(button.defaultAction().text())
+    assert buttons[0].toolTip() == "Start Debugging (F5)" and window.command_icons[buttons[0].defaultAction()] == "run"
+    assert window.command_icons[buttons[-1].defaultAction()] == "stop"  # (red, as the toolbar's)
+
+
+def test_paused_start_becomes_continue(debugging):
+    window = debugging
+    start = panel_buttons(window)[0]
+    assert start.toolTip() == "Continue (F5)" and window.command_icons[window.debug_start_action] == "continue"
+    window.debug_session.stop()
+    assert start.toolTip() == "Start Debugging (F5)" and window.command_icons[window.debug_start_action] == "run"
+
+
 def test_stepping_moves_the_arrow(debugging, qtbot):
     window = debugging
     code = window.current_editor().editor

@@ -59,6 +59,9 @@ docker run --rm --init -it --cap-add=SYS_PTRACE --security-opt seccomp=unconfine
 runs (fpm, gdb, the tests) once they end; the two security options let gdb
 debug programs (*Debug → Start Debugging*).
 
+The demo project (`examples/demo`) is already in *File → Projects → Recent
+Projects*: the image's settings list it, so it opens in two clicks.
+
 (If the window doesn't appear, try `xhost + 127.0.0.1` instead of
 `xhost +localhost`.) XQuartz doesn't use the Retina resolution: if the
 window is small, add `-e QT_SCALE_FACTOR=2`.
@@ -85,7 +88,9 @@ folder (or the other way round). After changing `pixi.toml` or `pixi.lock`,
 rebuild the image and remove that volume (`docker volume rm vibefpmgui-pixi`)
 so it's filled again.
 
-Then open `/projects/halo` with *File → Open Project…*.
+Then open `/projects/halo` with *File → Open Project…*. (The settings
+volume is filled from the image the first time, so the demo is in Recent
+Projects then too; after that it keeps your own list.)
 
 A shell in the container, to run anything else (`pixi run …`, `fpm`, `git`):
 

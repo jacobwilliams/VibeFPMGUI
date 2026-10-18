@@ -142,6 +142,56 @@ def _trash(p: QPainter, c: QColor):
     p.drawLine(QPointF(13.8, 10), QPointF(13.8, 16.5))
 
 
+def _pause(p: QPainter, c: QColor):
+    p.setPen(Qt.NoPen)
+    p.setBrush(c)
+    p.drawRoundedRect(QRectF(6.5, 5, 4, 14), 1.2, 1.2)
+    p.drawRoundedRect(QRectF(13.5, 5, 4, 14), 1.2, 1.2)
+
+
+def _continue(p: QPainter, c: QColor):
+    """A bar, then the play triangle: run on from where it's paused."""
+    p.setPen(Qt.NoPen)
+    p.setBrush(c)
+    p.drawRoundedRect(QRectF(4.5, 5.5, 3, 13), 1, 1)
+    p.translate(2.5, 0)
+    _play(p, c)
+
+
+def _step_dot(p: QPainter, c: QColor):
+    """The line a step lands on, as a dot under its arrow."""
+    p.setPen(Qt.NoPen)
+    p.setBrush(c)
+    p.drawEllipse(QPointF(12, 19.5), 2.3, 2.3)
+
+
+def _step_over(p: QPainter, c: QColor):
+    """An arrow over the dot: the call run, not gone into."""
+    p.setPen(_pen(c, 2))
+    p.setBrush(Qt.NoBrush)
+    arc = QPainterPath(QPointF(4.5, 14))
+    arc.cubicTo(QPointF(4.5, 3.5), QPointF(19.5, 3.5), QPointF(19.5, 13.5))
+    p.drawPath(arc)
+    p.drawPolyline([QPointF(16.2, 10.6), QPointF(19.5, 14), QPointF(22.5, 10.6)])
+    _step_dot(p, c)
+
+
+def _step_into(p: QPainter, c: QColor):
+    """An arrow down to the dot: into the procedure called."""
+    p.setPen(_pen(c, 2))
+    p.drawLine(QPointF(12, 3), QPointF(12, 14))
+    p.drawPolyline([QPointF(8, 10.2), QPointF(12, 14.2), QPointF(16, 10.2)])
+    _step_dot(p, c)
+
+
+def _step_out(p: QPainter, c: QColor):
+    """An arrow up, away from the dot: out to the caller."""
+    p.setPen(_pen(c, 2))
+    p.drawLine(QPointF(12, 3), QPointF(12, 14.5))
+    p.drawPolyline([QPointF(8, 7), QPointF(12, 3), QPointF(16, 7)])
+    _step_dot(p, c)
+
+
 def _stop(p: QPainter, c: QColor):
     p.setPen(Qt.NoPen)
     p.setBrush(c)
@@ -252,6 +302,11 @@ DRAWERS = {
     "clean": _broom,
     "clean-all": _trash,
     "stop": _stop,
+    "pause": _pause,
+    "continue": _continue,
+    "step-over": _step_over,
+    "step-into": _step_into,
+    "step-out": _step_out,
     "robot": _robot,
     "format": _format,
     "more": _more,
