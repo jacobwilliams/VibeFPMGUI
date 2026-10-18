@@ -36,11 +36,13 @@ class TestingMixin:
         self.build_monitor = BuildMonitor()
         self.test_monitor = TestMonitor()
         self.test_monitor.test_selected.connect(self.show_test_output)
+        self.test_monitor.debug_requested.connect(lambda name: self.debug_named("test", name))
         self.test_monitor.build_percent = lambda: self.build_monitor.percent
         self.build_monitor.details_requested.connect(self.show_build_details)
         self.build_monitor.open_file_requested.connect(self.open_file)
         self.build_monitor.compile_command_requested.connect(self.show_compile_command)
         self.run_monitor = RunMonitor()
+        self.run_monitor.debug_requested.connect(lambda name: self.debug_named("program", name))
         self.run_monitor.test_selected.connect(
             lambda name: self._show_marked_output(self.run_monitor, name))
         self.run_monitor.build_percent = lambda: self.build_monitor.percent

@@ -27,6 +27,7 @@ from qtpy.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QMenu,
     QPushButton,
     QStyledItemDelegate,
     QTableWidget,
@@ -228,6 +229,7 @@ class TestMonitor(SortableTable, QWidget):
 
     COLUMNS: ClassVar[list[str]] = ["TEST", "STATUS", "TIME"]
     test_selected = Signal(str)
+    debug_requested = Signal(str)  # right-click → Debug: a test's (or program's) name
     ICON = "test"  # (the toolbar's icon for the command: see TitleIcon)
     # Everything the panel says, so a "Run" version can reuse it (see run_monitor).
     WORDS: ClassVar[dict[str, str]] = {
@@ -315,6 +317,8 @@ class TestMonitor(SortableTable, QWidget):
         self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.table.cellEntered.connect(self._set_hover)
         self.table.cellClicked.connect(self._row_clicked)
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._row_menu)
         self.table.viewport().installEventFilter(self)
         hh = self.table.horizontalHeader()
         hh.setHighlightSections(False)
@@ -704,6 +708,21 @@ class TestMonitor(SortableTable, QWidget):
         self.selected = "" if self.selected == name else name  # click again: show all
         self.table.viewport().update()
         self.test_selected.emit(self.selected)
+
+    def row_menu(self, row: int) -> QMenu | None:
+        """A row's right-click menu: Debug it."""
+        if not 0 <= row < len(self.tests):
+            return None
+        name = self.tests[row].name
+        menu = QMenu(self)
+        menu.addAction(f"Debug “{name}”", lambda n=name: self.debug_requested.emit(n))
+        return menu
+
+    def _row_menu(self, pos):
+        menu = self.row_menu(self.table.rowAt(pos.y()))
+        if menu is not None:
+            menu.aboutToHide.connect(menu.deleteLater)
+            menu.popup(self.table.viewport().mapToGlobal(pos))
 
     def _set_hover(self, row: int, _column: int):
         if row != self.hover_row:

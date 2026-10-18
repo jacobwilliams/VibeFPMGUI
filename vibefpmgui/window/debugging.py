@@ -1,11 +1,14 @@
 """Debugging (see plan/debugger.md): the Debug menu, the Debug panel, and
 breakpoints in the editors' gutters.
 
-*Start Debugging* (F5) runs ``fpm run`` with the Build options, as Run does,
-but with the collecting runner (`vibefpmgui.test_runner` ``--collect``): fpm
-builds (the Build panel shows it), then says which program it would run, and
-how; that program then runs under the debugger (`vibefpmgui.debug_session`).
-Several programs (no Target given): which one is asked.
+A program, a test or an example (*Start Debugging* (F5: the kind debugged
+last), *Debug a Test…*, *Debug an Example…*, or a row's right-click in the
+Tests or Run panel) is run as fpm runs it (``fpm run``, ``fpm test``,
+``fpm run --example``, with the Build options), but with the collecting
+runner (`vibefpmgui.test_runner` ``--collect``): fpm builds (the Build panel
+shows it), then says which executable it would run, and how; that one then
+runs under the debugger (`vibefpmgui.debug_session`). Several (no Target
+given): which one is asked.
 
 Breakpoints are kept per file (absolute path → lines), with the open files'
 own, which move with their edits (`CodeEditor.breakpoint_lines`); they're
@@ -29,6 +32,9 @@ from ..editor import EditorTab
 from ..fpm_args import runner_command
 from ..test_monitor import EXE_RE
 
+# What can be debugged: fpm's command for it, and what it's called.
+KINDS = {"program": (["run"], "program"), "test": (["test"], "test"), "example": (["run", "--example"], "example")}
+
 # The files a debugger can stop in: Fortran (and its include files), and C and C++.
 DEBUGGABLE = FORTRAN | {".inc", ".fi", ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh"}
 
@@ -47,6 +53,7 @@ class DebuggingMixin:
         self._breakpoint_problems: dict[str, dict[int, str]] = {}  # file → {line: why it wasn't placed}
         self._debug_candidates: list[tuple[str, list[str]]] = []  # (name, command line) fpm said it would run
         self._debug_adapter = None  # the debugger the session being started uses
+        self._debug_kind, self._debug_targets = "program", None  # what F5 debugs: the kind debugged last
 
         def action(text, keys, slot, tip):
             item = QAction(text, self)
@@ -57,8 +64,13 @@ class DebuggingMixin:
             item.triggered.connect(slot)
             return item
 
-        self.debug_start_action = action("Start Debugging", "F5", self.start_debugging,
-                                         "Build, then run the program under the debugger (Target: which one)")
+        self.debug_start_action = action("Start Debugging", "F5", lambda: self.start_debugging(),
+                                         "Build, then run the program under the debugger (Target: which one; "
+                                         "a test or an example, if one was debugged last)")
+        self.debug_test_action = action("Debug a Test…", "", lambda: self.start_debugging("test"),
+                                        "Build the tests, then run one under the debugger (Target: which)")
+        self.debug_example_action = action("Debug an Example…", "", lambda: self.start_debugging("example"),
+                                           "Build the examples, then run one under the debugger (Target: which)")
         self.debug_stop_action = action("Stop Debugging", "Shift+F5", self.debug_session.stop,
                                         "End the program being debugged")
         self.debug_pause_action = action("Pause", "", self.debug_session.pause, "Pause the program where it is")
@@ -73,7 +85,9 @@ class DebuggingMixin:
         self.clear_breakpoints_action = action("Remove All Breakpoints", "", self.remove_all_breakpoints,
                                                "Every breakpoint, in every file")
         menu = self.menuBar().addMenu("&Debug")
-        menu.addActions([self.debug_start_action, self.debug_pause_action, self.debug_stop_action])
+        menu.addActions([self.debug_start_action, self.debug_test_action, self.debug_example_action])
+        menu.addSeparator()
+        menu.addActions([self.debug_pause_action, self.debug_stop_action])
         menu.addSeparator()
         menu.addActions([self.step_over_action, self.step_in_action, self.step_out_action])
         menu.addSeparator()
@@ -90,12 +104,16 @@ class DebuggingMixin:
         self._debug_state_changed(IDLE)
 
     # ---------------------------------------------------------- starting
-    def start_debugging(self):
-        """Debug → Start Debugging (Continue, while paused)."""
+    def start_debugging(self, kind: str | None = None, targets: list[str] | None = None):
+        """Debug → Start Debugging (Continue, while paused): a ``kind`` of
+        executable ("program", "test", "example"; None: the kind debugged
+        last), ``targets``: these (else the Target field's)."""
         session = self.debug_session
-        if session.state == STOPPED:
+        if session.state == STOPPED and kind is None:
             session.continue_()
             return
+        if kind is None:
+            kind, targets = self._debug_kind, self._debug_targets
         if session.is_active() or not self.manifest_path or self.busy():
             return
         adapter = find_adapter()
@@ -108,8 +126,9 @@ class DebuggingMixin:
                 "variables. Debug anyway? (Choose the debug profile in Build options to debug properly.)",
         ) != QMessageBox.Yes:
             return
+        sub, _word = KINDS[kind]
         try:
-            args = self.build_arguments(["run"], True)
+            args = self.build_arguments(sub, True, targets=targets)
         except ValueError as exc:
             QMessageBox.warning(self, "Invalid arguments", str(exc))
             return
@@ -120,9 +139,16 @@ class DebuggingMixin:
         cut = args.index("--") if "--" in args else len(args)  # (the runner: before any program arguments)
         args = args[:cut] + ["--runner", runner_command(collect=True)] + args[cut:]
         self._debug_adapter, self._debug_candidates = adapter, []
+        self._debug_kind, self._debug_targets = kind, targets
         self.debug_panel.begin("…")
         self.statusBar().showMessage("Building, to debug…")
-        self.run_fpm(["run"], True, False, phase="debug", args=args)
+        self.run_fpm(sub[:1], True, False, phase="debug", args=args)
+
+    def debug_named(self, kind: str, name: str):
+        """A test (or program) to debug, picked in the Tests (or Run) panel."""
+        if self.debug_session.is_active():
+            self.debug_session.stop()
+        self.start_debugging(kind, [name])
 
     def _debug_line(self, raw: str) -> str:
         """A line of "fpm run --runner '… --collect'": the build's output, or a
@@ -150,14 +176,16 @@ class DebuggingMixin:
         """fpm has built the programs and said how it would run them: debug one."""
         candidates = self._debug_candidates
         if stopped or code != 0 or not candidates:
+            word = KINDS[self._debug_kind][1]
             why = ("stopped" if stopped else "the build failed (see Build and Output)" if code != 0
-                   else "fpm ran no program (Target: a program's name)")
+                   else f"fpm ran no {word} (Target: a {word}'s name)")
             self.debug_panel.append("console", f"[not debugging: {why}]\n")
             self.statusBar().showMessage(f"Not debugging: {why}", 6000)
             return
         if len(candidates) > 1:
             names = [name for name, _argv in candidates]
-            name, ok = QInputDialog.getItem(self, "Start Debugging", "Debug which program?", names, 0, False)
+            name, ok = QInputDialog.getItem(self, "Start Debugging", f"Debug which {KINDS[self._debug_kind][1]}?",
+                                            names, 0, False)
             if not ok:
                 return
             candidates = [c for c in candidates if c[0] == name]
@@ -173,6 +201,8 @@ class DebuggingMixin:
         active, stopped = state != IDLE, state == STOPPED
         self.debug_start_action.setText("Continue" if stopped else "Start Debugging")
         self.debug_start_action.setEnabled(stopped or not active)
+        self.debug_test_action.setEnabled(not active)
+        self.debug_example_action.setEnabled(not active)
         self.debug_stop_action.setEnabled(active)
         self.debug_pause_action.setEnabled(state == "running")
         for step in (self.step_over_action, self.step_in_action, self.step_out_action):

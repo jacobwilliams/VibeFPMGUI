@@ -160,7 +160,10 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   kept with the project. *Debug → Start Debugging* (F5) builds with the
   Build options (with the debug profile, for debug information, unless a
   profile or features are chosen) and runs the program under the debugger
-  (several programs and no *Target*: it asks which). Where it stops, the
+  (several programs and no *Target*: it asks which). *Debug a Test…* and
+  *Debug an Example…* do the same for the tests and examples, and a test's
+  (or program's) right-click in the *Tests* (or *Run*) panel debugs that
+  one; F5 then repeats what was debugged last. Where it stops, the
   file opens at the line, marked with an arrow; the *Debug* panel shows the
   call stack (click a frame to go there), the variables (arrays and derived
   types expand), and a console with the program's output and a field to

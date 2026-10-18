@@ -381,3 +381,53 @@ def test_the_collected_line_is_read(window):
     assert window._debug_line(marker) == ""
     assert window._debug_candidates == [("demo", ["/x/demo", "--size", "3"])]
     assert window._debug_line("[ 50%] compiling") == "[ 50%] compiling\n"
+
+
+# ----------------------------------------------------------------- tests and examples
+@pytest.fixture
+def fpm_runs(window, monkeypatch):
+    """What start_debugging asked fpm to do (nothing runs)."""
+    monkeypatch.setattr(debug_adapters, "_found", {"adapter": fake_adapter()})
+    ran = []
+    monkeypatch.setattr(type(window), "run_fpm", lambda self, sub, *a, **k: ran.append((sub, k["args"])))
+    return ran
+
+
+@pytest.mark.parametrize("kind, sub, first", [("program", ["run"], ["run"]), ("test", ["test"], ["test"]),
+                                              ("example", ["run"], ["run", "--example"])])
+def test_programs_tests_and_examples(window, fpm_runs, kind, sub, first):
+    window.start_debugging(kind)
+    (ran_sub, args), = fpm_runs
+    assert ran_sub == sub and [a for a in args if a not in ("--profile", "debug")][:len(first)] == first
+    assert "--runner" in args
+
+
+def test_a_test_picked_in_the_tests_panel(window, fpm_runs):
+    window.target_edit.setText("other_program")
+    window.test_monitor.start(["check_a", "check_b"], {})
+    menu = window.test_monitor.row_menu(1)
+    (action,) = menu.actions()
+    assert action.text() == "Debug “check_b”"
+    action.trigger()
+    (sub, args), = fpm_runs
+    assert sub == ["test"] and "check_b" in args and "other_program" not in args  # (that one, not the Target's)
+    assert window.test_monitor.row_menu(5) is None
+
+
+def test_a_program_picked_in_the_run_panel(window, fpm_runs):
+    window.run_monitor.start(["demo"], {})
+    window.run_monitor.row_menu(0).actions()[0].trigger()
+    (sub, args), = fpm_runs
+    assert sub == ["run"] and "demo" in args and "--example" not in args
+
+
+def test_f5_debugs_what_was_debugged_last(window, fpm_runs):
+    window.start_debugging("example")
+    window.debug_start_action.trigger()
+    assert [args[:4] for _sub, args in fpm_runs] == [["run", "--profile", "debug", "--example"]] * 2
+
+
+def test_no_test_to_debug(window, fpm_runs):
+    window.start_debugging("test")
+    window._after_debug_build(0, False)
+    assert "fpm ran no test" in window.debug_panel.console.toPlainText()

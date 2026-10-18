@@ -255,7 +255,9 @@ class RunningMixin:
         return self.fpm_edit.text().strip() or shutil.which("fpm") or "fpm"
 
     def build_arguments(self, sub: list[str], uses_options: bool,
-                        program_args: bool = True) -> list[str]:
+                        program_args: bool = True, targets: list[str] | None = None) -> list[str]:
+        """fpm's arguments for ``sub``; ``targets``: these programs or tests
+        (instead of the Target field's)."""
         args = list(sub)
         if uses_options:
             if self.selected_features:  # fpm rejects --features together with --profile
@@ -270,8 +272,9 @@ class RunningMixin:
                 args += ["--flag", flags]
             if self.verbose_check.isChecked():
                 args.append("--verbose")
-            if sub[0] in ("run", "test") and self.target_edit.text().strip():
-                args += split_args(self.target_edit.text())
+            names = split_args(self.target_edit.text()) if targets is None else targets
+            if sub[0] in ("run", "test") and names:
+                args += names
             extra = split_args(self.extra_edit.text())
             if sub[0] in ("test", "run"):
                 extra, _ = split_runner(extra)  # (the user's --runner: run inside ours, see _start_marked)

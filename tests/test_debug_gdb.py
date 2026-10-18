@@ -55,13 +55,40 @@ end program main
 """
 CALL_LINE = 10  # (call bump(p, a, 3))
 
+TEST = """\
+program check
+  use shapes
+  implicit none
+  type(point) :: q
+  real :: b(2)
+  q = point(1.0, 0.0)
+  b = [10.0, 20.0]
+  call bump(q, b, 2)
+  if (abs(b(2) - 21.0) > 1e-6) error stop "wrong"
+end program check
+"""
+TEST_LINE = 8  # (call bump(q, b, 2))
+
+EXAMPLE = """\
+program demo_example
+  use shapes
+  implicit none
+  integer :: k
+  k = 41
+  k = k + 1
+  print *, k
+end program demo_example
+"""
+EXAMPLE_LINE = 6  # (k = k + 1)
+
 
 @pytest.fixture
 def debugged(make_window, tmp_path, qtbot, monkeypatch):
     """A project stopped at its breakpoint, under gdb."""
     monkeypatch.setattr(debug_adapters, "_found", {})  # (looked for here: gdb)
     root = write_files(tmp_path / "dbg", {"fpm.toml": 'name = "dbg"\n', "src/shapes.f90": SHAPES,
-                                          "app/main.f90": MAIN})
+                                          "app/main.f90": MAIN, "test/check.f90": TEST,
+                                          "example/demo_example.f90": EXAMPLE})
     window = make_window(root / "fpm.toml")
     open_editor(window, root / "app/main.f90").editor.toggle_breakpoint(CALL_LINE)
     window.start_debugging()
@@ -104,3 +131,30 @@ def test_gdb_steps_into_a_module_procedure_and_runs_to_the_end(debugged, qtbot):
     qtbot.waitUntil(lambda: window.debug_session.state == IDLE, timeout=30_000)
     console = window.debug_panel.console.toPlainText()
     assert "sum" in console and "exited with code 0" in console
+
+
+@pytest.mark.parametrize("kind, path, line, variable", [
+    ("test", "test/check.f90", TEST_LINE, ("1", "10")),
+    ("example", "example/demo_example.f90", EXAMPLE_LINE, ("k", "41")),
+])
+def test_gdb_debugs_a_test_and_an_example(make_window, tmp_path, qtbot, monkeypatch, kind, path, line, variable):
+    monkeypatch.setattr(debug_adapters, "_found", {})
+    root = write_files(tmp_path / "dbg", {"fpm.toml": 'name = "dbg"\n', "src/shapes.f90": SHAPES,
+                                          "app/main.f90": MAIN, "test/check.f90": TEST,
+                                          "example/demo_example.f90": EXAMPLE})
+    window = make_window(root / "fpm.toml")
+    open_editor(window, root / path).editor.toggle_breakpoint(line)
+    window.start_debugging(kind)
+    try:
+        qtbot.waitUntil(lambda: window.debug_session.state == STOPPED, timeout=180_000)
+        editor = window.current_editor()
+        assert editor.path == (root / path).resolve() and editor.editor.execution_line == line
+        panel = window.debug_panel
+        qtbot.waitUntil(lambda: bool(panel.variable_rows()), timeout=20_000)
+        if kind == "test":  # (b's elements)
+            item = panel.variables.topLevelItem(0)
+            b = next(item.child(i) for i in range(item.childCount()) if item.child(i).text(0) == "b")
+            b.setExpanded(True)
+        qtbot.waitUntil(lambda: variable in panel.variable_rows(), timeout=20_000)
+    finally:
+        window.debug_session.stop()
