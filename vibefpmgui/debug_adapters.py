@@ -58,7 +58,10 @@ def gdb_adapter() -> Adapter | None:
     if version is None or version[0] < GDB_MINIMUM:
         return None
     # (-q: no banner, which would be shown as the program's output.)
-    return Adapter("gdb", [gdb, "-q", "--interpreter=dap"], f"{version[0]}.{version[1]}")
+    # (Styling off: given a terminal and a UTF-8 locale, gdb otherwise puts symbols
+    # such as "❌️" in front of its messages, and may color them.)
+    return Adapter("gdb", [gdb, "-q", "-iex", "set style enabled off", "--interpreter=dap"],
+                   f"{version[0]}.{version[1]}")
 
 
 def lldb_adapter() -> Adapter | None:

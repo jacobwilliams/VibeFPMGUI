@@ -26,8 +26,10 @@ IDLE, STARTING, RUNNING, STOPPED = "idle", "starting", "running", "stopped"
 MAX_ELEMENTS = 1000  # an array's elements asked for at once (a big one: the first ones, then "…")
 
 # gdb's own messages, sent as the program's output: breakpoints set before the
-# program is loaded (they're placed when it is: see breakpoint events).
-_GDB_NOISE = re.compile(r"^(No source file named .*\.|Breakpoint \d+ \(.*\) pending\.)\s*$")
+# program is loaded (they're placed when it is: see breakpoint events). With its
+# styling on, gdb puts a symbol in front ("❌️ No source file…"; it's started
+# with styling off: see debug_adapters).
+_GDB_NOISE = re.compile(r"^[^\w\s]*\s*(No source file named .*\.|Breakpoint \d+ \(.*\) pending\.)\s*$")
 
 
 @dataclass

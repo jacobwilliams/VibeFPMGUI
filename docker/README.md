@@ -11,10 +11,39 @@ It's built for your Mac's own architecture: arm64 Linux on Apple Silicon
 runs (x86-64 Linux, `linux-64`), to reproduce a failure seen only there,
 build and run it for `linux/amd64` instead: see the end.
 
+## The files
+
+| File | What it is | Use it to |
+|---|---|---|
+| [`Dockerfile`](Dockerfile) | The image's recipe: Ubuntu, the system libraries Qt and Valgrind need, pixi and the project's environment, the source, and settings that list the demo project in *Recent Projects*. Built as the image `vibefpmgui`. | (read by `docker build`; see [Build the image](#build-the-image)) |
+| [`build-docker.sh`](build-docker.sh) | Builds the image, then runs the app in a new container, its window shown by XQuartz. | Try the app on Linux in one step: `docker/build-docker.sh` |
+| [`dev.sh`](dev.sh) | Keeps a container (`vibefpmgui-dev`) running with the source you're editing mounted in it. | Run the tests, or anything, on Linux as you work: see [Developing in the container](#developing-in-the-container-dockerdevsh) |
+| [`../.dockerignore`](../.dockerignore) | (In the project's folder, where Docker looks for it.) What `docker build` leaves out of the image: the Mac's `.pixi` environment, build output, caches. | (read by `docker build`) |
+| `README.md` | This file. | |
+
+All of them are run from (or work out) the project's folder, as the
+commands below are.
+
+## Quick start
+
+With [Docker Desktop and XQuartz set up](#once), XQuartz running:
+
+```sh
+docker/build-docker.sh
+```
+
+It builds the image (the first time takes a while: see below), lets the
+container show windows on XQuartz, and starts the app. The demo project
+(`examples/demo`) is in *File → Projects → Recent Projects*. Quit the app
+(or Ctrl-C in the terminal) to end the container. The sections below do the
+same steps one at a time, with more choices.
+
 ## Once
 
 1. Install [Docker Desktop](https://www.docker.com/products/docker-desktop/).
-2. Install XQuartz, the X11 display, for the GUI (not needed for the tests):
+2. Install XQuartz, the X11 display, for the GUI (not needed for the tests).
+   Download the installer from [xquartz.org](https://www.xquartz.org) and
+   run it. Or, if you use [Homebrew](https://brew.sh) (not required):
 
    ```sh
    brew install --cask xquartz
@@ -26,7 +55,7 @@ build and run it for `linux/amd64` instead: see the end.
 
 ## Build the image
 
-From the project's folder:
+From the project's folder (`docker/build-docker.sh` does this first):
 
 ```sh
 docker build -t vibefpmgui -f docker/Dockerfile .
@@ -47,7 +76,8 @@ The tests use Qt's offscreen platform: no window appears.
 ## Run the app
 
 With XQuartz running, let containers connect to it (each time XQuartz
-starts), then run the app with its display:
+starts), then run the app with its display (what `docker/build-docker.sh`
+does after building):
 
 ```sh
 xhost +localhost
@@ -116,8 +146,10 @@ architectures' environments differ.)
 ## Developing in the container: `docker/dev.sh`
 
 A container that stays up, with the source you're editing on the Mac
-mounted, to run the tests (or anything else) on Linux as you go, with no
-rebuilding:
+mounted at `/app` (changes are seen at once, no rebuilding), to run the
+tests (or anything else) on Linux as you go. Its Linux environment is kept
+in a volume of its own, `vibefpmgui-pixi`, so it doesn't take the place of
+the Mac's `.pixi` in your folder:
 
 ```sh
 docker/dev.sh start                              # once (needs the image: see above)
@@ -126,3 +158,24 @@ docker/dev.sh run gdb --version                  # anything, in the project's en
 docker/dev.sh shell                              # a shell in it
 docker/dev.sh stop
 ```
+
+`start` makes a new container from the image each time (a running one is
+replaced), so after rebuilding the image, `docker/dev.sh start` again to
+use it.
+
+## After changing `pixi.toml`, `pixi.lock` or the `Dockerfile`
+
+Rebuild the image, then start again from it. The environment volumes were
+filled from the old image, so remove them too (they're filled again from
+the new one):
+
+```sh
+docker build -t vibefpmgui -f docker/Dockerfile .   # (or docker/build-docker.sh)
+docker/dev.sh stop
+docker volume rm vibefpmgui-pixi                    # and vibefpmgui-pixi-amd64, if you made it
+docker/dev.sh start
+```
+
+Only source changes (Python files, tests, the demo)? Nothing to do: the
+development container sees them at once, and `docker/build-docker.sh`
+copies them into the image when it builds (a quick step).

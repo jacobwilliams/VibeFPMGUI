@@ -5,7 +5,14 @@
 #
 # Needs: Docker Desktop running, and XQuartz running with "Allow connections
 # from network clients" ticked (XQuartz → Settings → Security).
-# Run it from the project's folder (the paths below are relative to it).
+#
+#   docker/build-docker.sh
+#
+# Works from any folder: it goes to the project's folder first (the paths
+# below are relative to it).
+
+set -e  # (a step that fails stops it: a failed build doesn't run the old image)
+cd "$(dirname "$0")/.."
 
 # Build the image (named "vibefpmgui") from docker/Dockerfile, with the
 # project's folder as what it's built from: Ubuntu, the system libraries Qt

@@ -93,6 +93,7 @@ def main():
         elif command == "launch":
             program.launch = request  # (answered once the configuration is done, as gdb does)
             event("output", {"category": "stdout", "output": "No source file named x.f90.\n"})  # (gdb's noise)
+            event("output", {"category": "stdout", "output": "\u274c\ufe0f No source file named y.f90.\n"})  # (styled)
         elif command == "setBreakpoints":
             program.source = args["source"]["path"]
             lines = [b["line"] for b in args.get("breakpoints", [])]
