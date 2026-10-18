@@ -114,6 +114,35 @@ def file_labels(path: Path, root: Root | None, project_dir: Path | None) -> tupl
     return folder, package
 
 
+def syntax_formats(lines: list[str], line: int, path: Path, style, formats: dict) -> list | None:
+    """The syntax format of each column of ``lines``' ``line`` (1-based; None:
+    plain), in a Pygments ``style``, lexed with the lines before it for
+    context (so a line inside a multi-line string or comment is colored as
+    one). ``formats``: token type -> format, kept between calls."""
+    if not 0 < line <= len(lines):
+        return None
+    limit = 4000  # (long lines: only their start is shown anyway)
+    context = [s[:limit] for s in lines[max(0, line - 1 - CONTEXT_LINES):line]]
+    chunk = "\n".join(context)
+    offset = len(chunk) - len(context[-1])
+    lexer = hl.lexer_for_path(path)  # (it keeps the positions as they are)
+    result = [None] * len(context[-1])
+    pos = 0
+    try:
+        for ttype, value in lex(chunk, lexer):
+            end = pos + len(value)
+            if end > offset:
+                fmt = formats.get(ttype)
+                if fmt is None:
+                    fmt = formats[ttype] = hl.token_format(style, ttype)
+                for i in range(max(pos, offset), min(end, len(chunk))):
+                    result[i - offset] = fmt
+            pos = end
+    except Exception:  # noqa: BLE001 - never let highlighting break a list
+        return None
+    return result
+
+
 def _badge_font(font: QFont) -> QFont:
     """The small bold font of a problem's badge."""
     small = QFont(font)
@@ -440,27 +469,6 @@ class ResultTree(QTreeWidget):
         key = (path, line)
         if key in self._line_formats:
             return self._line_formats[key]
-        lines = self.file_lines(path)
-        result = None
-        if 0 < line <= len(lines):
-            limit = 4000  # (long lines: only their start is shown anyway)
-            context = [s[:limit] for s in lines[max(0, line - 1 - CONTEXT_LINES):line]]
-            chunk = "\n".join(context)
-            offset = len(chunk) - len(context[-1])
-            lexer = hl.lexer_for_path(path)  # (it keeps the positions as they are)
-            result = [None] * len(context[-1])
-            pos = 0
-            try:
-                for ttype, value in lex(chunk, lexer):
-                    end = pos + len(value)
-                    if end > offset:
-                        fmt = self._formats.get(ttype)
-                        if fmt is None:
-                            fmt = self._formats[ttype] = hl.token_format(self._style, ttype)
-                        for i in range(max(pos, offset), min(end, len(chunk))):
-                            result[i - offset] = fmt
-                    pos = end
-            except Exception:  # noqa: BLE001 - never let highlighting break the list
-                result = None
+        result = syntax_formats(self.file_lines(path), line, path, self._style, self._formats)
         self._line_formats[key] = result
         return result

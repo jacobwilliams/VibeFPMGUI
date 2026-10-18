@@ -170,8 +170,11 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   (or program's) right-click in the *Tests* (or *Run*) panel debugs that
   one; F5 then repeats what was debugged last. Where it stops, the
   file opens at the line, marked with an arrow; the *Debug* panel shows the
-  call stack (click a frame to go there), the variables (arrays and derived
-  types expand), and a console with the program's output and a field to
+  call stack (click a frame to go there), every breakpoint in the project
+  (its dot as in the gutter, its file and line, and its code; click one to
+  go there; right-click to disable, enable or remove it, or all of them;
+  the one the program stopped at is selected), the variables (arrays and
+  derived types expand), and a console with the program's output and a field to
   evaluate an expression (`a(2:3)`, `p%x`). Continue (F5), Step Over (F10),
   Step Into (F11), Step Out (⇧F11), Pause, Stop (⇧F5). On macOS, lldb shows
   no variables of gfortran's programs: debug in the Linux container for those.

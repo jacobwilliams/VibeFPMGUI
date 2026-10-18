@@ -89,6 +89,7 @@ class DebugSession(QObject):
         self.frame_index = 0
         self.thread_id: int | None = None
         self.exit_code: int | None = None
+        self.hit_breakpoints: list[tuple[str, int]] = []  # (file, line as set) the last stop was at
         self._breakpoints = _Breakpoints()
         self._launch: dict = {}
         self._ending = False
@@ -234,6 +235,10 @@ class DebugSession(QObject):
             self._configure()
         elif name == "stopped":
             self.thread_id = body.get("threadId", self.thread_id)
+            # (Which breakpoints, as they were set: the debugger may have moved one to
+            # the next line with code, where the program stops.)
+            ids = self._breakpoints.ids
+            self.hit_breakpoints = [ids[n] for n in body.get("hitBreakpointIds") or [] if n in ids]
             self._set_state(STOPPED)
             self._unplaced()
             why = str(body.get("reason") or "")

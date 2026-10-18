@@ -24,6 +24,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from .breakpoints_list import BreakpointsList
 from .build_monitor import PALETTES, TitleIcon, app_is_light
 from .debug_session import (
     IDLE,
@@ -47,7 +48,10 @@ STATE_TEXT = {IDLE: "Not debugging", STARTING: "Starting…", RUNNING: "Running"
 class DebugPanel(QWidget):
     frame_chosen = Signal(int)  # a call stack row clicked (its index)
 
-    def __init__(self, session: DebugSession, actions: list[QAction], parent=None):
+    def __init__(self, session: DebugSession, actions: list[QAction], breakpoint_actions: list[QAction] = (),
+                 parent=None):
+        """``actions``: the buttons (the Debug menu's); ``breakpoint_actions``: in
+        the breakpoints list's right-click menu (Disable All, Remove All)."""
         super().__init__(parent)
         self.session = session
         self.title_icon = TitleIcon("bug")  # (as the other panels': see refresh_palette)
@@ -79,7 +83,10 @@ class DebugPanel(QWidget):
         self.evaluate_edit.setPlaceholderText("Evaluate in the frame shown (e.g. a(2:3), p%x), Enter; ↑↓ earlier ones")
         self.evaluate_edit.submitted.connect(self._evaluate)
 
-        left = _titled("Call Stack", self.stack)
+        self.breakpoints = BreakpointsList(breakpoint_actions)  # (filled by the window: see window.debugging)
+        left = QSplitter(Qt.Vertical)
+        left.addWidget(_titled("Call Stack", self.stack))
+        left.addWidget(_titled("Breakpoints", self.breakpoints))
         middle = _titled("Variables", self.variables)
         console_box = QWidget()
         console_layout = QVBoxLayout(console_box)

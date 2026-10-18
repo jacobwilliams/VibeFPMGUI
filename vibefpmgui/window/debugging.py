@@ -20,10 +20,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from qtpy.QtCore import QTimer
 from qtpy.QtGui import QAction, QKeySequence, QPalette
 from qtpy.QtWidgets import QApplication, QInputDialog, QMessageBox
 
 from .. import ansi
+from ..breakpoints_list import DISABLED, ENABLED, UNPLACED, BreakpointEntry
 from ..complexity import FORTRAN
 from ..debug_adapters import NOT_FOUND, find_adapter
 from ..debug_panel import DebugPanel
@@ -112,7 +114,20 @@ class DebuggingMixin:
         self._update_command_icons()
         self.debug_panel = DebugPanel(self.debug_session, [
             self.debug_start_action, self.debug_pause_action, self.step_over_action, self.step_in_action,
-            self.step_out_action, self.debug_stop_action])
+            self.step_out_action, self.debug_stop_action],
+            [self.disable_all_breakpoints_action, self.clear_breakpoints_action])
+        listed = self.debug_panel.breakpoints
+        listed.open_requested.connect(lambda path, line: self.navigate_to(path, line, 0))
+        listed.enabled_toggled.connect(self.toggle_listed_breakpoint)
+        listed.remove_requested.connect(self.remove_breakpoint)
+        listed.mono = self._mono_font()  # (the code: as the Search panel's lines; see window.view for changes)
+        listed.lines_for = self._source_lines_of  # (its syntax colors: the lines before for context)
+        self._source_lines: dict[str, tuple[float, list[str]]] = {}  # closed file -> (mtime, lines), for the list
+        # (An open file's edits move its breakpoints and change their code: the list again, once typing pauses.)
+        self._breakpoint_list_timer = QTimer(self)
+        self._breakpoint_list_timer.setSingleShot(True)
+        self._breakpoint_list_timer.setInterval(300)
+        self._breakpoint_list_timer.timeout.connect(self._refresh_breakpoint_list)
         self.debug_panel.frame_chosen.connect(self._frame_chosen)
         # gdb's "Breakpoint 3 at 0x…: file test/x.f90, line 155." (and any other location) open on a click.
         self.debug_links = OutputLinks(self.debug_panel.console,
@@ -246,12 +261,29 @@ class DebuggingMixin:
             step.setEnabled(stopped)
         if not stopped:
             self._show_execution_line(None)
+            self.debug_panel.breakpoints.show_hit(None)
 
     def _debug_stopped(self, frames: list[Frame], why: str):
         self.show_panel(self.debug_panel)
         self._show_frame(self.debug_session.frame_index)
+        self.debug_panel.breakpoints.show_hit(self._stopped_at_breakpoint(frames))
         if why == "exception":
             self.statusBar().showMessage("Stopped: an error in the program (see the Debug panel's call stack)", 8000)
+
+    def _stopped_at_breakpoint(self, frames: list[Frame]) -> tuple[str, int] | None:
+        """The breakpoint the program stopped at (file, line as set), if any:
+        the one the debugger says it hit (maybe moved by it to the next line
+        with code), else one on the line it stopped at."""
+        self._refresh_breakpoints()
+        for path, line in self.debug_session.hit_breakpoints:
+            if line in self.breakpoints.get(path, ()):
+                return path, line
+        top = frames[0] if frames else None
+        if top is not None and top.path:
+            path = str(Path(top.path).resolve())
+            if top.line in self.breakpoints.get(path, ()):
+                return path, top.line
+        return None
 
     def _frame_chosen(self, index: int):
         self.debug_session.select_frame(index)
@@ -290,11 +322,14 @@ class DebuggingMixin:
             code.set_breakpoint_problems(self._breakpoint_problems.get(key, {}))
         code.breakpoints_changed.connect(lambda e=editor: self._editor_breakpoints_changed(e))
         editor.path_changed.connect(lambda _p, e=editor: self._debug_path_changed(e))
+        code.document().contentsChanged.connect(
+            lambda c=code: c.breakpoint_lines() and self._breakpoint_list_timer.start())
 
     def _debug_path_changed(self, editor: EditorTab):
         """Saved under another name (or a new file saved): a source file or not now."""
         editor.editor.debuggable = not editor.untitled and debuggable(editor.path)
         editor.editor.refresh_gutter()
+        self._refresh_breakpoint_list()
 
     def _editor_breakpoints_changed(self, editor: EditorTab):
         if editor.untitled:
@@ -348,6 +383,7 @@ class DebuggingMixin:
         editor = self._open_editor_for(Path(path))
         if editor is not None:
             editor.editor.set_breakpoint_problems(problems)
+        self._refresh_breakpoint_list()
 
     def _cursor_line(self) -> tuple[EditorTab | None, int]:
         editor = self.current_editor()
@@ -405,6 +441,90 @@ class DebuggingMixin:
         none_enabled = not self.any_enabled_breakpoint() and any(self.breakpoints.values())
         self.disable_all_breakpoints_action.setText("Enable All Breakpoints" if none_enabled
                                                     else "Disable All Breakpoints")
+        self._refresh_breakpoint_list()
+
+    # ---------------------------------------------------------- the breakpoints list
+    def _refresh_breakpoint_list(self):
+        """The Debug panel's list: every breakpoint, its state, place and code."""
+        if not hasattr(self, "debug_panel"):
+            return
+        self._refresh_breakpoints()
+        root = self.manifest_path.parent.resolve() if self.manifest_path else None
+        entries = []
+        for path, lines in self.breakpoints.items():
+            off = set(self.disabled_breakpoints.get(path, ()))
+            problems = self._breakpoint_problems.get(path, {})
+            code = self._source_lines_of(path)
+            try:
+                shown = Path(path).relative_to(root).as_posix() if root else Path(path).name
+            except ValueError:  # (outside the project: a dependency's, say)
+                shown = Path(path).name
+            for line in lines:
+                state = DISABLED if line in off else UNPLACED if line in problems else ENABLED
+                entries.append(BreakpointEntry(path, line, state, f"{shown}:{line}",
+                                               code[line - 1] if 0 < line <= len(code) else "", problems.get(line, "")))
+        entries.sort(key=lambda e: (e.shown.rsplit(":", 1)[0].lower(), e.line))
+        self.debug_panel.breakpoints.set_entries(entries)
+
+    def _source_lines_of(self, path: str) -> list[str]:
+        """A file's lines: the editor's if it's open, else the file's (read once, until it changes)."""
+        editor = self._open_editor_for(Path(path))
+        if editor is not None:
+            return editor.editor.toPlainText().split("\n")
+        try:
+            mtime = Path(path).stat().st_mtime
+            cached = self._source_lines.get(path)
+            if cached is None or cached[0] != mtime:
+                cached = (mtime, Path(path).read_text(errors="replace").splitlines())
+                self._source_lines[path] = cached
+            return cached[1]
+        except OSError:
+            return []
+
+    def toggle_listed_breakpoint(self, path: str, line: int):
+        """The list's Enable/Disable Breakpoint."""
+        self.set_breakpoint_enabled(path, line, line in self.disabled_breakpoints.get(path, ()))
+
+    def set_breakpoint_enabled(self, path: str, line: int, enabled: bool):
+        """One breakpoint enabled or disabled, its file open or not."""
+        editor = self._open_editor_for(Path(path))
+        if editor is not None:
+            editor.editor.set_breakpoints_enabled([line], enabled)  # (it tells the debugger, and the list)
+            return
+        if line not in self.breakpoints.get(path, ()):
+            return
+        off = set(self.disabled_breakpoints.get(path, ()))
+        if enabled:
+            off.discard(line)
+        else:
+            off.add(line)
+        if off:
+            self.disabled_breakpoints[path] = sorted(off)
+        else:
+            self.disabled_breakpoints.pop(path, None)
+        self._closed_file_breakpoints_changed(path)
+
+    def remove_breakpoint(self, path: str, line: int):
+        """One breakpoint removed, its file open or not."""
+        editor = self._open_editor_for(Path(path))
+        if editor is not None:
+            if line in editor.editor.breakpoint_lines():
+                editor.editor.toggle_breakpoint(line)  # (it tells the debugger, and the list)
+            return
+        lines = [n for n in self.breakpoints.get(path, ()) if n != line]
+        off = [n for n in self.disabled_breakpoints.get(path, ()) if n != line]
+        for store, kept in ((self.breakpoints, lines), (self.disabled_breakpoints, off)):
+            if kept:
+                store[path] = kept
+            else:
+                store.pop(path, None)
+        self._closed_file_breakpoints_changed(path)
+
+    def _closed_file_breakpoints_changed(self, path: str):
+        self._breakpoint_problems.pop(path, None)
+        off = set(self.disabled_breakpoints.get(path, ()))
+        self.debug_session.set_breakpoints(path, [n for n in self.breakpoints.get(path, ()) if n not in off])
+        self._update_breakpoint_actions()
 
     def set_session_breakpoints(self, entries: list):
         """The breakpoints saved with the project's session (see _save_session)."""

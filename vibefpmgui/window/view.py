@@ -228,6 +228,8 @@ class ViewMixin:
         """The chosen Pygments style, or one matching the system's light/dark mode."""
         for tree in getattr(self, "result_trees", []):
             tree.refresh_style()
+        if hasattr(self, "debug_panel"):
+            self.debug_panel.breakpoints.refresh_style()
 
     def _fill_style_menu(self):
         """View → Syntax Colors: Automatic, then every installed Pygments style."""
@@ -380,6 +382,8 @@ class ViewMixin:
         for tree in self.result_trees:
             tree.mono = mono
             tree.doItemsLayout()
+        self.debug_panel.breakpoints.mono = mono
+        self.debug_panel.breakpoints.viewport().update()
         self.graph_view.refresh_fonts()
         if self.graph:
             self.show_package(self.graph_view.selected or self.graph.root)
