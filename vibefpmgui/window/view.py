@@ -327,6 +327,7 @@ class ViewMixin:
             self.coverage_panel.refresh_palette()
             self.git_panel.refresh_palette()
             self.complexity_panel.refresh_palette()
+            self.debug_panel.refresh_palette()
             self.terminal_panel.refresh_colors()
             for editor in self.editors():
                 editor.refresh_style()

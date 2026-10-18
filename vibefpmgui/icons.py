@@ -142,6 +142,21 @@ def _trash(p: QPainter, c: QColor):
     p.drawLine(QPointF(13.8, 10), QPointF(13.8, 16.5))
 
 
+def _bug(p: QPainter, c: QColor):
+    """A beetle: debugging."""
+    p.setPen(_pen(c))
+    p.setBrush(Qt.NoBrush)
+    p.drawEllipse(QRectF(6.8, 8.6, 10.4, 12.6))  # body
+    p.drawLine(QPointF(12, 9.2), QPointF(12, 20.8))  # (its wing cases' edge)
+    for side in (-1, 1):  # legs and antennae, mirrored
+        for (x1, y1), (x2, y2) in (((7.4, 12.2), (3.6, 10.4)), ((6.9, 15.4), (3.2, 15.4)),
+                                   ((7.6, 18.6), (4.0, 20.6)), ((10.6, 5.2), (8.8, 2.6))):
+            p.drawLine(QPointF(12 + side * (x1 - 12), y1), QPointF(12 + side * (x2 - 12), y2))
+    p.setPen(Qt.NoPen)
+    p.setBrush(c)
+    p.drawEllipse(QPointF(12, 7.2), 3.2, 2.6)  # head
+
+
 def _pause(p: QPainter, c: QColor):
     p.setPen(Qt.NoPen)
     p.setBrush(c)
@@ -303,6 +318,7 @@ DRAWERS = {
     "clean-all": _trash,
     "stop": _stop,
     "pause": _pause,
+    "bug": _bug,
     "continue": _continue,
     "step-over": _step_over,
     "step-into": _step_into,

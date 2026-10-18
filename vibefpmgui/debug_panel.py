@@ -24,6 +24,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from .build_monitor import PALETTES, TitleIcon, app_is_light
 from .debug_session import (
     IDLE,
     RUNNING,
@@ -49,10 +50,13 @@ class DebugPanel(QWidget):
     def __init__(self, session: DebugSession, actions: list[QAction], parent=None):
         super().__init__(parent)
         self.session = session
+        self.title_icon = TitleIcon("bug")  # (as the other panels': see refresh_palette)
         self.title = QLabel()
         self.title.setTextInteractionFlags(Qt.TextSelectableByMouse)
         header = QHBoxLayout()
         header.setContentsMargins(8, 4, 6, 2)
+        header.addWidget(self.title_icon)
+        header.addSpacing(2)
         header.addWidget(self.title, 1)
         for action in actions:  # (the Debug menu's: Continue, Step Over…; their icons, tooltips saying which)
             button = QToolButton()
@@ -102,6 +106,11 @@ class DebugPanel(QWidget):
         session.output.connect(self.append)
         session.ended.connect(lambda why: self.append("console", f"[{why}]\n"))
         self._state_changed(session.state)
+        self.refresh_palette()
+
+    def refresh_palette(self):
+        """The icon in the theme's text color (again when the theme changes)."""
+        self.title_icon.draw(PALETTES["light" if app_is_light() else "dark"]["text"], self.title)
 
     # ---------------------------------------------------------- state
     def _state_changed(self, state: str):

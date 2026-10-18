@@ -289,6 +289,21 @@ def test_the_panel_s_buttons_are_icons_with_tooltips(window):
     assert window.command_icons[buttons[-1].defaultAction()] == "stop"  # (red, as the toolbar's)
 
 
+def test_the_panel_s_title_has_the_bug_icon(window):
+    """As the Build panel's hammer: in front of the title, in the theme's text color."""
+    from vibefpmgui.build_monitor import PALETTES, app_is_light
+
+    icon = window.debug_panel.title_icon
+    assert icon.name == "bug" and not icon.pixmap().isNull()
+    header = window.debug_panel.layout().itemAt(0).layout()
+    assert header.indexOf(icon) < header.indexOf(window.debug_panel.title)
+    text = PALETTES["light" if app_is_light() else "dark"]["text"]
+    image = icon.pixmap().toImage()
+    colors = {image.pixelColor(x, y).name() for x in range(image.width()) for y in range(image.height())
+              if image.pixelColor(x, y).alpha() == 255}
+    assert colors == {text.lower()}
+
+
 def test_paused_start_becomes_continue(debugging):
     window = debugging
     start = panel_buttons(window)[0]
