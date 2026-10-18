@@ -142,16 +142,6 @@ def test_gdbs_own_messages_arent_the_programs_output(qtbot, session, source):
     assert not any("No source file named" in text for text in outputs)  # (with "❌️" in front too)
 
 
-def test_gdb_is_started_with_its_styling_off(monkeypatch):
-    """Else, given a terminal and a UTF-8 locale, gdb puts "❌️" in front of
-    its messages (and may color them)."""
-    monkeypatch.setattr(debug_adapters.shutil, "which", lambda name: "/usr/bin/gdb")
-    monkeypatch.setattr(debug_adapters, "_gdb_version", lambda gdb: (18, 1))
-    command = debug_adapters.gdb_adapter().command
-    assert command[command.index("-iex") + 1] == "set style enabled off"
-    assert command.index("-iex") < command.index("--interpreter=dap")
-
-
 def test_scopes_and_variables(qtbot, session, source):
     scopes = []
     session.scopes_ready.connect(lambda index, found: scopes.append(found))

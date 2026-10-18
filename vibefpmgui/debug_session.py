@@ -27,8 +27,8 @@ MAX_ELEMENTS = 1000  # an array's elements asked for at once (a big one: the fir
 
 # gdb's own messages, sent as the program's output: breakpoints set before the
 # program is loaded (they're placed when it is: see breakpoint events). With its
-# styling on, gdb puts a symbol in front ("❌️ No source file…"; it's started
-# with styling off: see debug_adapters).
+# styling on (a terminal, a UTF-8 locale), gdb puts a symbol in front: "❌️ No
+# source file…".
 _GDB_NOISE = re.compile(r"^[^\w\s]*\s*(No source file named .*\.|Breakpoint \d+ \(.*\) pending\.)\s*$")
 
 
