@@ -343,9 +343,15 @@ def delete_folders(paths: list[Path]) -> list[str]:
 
 
 # --------------------------------------------------------------------- view
+def executable_name(path: Path) -> str:
+    """The program's (test's, example's) name, as fpm knows it (no ".exe")."""
+    return path.stem if path.suffix.lower() == ".exe" else path.name
+
+
 class ConfigCard(QFrame):
     run_requested = Signal(str)
     run_in_terminal_requested = Signal(str)
+    debug_requested = Signal(str, str)  # kind ("program", "test", "example"), name
     reveal_requested = Signal(str)
     delete_requested = Signal(object)  # Configuration
 
@@ -428,6 +434,13 @@ class ConfigCard(QFrame):
             run.setAttribute(Qt.WA_LayoutUsesWidgetRect)
             run.clicked.connect(lambda _=False, p=str(program): self.run_requested.emit(p))
             row.addWidget(run)
+            name = executable_name(program)
+            debug = QPushButton("Debug")
+            debug.setToolTip(f"Debug {name}: built again with the Build options (the debug profile, if none is "
+                             "chosen), then run under the debugger (Debug menu)")
+            debug.setAttribute(Qt.WA_LayoutUsesWidgetRect)
+            debug.clicked.connect(lambda _=False, k=kind, n=name: self.debug_requested.emit(k, n))
+            row.addWidget(debug)
             layout.addLayout(row)
         if not config.programs and not config.libraries:
             layout.addWidget(QLabel(f"<span style='color:{muted}'>No programs or library here "
@@ -444,6 +457,7 @@ class ConfigCard(QFrame):
                 menu.addAction("Run", lambda: self.run_requested.emit(str(path)))
                 action = menu.addAction("Run in Terminal", lambda: self.run_in_terminal_requested.emit(str(path)))
                 action.setToolTip("Type the command in the Terminal panel (for programs that read input)")
+                menu.addAction("Debug", lambda: self.debug_requested.emit(kind, executable_name(path)))
             menu.addAction(reveal_label(), lambda: self.reveal_requested.emit(str(path)))
             menu.addAction("Copy Path", lambda: QApplication.clipboard().setText(str(path)))
             return menu
@@ -466,6 +480,7 @@ class BuildOutputsView(QWidget):
 
     run_requested = Signal(str)
     run_in_terminal_requested = Signal(str)
+    debug_requested = Signal(str, str)  # kind, name (see ConfigCard)
     reveal_requested = Signal(str)
     delete_requested = Signal(object)   # list[Configuration]
     refresh_requested = Signal()
@@ -521,6 +536,7 @@ class BuildOutputsView(QWidget):
             card = ConfigCard(config, pal)
             card.run_requested.connect(self.run_requested)
             card.run_in_terminal_requested.connect(self.run_in_terminal_requested)
+            card.debug_requested.connect(self.debug_requested)
             card.reveal_requested.connect(self.reveal_requested)
             card.delete_requested.connect(lambda c: self.delete_requested.emit([c]))
             card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)

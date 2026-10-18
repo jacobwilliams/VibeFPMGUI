@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from qtpy.QtWidgets import QApplication
 
@@ -38,7 +40,7 @@ def actions(menu) -> dict:
 def test_a_program_s_menu(qtbot, card):
     program = str(card.config.programs[0][1])
     menu = actions(menu_at(card, "program"))
-    assert list(menu) == ["Run", "Run in Terminal", reveal_label(), "Copy Path"]
+    assert list(menu) == ["Run", "Run in Terminal", "Debug", reveal_label(), "Copy Path"]
     for text, signal in (("Run", card.run_requested), ("Run in Terminal", card.run_in_terminal_requested),
                          (reveal_label(), card.reveal_requested)):
         with qtbot.waitSignal(signal) as blocker:
@@ -46,6 +48,24 @@ def test_a_program_s_menu(qtbot, card):
         assert blocker.args == [program]
     menu["Copy Path"].trigger()
     assert QApplication.clipboard().text() == program
+    with qtbot.waitSignal(card.debug_requested) as blocker:
+        menu["Debug"].trigger()
+    assert blocker.args == ["program", Path(program).name]
+
+
+def test_a_debug_button_beside_run(qtbot, card):
+    from qtpy.QtWidgets import QPushButton
+
+    buttons = {b.text(): b for b in card.findChildren(QPushButton)}
+    assert {"Run", "Debug"} <= set(buttons)
+    with qtbot.waitSignal(card.debug_requested) as blocker:
+        buttons["Debug"].click()
+    assert blocker.args == ["program", card.config.programs[0][1].name]
+
+
+def test_a_program_s_name_without_exe():
+    assert bo.executable_name(Path("build/x/app/demo.exe")) == "demo"
+    assert bo.executable_name(Path("build/x/test/check_fast")) == "check_fast"
 
 
 def test_a_library_s_menu(qtbot, card):

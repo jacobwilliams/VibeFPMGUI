@@ -35,6 +35,7 @@ class BuildOutputsMixin:
         self.outputs_view = bo.BuildOutputsView()
         self.outputs_view.run_requested.connect(self.run_program)
         self.outputs_view.run_in_terminal_requested.connect(self.run_program_in_terminal)
+        self.outputs_view.debug_requested.connect(self.debug_named)  # (built again: see window.debugging)
         self.outputs_view.reveal_requested.connect(reveal_in_file_manager)
         self.outputs_view.delete_requested.connect(self.delete_configurations)
         self.outputs_view.refresh_requested.connect(self.refresh_build_outputs)

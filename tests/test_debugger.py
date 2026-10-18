@@ -431,3 +431,12 @@ def test_no_test_to_debug(window, fpm_runs):
     window.start_debugging("test")
     window._after_debug_build(0, False)
     assert "fpm ran no test" in window.debug_panel.console.toPlainText()
+
+
+def test_debug_from_build_outputs(window, fpm_runs):
+    """A Debug button there: that program (test, example), built again with the
+    Build options, as Start Debugging does (its build there may have no debug
+    information: built without a profile)."""
+    window.outputs_view.debug_requested.emit("example", "demo_example")
+    (sub, args), = fpm_runs
+    assert sub == ["run"] and "--example" in args and "demo_example" in args and "--profile" in args
