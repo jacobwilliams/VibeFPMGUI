@@ -573,6 +573,9 @@ pixi run test tests/test_editor.py  # one file; add -k word_wrap for one test
 pixi run coverage                   # all, with a code coverage report in web/coverage
 ```
 
+To run them (or the app) on Linux from a Mac, as CI does, use the Docker
+image in [docker/](docker/README.md).
+
 The tests in [tests/](tests) drive the real windows with
 [pytest-qt](https://pytest-qt.readthedocs.io). They use Qt's offscreen
 platform, so no windows appear and they also run on CI machines without a

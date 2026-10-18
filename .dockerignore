@@ -1,0 +1,10 @@
+# Not sent to `docker build` (see docker/Dockerfile): the Mac's pixi
+# environment (the container makes its own), build output and caches.
+.pixi/
+build/
+web/coverage/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+.ruff_cache/
+.coverage

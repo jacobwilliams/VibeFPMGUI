@@ -2,7 +2,7 @@
 authors = ["Jacob Williams <jacobwilliams@users.noreply.github.com>"]
 channels = ["conda-forge"]
 name = "VibeFPMGUI"
-platforms = ["osx-arm64", "linux-64", "win-64"]
+platforms = ["osx-arm64", "linux-64", "win-64", "linux-aarch64"]
 version = "0.0.6"
 
 [tasks]
@@ -44,3 +44,11 @@ fortitude-lint = ">=0.9.2, <0.10"
 
 [target.win-64.dependencies]
 pywinpty = ">=3.0.5,<4"
+
+[target.linux-aarch64.dependencies]
+gdb = ">=18.1,<19"
+gxx = "15.*"
+
+[target.linux-64.dependencies]
+gdb = ">=18.1,<19"
+gxx = "15.*"
