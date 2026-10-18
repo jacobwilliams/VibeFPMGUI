@@ -32,6 +32,7 @@ from .editor_gutter import EditorGutterMixin, LineNumberArea
 from .editor_issues import EditorIssuesMixin
 from .editor_shared import (
     COVERAGE_COLORS,
+    EXECUTION_COLOR,
     MARKER_COLORS,
     MODIFIER_KEYS,
     backspace_length,
@@ -62,6 +63,7 @@ class CodeEditor(EditorGutterMixin, EditorIssuesMixin, MultiCursorMixin, LineEdi
     typed = Signal(str)                # a key that changed the text (after it did; "\b" = Backspace)
     completion_chosen = Signal(object)  # Enter/Tab in the completion list
     cursors_changed = Signal()          # extra cursors added or removed (multiple cursors)
+    breakpoints_changed = Signal()      # a breakpoint added or removed (a click in the gutter, F9)
 
     indent_width = 4   # View → Indentation (set by the window)
     use_tabs = False
@@ -84,6 +86,11 @@ class CodeEditor(EditorGutterMixin, EditorIssuesMixin, MultiCursorMixin, LineEdi
         self.markers: dict[int, list[tuple[str, str]]] = {}  # line -> [(severity, message)]
         self.change_marks: dict[int, str] = {}                  # line -> "unsaved" / "saved"
         self.deletions: dict[int, tuple[str, int]] = {}          # line -> (kind, lines deleted above it)
+        # Breakpoints (see editor_gutter): cursors at their lines' starts, so they move with edits.
+        self.debuggable = False  # a source file the debugger can stop in: a breakpoint column
+        self._breakpoints: list[QTextCursor] = []
+        self.breakpoint_problems: dict[int, str] = {}  # line -> why the debugger couldn't place it
+        self.execution_line: int | None = None  # where the program is stopped (an arrow, the line tinted)
         self.minimap = None  # the vibefpmgui.minimap.Minimap beside it, if any
         self.find_selections: list[tuple[int, int]] = []  # the find bar's matches: (start, end) positions
         self.coverage: dict[int, int] = {}  # line -> times the tests ran it (see set_coverage)
@@ -341,6 +348,12 @@ class CodeEditor(EditorGutterMixin, EditorIssuesMixin, MultiCursorMixin, LineEdi
             color = QColor(self.palette().color(QPalette.Highlight))
             color.setAlpha(28)
             selections += self._line_highlight(self.textCursor().block(), color)
+        if self.execution_line:  # (where the debugger stopped)
+            block = self.document().findBlockByNumber(self.execution_line - 1)
+            if block.isValid():
+                tint = QColor(EXECUTION_COLOR)
+                tint.setAlpha(70)
+                selections += self._line_highlight(block, tint)
         selected = QColor(self.palette().color(QPalette.Highlight))
         for c in self.extra_cursors:
             if c.hasSelection():

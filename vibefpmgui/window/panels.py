@@ -131,7 +131,8 @@ class PanelsMixin:
             ("options", "Build options", options), ("files", "Project files", files_box),
             ("graph", "Dependency graph", graph_tab), ("outputs", "Build outputs", self.outputs_view),
             ("build", "Build", self.build_monitor), ("tests", "Tests", self.test_monitor),
-            ("run", "Run", self.run_monitor), ("coverage", "Coverage", self.coverage_panel),
+            ("run", "Run", self.run_monitor), ("debug", "Debug", self.debug_panel),
+            ("coverage", "Coverage", self.coverage_panel),
             ("complexity", "Complexity", self.complexity_panel),
             ("problems", "Problems", self.problems_panel),
             ("review", "Review", self.review_monitor),
@@ -235,7 +236,8 @@ class PanelsMixin:
         self.addDockWidget(Qt.BottomDockWidgetArea, d["build"])
         # (Output beside Build first: split next to a stacked panel, it would be stacked too.)
         self.splitDockWidget(d["build"], d["output"], Qt.Horizontal)
-        for name in ("tests", "run", "coverage", "complexity", "problems", "review", "references", "search", "git", "terminal"):
+        for name in ("tests", "run", "debug", "coverage", "complexity", "problems", "review", "references", "search",
+                     "git", "terminal"):
             self.tabifyDockWidget(d["build"], d[name])
         for dock in d.values():
             dock.setFloating(False)  # (after it's placed: a floating one stays floating otherwise)

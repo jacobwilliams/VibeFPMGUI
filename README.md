@@ -153,6 +153,20 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   (git in a terminal), and with *Refresh*. Read with the
   [git](https://git-scm.com) program, which must be installed (on the
   PATH); without it the panel says so.
+* Debugging, with gdb (14 or newer: Linux, and the [Docker image](docker/README.md)
+  on a Mac) or lldb-dap, through their Debug Adapter Protocol. Click left of
+  a line number (or F9) for a breakpoint (hollow: the debugger couldn't place
+  it, e.g. no code on that line); breakpoints move with your edits and are
+  kept with the project. *Debug → Start Debugging* (F5) builds with the
+  Build options (with the debug profile, for debug information, unless a
+  profile or features are chosen) and runs the program under the debugger
+  (several programs and no *Target*: it asks which). Where it stops, the
+  file opens at the line, marked with an arrow; the *Debug* panel shows the
+  call stack (click a frame to go there), the variables (arrays and derived
+  types expand), and a console with the program's output and a field to
+  evaluate an expression (`a(2:3)`, `p%x`). Continue (F5), Step Over (F10),
+  Step Into (F11), Step Out (⇧F11), Pause, Stop (⇧F5). On macOS, lldb shows
+  no variables of gfortran's programs: debug in the Linux container for those.
 * Test coverage: tick *Build options → Coverage* (gfortran) and run Test.
   fpm builds with `--coverage` (a build of its own), the tests' counts are
   read with gcov (which comes with gfortran) after the run, and the

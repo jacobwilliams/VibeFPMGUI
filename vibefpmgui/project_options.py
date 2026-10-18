@@ -121,6 +121,9 @@ def _session_paths(state: dict, root: Path, change) -> dict:
             f["path"] = change(f["path"], root)
     if isinstance(state.get("current"), str):
         state["current"] = change(state["current"], root)
+    for entry in state.get("breakpoints") or []:  # (see window.debugging)
+        if isinstance(entry, dict) and isinstance(entry.get("path"), str):
+            entry["path"] = change(entry["path"], root)
     tree = state.get("tree")
     if isinstance(tree, dict):
         tree["expanded"] = [p if not isinstance(p, str) or p.startswith("group:") else change(p, root)

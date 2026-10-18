@@ -318,13 +318,15 @@ class ProjectMixin:
             except (TypeError, ValueError):
                 tree = None
         state["tree"] = tree
+        state["breakpoints"] = self.session_breakpoints()  # (see window.debugging)
         self.settings.setValue(self._session_key(), json.dumps(state))
 
     def _restore_session(self):
         try:
             state = json.loads(self.settings.value(self._session_key(), "") or "{}")
         except (TypeError, ValueError):
-            return
+            state = {}
+        self.set_session_breakpoints(state.get("breakpoints"))  # (before the files: they show theirs)
         if state.get("tree"):
             self.project_tree.restore_view_state(state["tree"])
         self._session_busy = True
@@ -364,6 +366,7 @@ class ProjectMixin:
         """Empty the output console and the build/test panels (``show_build``:
         and bring Build to the front; not for the first project opened, so
         the panels in front are those of the layout restored)."""
+        self.debug_session.stop()  # (another project's program)
         self.show_test_output("")
         self.console.clear()
         self.test_output.clear()

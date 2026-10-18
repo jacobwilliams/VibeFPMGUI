@@ -359,7 +359,7 @@ def test_gutter_card_shows_a_fortls_note_once(window, project):
     editor.show_lsp_diagnostics([lsp.LspIssue(2, 3, 2, 8, "Variable \"count\" masks variable in parent scope")])
     code = editor.editor
     y = code.cursorRect(QTextCursor(code.document().findBlockByNumber(1))).center().y()
-    point = QPoint(4, y)
+    point = QPoint(code._breakpoint_column() + 4, y)  # (past the breakpoint column)
     code.gutter.event(QHelpEvent(QEvent.ToolTip, point, code.gutter.mapToGlobal(point)))
     text = code.hover_popup.browser.toPlainText()
     assert "FORTLS (checks the saved file)" in text

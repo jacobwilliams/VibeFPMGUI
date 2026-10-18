@@ -203,13 +203,15 @@ def stack_of(window, name) -> set[str]:
 
 def test_default_panels(window):
     assert areas(window) == {"options": "left", "files": "left", "graph": "right", "outputs": "right",
-                             "build": "bottom", "tests": "bottom", "run": "bottom", "coverage": "bottom",
+                             "build": "bottom", "tests": "bottom", "run": "bottom", "debug": "bottom",
+                             "coverage": "bottom",
                              "complexity": "bottom",
                              "problems": "bottom", "review": "bottom",
                              "references": "bottom", "search": "bottom", "git": "bottom", "terminal": "bottom",
                              "output": "bottom"}
     assert stack_of(window, "graph") == {"graph", "outputs"}
-    assert stack_of(window, "build") == {"build", "tests", "run", "coverage", "complexity", "problems", "review",
+    assert stack_of(window, "build") == {"build", "tests", "run", "debug", "coverage", "complexity", "problems",
+                                         "review",
                                          "references",
                                              "search", "git", "terminal"}
     assert "output" not in stack_of(window, "build")  # (beside the stack)

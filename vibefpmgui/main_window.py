@@ -31,6 +31,7 @@ from .window.build_outputs import BuildOutputsMixin
 from .window.complexity import ComplexityMixin
 from .window.configs import ConfigsMixin
 from .window.coverage import CoverageMixin
+from .window.debugging import DebuggingMixin
 from .window.editing import EditingMixin
 from .window.editor_tabs import EditorTabsMixin
 from .window.git import GitMixin
@@ -48,7 +49,7 @@ from .window.view import ViewMixin
 
 class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
                  EditorTabsMixin, EditingMixin, LanguageMixin, SearchMixin, GitMixin,
-                 RunningMixin, ConfigsMixin, ProjectOptionsMixin, BuildOutputsMixin, OutputMixin, TestingMixin, CoverageMixin, ComplexityMixin,
+                 RunningMixin, DebuggingMixin, ConfigsMixin, ProjectOptionsMixin, BuildOutputsMixin, OutputMixin, TestingMixin, CoverageMixin, ComplexityMixin,
                  AIMixin, AIChatMixin,
                  QMainWindow):
     """The window. Each part of it is a mixin in `vibefpmgui.window`; this
@@ -118,6 +119,7 @@ class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
         self._build_view_menu()
         options = self._build_options_panel()
         self._build_commands()
+        self._build_debugging()
         self._build_features_menu()
         self._build_ai_menu()
         files_box = self._build_project_files()
@@ -149,7 +151,8 @@ class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
             layout, s.value("panels_front", [], type=list) or [])
         # A layout saved before a panel existed: the panel goes in the stack of
         # the one it's next to by default.
-        for name, beside in (("coverage", "tests"), ("git", "search"), ("complexity", "coverage")):
+        for name, beside in (("coverage", "tests"), ("git", "search"), ("complexity", "coverage"),
+                             ("debug", "run")):
             dock = self.docks[name]
             if self._layout_restored and self.dockWidgetArea(dock) == Qt.NoDockWidgetArea:
                 self.addDockWidget(Qt.BottomDockWidgetArea, dock)
@@ -208,6 +211,7 @@ class MainWindow(PanelsMixin, ViewMixin, ProjectMixin, PackagesMixin,
             self._stop_and_wait(2000)
         for editor in self.editors():
             editor.close_down()
+        self.debug_session.stop()
         self.lsp_client.stop()
         self.search_panel.shutdown()
         self.terminal_panel.shutdown()

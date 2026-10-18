@@ -15,14 +15,17 @@ docker build -t vibefpmgui -f docker/Dockerfile .
 
 # Run the test suite in the container (no display needed: Qt's offscreen
 # platform). Takes a few minutes; uncomment to run it before the app.
-# docker run --rm vibefpmgui pixi run test
+# docker run --rm --init vibefpmgui pixi run test
 
 # Let programs connecting from this Mac (the container's, through Docker)
 # show windows on XQuartz. Needed each time XQuartz starts.
 xhost +localhost
 
 # Run the app in a new container from the image: --rm removes the container
-# when the app quits, -it keeps it attached to this terminal (Ctrl-C stops
-# it), and DISPLAY tells Qt to show the window on XQuartz on the Mac
-# (host.docker.internal is the Mac, seen from the container).
-docker run --rm -it -e DISPLAY=host.docker.internal:0 vibefpmgui
+# when the app quits, --init gives it a process that cleans up the programs
+# it runs once they end (fpm, gdb, tests), -it keeps it attached to this
+# terminal (Ctrl-C stops it), the two security options let gdb debug the
+# programs (Debug → Start Debugging), and DISPLAY tells Qt to show the window
+# on XQuartz on the Mac (host.docker.internal is the Mac, seen from the container).
+docker run --rm --init -it --cap-add=SYS_PTRACE --security-opt seccomp=unconfined \
+    -e DISPLAY=host.docker.internal:0 vibefpmgui

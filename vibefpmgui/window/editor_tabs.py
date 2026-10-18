@@ -348,6 +348,7 @@ class EditorTabsMixin:
         editor.editor.textChanged.connect(  # (a new file not saved yet: not in Find in Files)
             lambda e=editor: None if e.untitled else self.search_panel.file_changed(e.path))
         editor.attach_lsp(self.lsp_client)
+        self._debug_editor_added(editor)  # (its breakpoints: see window.debugging)
         # (Changing a preview's text keeps it open.)
         editor.dirty_changed.connect(lambda dirty, e=editor: dirty and self._make_permanent(e))
         if index >= 0:
@@ -360,6 +361,7 @@ class EditorTabsMixin:
 
     def _close_tab(self, editor: EditorTab):
         """Close an editor tab without asking (see close_editor for that)."""
+        self._debug_editor_closing(editor)  # (its breakpoints kept)
         editor.close_down()
         self.tabs.removeTab(self.tabs.indexOf(editor))
         editor.deleteLater()

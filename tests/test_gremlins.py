@@ -65,7 +65,7 @@ def test_gutter_tooltip(editor, monkeypatch):
     shown = []
     monkeypatch.setattr(QToolTip, "showText", lambda pos, text, *a: shown.append(text))
     y = code.cursorRect(QTextCursor(code.document().findBlockByNumber(3))).center().y()
-    point = QPoint(4, y)
+    point = QPoint(code._breakpoint_column() + 4, y)  # (past the breakpoint column)
     code.gutter.event(QHelpEvent(QEvent.ToolTip, point, code.gutter.mapToGlobal(point)))
     assert shown and "zero-width space" in shown[-1]
 

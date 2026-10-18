@@ -239,7 +239,8 @@ def test_partial_lines_get_amber_bars(window, project):
     assert code.coverage_branches == {5: (1, 2)} and code.coverage_state(5) == "partial"
     image = code.gutter.grab().toImage()
     y = code.blockBoundingGeometry(code.document().findBlockByNumber(4)).translated(code.contentOffset()).center().y()
-    assert image.pixelColor(1, int(y * image.devicePixelRatio())).name() == "#f08c00"
+    x = code._breakpoint_column() + 1  # (the bars: after the breakpoint column, at the left edge)
+    assert image.pixelColor(int(x * image.devicePixelRatio()), int(y * image.devicePixelRatio())).name() == "#f08c00"
 
 
 def test_next_and_previous_missed_line(window, project):

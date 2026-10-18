@@ -116,7 +116,8 @@ class RunningMixin:
         # Hovering an option (or its label) shows the fpm flag it becomes.
         for widget, flag, text in [
             (self.profile_combo, "--profile PROF",
-             "Build profile: debug or release. (default) leaves it to fpm, which uses debug."),
+             ("Build profile: debug or release. (default) passes none: fpm then uses no profile's flags "
+              "(no -g; Start Debugging uses debug).")),
             (self.features_button, "--features LIST",
              "Features to enable (the project's fpm.toml declares them). Can't be combined with a profile."),
             (self.compiler_edit, "--compiler NAME", "Fortran compiler to use. fpm uses gfortran by default."),
@@ -434,7 +435,7 @@ class RunningMixin:
         # doesn't build; "fpm test" builds first, so its output goes to the
         # build grid until the first test starts (see _test_line).
         self._monitoring = sub[0] in ("build", "run", "test") and phase != "list"
-        self._test_building = phase in ("marked", "collect")  # fpm builds before running
+        self._test_building = phase in ("marked", "collect", "debug")  # fpm builds before running
         self._process_label = "fpm"
         self._revs_before = (dep_updates.read_cache_revs(self.manifest_path.parent)
                              if sub[0] == "update" else None)
@@ -490,11 +491,11 @@ class RunningMixin:
         # fpm redraws progress lines with \r; keep only the final state of each line.
         data = data.replace("\r\n", "\n")
         data = "\n".join(line.rsplit("\r", 1)[-1] for line in data.split("\n"))
-        if self._phase in ("marked", "direct", "collect"):
+        if self._phase in ("marked", "direct", "collect", "debug"):
             # Line-buffered so the test markers can be taken out of the output.
             lines = (self._partial + data).split("\n")
             self._partial = lines.pop()
-            handle = self._collect_line if self._phase == "collect" else self._test_line
+            handle = self._line_handler()
             self._append("".join(handle(line) for line in lines), colored=True)
             return
         self._append(data, colored=True)
@@ -508,6 +509,10 @@ class RunningMixin:
             for line in lines:
                 self.build_monitor.feed_line(line)
 
+    def _line_handler(self):
+        """What reads each line of a run's output, per phase."""
+        return {"collect": self._collect_line, "debug": self._debug_line}.get(self._phase, self._test_line)
+
     def _build_part_done(self):
         """The build part of "fpm test" is over: show the tests."""
         self._test_building = False
@@ -519,9 +524,9 @@ class RunningMixin:
         self.show_panel(self._marker_monitor())
 
     def _flush_monitor(self, exit_code: int, stopped: bool):
-        if self._phase in ("marked", "direct", "collect"):
+        if self._phase in ("marked", "direct", "collect", "debug"):
             if self._partial:
-                handle = self._collect_line if self._phase == "collect" else self._test_line
+                handle = self._line_handler()
                 self._append(handle(self._partial), colored=True)
             if self._held_blank:
                 self._append("\n")
@@ -556,6 +561,8 @@ class RunningMixin:
             self._after_marked(code, crashed)
         elif phase == "collect":
             self._after_collect(code, crashed)
+        elif phase == "debug":
+            self._after_debug_build(code, crashed)
 
     def _process_error(self, error):
         if error == QProcess.FailedToStart:

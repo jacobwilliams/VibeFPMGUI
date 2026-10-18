@@ -30,6 +30,7 @@ from qtpy.QtGui import QPalette, QTextDocument
 
 from . import manifest as m
 from .project_tree import fpm_folders
+from .wire import FrameReader, frame
 
 FORTRAN_EXTS = {".f", ".for", ".ftn", ".f77", ".f90", ".f95", ".f03", ".f08", ".f18", ".f23", ".fpp"}
 CONFIG_FILES = (".fortlsrc", ".fortls.json", ".fortls")
@@ -354,7 +355,7 @@ class LspClient(QObject):
         self.process: QProcess | None = None
         self.root: Path | None = None
         self.args: list[str] = []
-        self._buffer = b""
+        self._reader = FrameReader()
         self._next_id = 0
         self._callbacks: dict[int, Callable] = {}
         self._ready = False
@@ -395,7 +396,7 @@ class LspClient(QObject):
             process.deleteLater()
 
     def _reset(self):
-        self._buffer = b""
+        self._reader.clear()
         self._callbacks.clear()
         self._queue.clear()
         self._versions.clear()
@@ -437,8 +438,7 @@ class LspClient(QObject):
     def _send(self, message: dict):
         if self.process is None:
             return
-        body = json.dumps(message).encode("utf-8")
-        self.process.write(b"Content-Length: %d\r\n\r\n" % len(body) + body)
+        self.process.write(frame(message))
 
     def _post(self, message: dict):
         if self._ready:
@@ -461,23 +461,7 @@ class LspClient(QObject):
     def _read(self):
         if self.process is None:
             return
-        self._buffer += bytes(self.process.readAllStandardOutput())
-        while True:
-            end = self._buffer.find(b"\r\n\r\n")
-            if end < 0:
-                return
-            match = re.search(rb"Content-Length:\s*(\d+)", self._buffer[:end], re.IGNORECASE)
-            if not match:  # not a header: skip it
-                self._buffer = self._buffer[end + 4:]
-                continue
-            length = int(match.group(1))
-            if len(self._buffer) < end + 4 + length:
-                return
-            body, self._buffer = self._buffer[end + 4:end + 4 + length], self._buffer[end + 4 + length:]
-            try:
-                message = json.loads(body)
-            except ValueError:
-                continue
+        for message in self._reader.feed(bytes(self.process.readAllStandardOutput())):
             self._dispatch(message)
 
     def _dispatch(self, message: dict):

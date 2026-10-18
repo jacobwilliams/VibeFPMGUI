@@ -37,8 +37,8 @@ ones reuse it unless `pixi.toml` or `pixi.lock` changed.
 ## Run the tests (no display needed)
 
 ```sh
-docker run --rm vibefpmgui pixi run test
-docker run --rm vibefpmgui pixi run lint
+docker run --rm --init vibefpmgui pixi run test
+docker run --rm --init vibefpmgui pixi run lint
 ```
 
 The tests use Qt's offscreen platform: no window appears.
@@ -50,8 +50,13 @@ starts), then run the app with its display:
 
 ```sh
 xhost +localhost
-docker run --rm -it -e DISPLAY=host.docker.internal:0 vibefpmgui
+docker run --rm --init -it --cap-add=SYS_PTRACE --security-opt seccomp=unconfined \
+    -e DISPLAY=host.docker.internal:0 vibefpmgui
 ```
+
+`--init` gives the container a process that cleans up the programs the app
+runs (fpm, gdb, the tests) once they end; the two security options let gdb
+debug programs (*Debug → Start Debugging*).
 
 (If the window doesn't appear, try `xhost + 127.0.0.1` instead of
 `xhost +localhost`.) XQuartz doesn't use the Retina resolution: if the
@@ -64,7 +69,8 @@ editing (instead of the copy in the image), a project to open, and a volume
 for the app's settings so they're kept between runs:
 
 ```sh
-docker run --rm -it -e DISPLAY=host.docker.internal:0 \
+docker run --rm --init -it --cap-add=SYS_PTRACE --security-opt seccomp=unconfined \
+    -e DISPLAY=host.docker.internal:0 \
     -v "$PWD":/app -v vibefpmgui-pixi:/app/.pixi \
     -v ~/git/halo:/projects/halo \
     -v vibefpmgui-config:/root/.config \
@@ -83,7 +89,7 @@ Then open `/projects/halo` with *File → Open Project…*.
 A shell in the container, to run anything else (`pixi run …`, `fpm`, `git`):
 
 ```sh
-docker run --rm -it -e DISPLAY=host.docker.internal:0 vibefpmgui bash
+docker run --rm --init -it -e DISPLAY=host.docker.internal:0 vibefpmgui bash
 ```
 
 ## As CI runs it: x86-64 Linux
@@ -94,9 +100,23 @@ emulation). Then build and run a second image with `--platform`:
 
 ```sh
 docker build --platform linux/amd64 -t vibefpmgui-amd64 -f docker/Dockerfile .
-docker run --rm --platform linux/amd64 vibefpmgui-amd64 pixi run test
+docker run --rm --init --platform linux/amd64 vibefpmgui-amd64 pixi run test
 ```
 
 (Mounting the source with `-v "$PWD":/app`, give it its own environment
 volume too, e.g. `-v vibefpmgui-pixi-amd64:/app/.pixi`: the two
 architectures' environments differ.)
+
+## Developing in the container: `docker/dev.sh`
+
+A container that stays up, with the source you're editing on the Mac
+mounted, to run the tests (or anything else) on Linux as you go, with no
+rebuilding:
+
+```sh
+docker/dev.sh start                              # once (needs the image: see above)
+docker/dev.sh test tests/test_debug_gdb.py       # pytest, with any arguments
+docker/dev.sh run gdb --version                  # anything, in the project's environment
+docker/dev.sh shell                              # a shell in it
+docker/dev.sh stop
+```

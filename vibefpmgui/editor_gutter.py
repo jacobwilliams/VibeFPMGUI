@@ -1,4 +1,4 @@
-"""The editor's gutter: line numbers, change bars, coverage, gremlins and markers.
+"""The editor's gutter: breakpoints, line numbers, change bars, coverage, gremlins and markers.
 
 A part of `vibefpmgui.code_editor.CodeEditor`."""
 
@@ -7,14 +7,17 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from qtpy.QtCore import QPointF, QRect, QRectF, QSize, Qt
-from qtpy.QtGui import QColor, QFont, QPainter, QPalette, QPolygonF
+from qtpy.QtGui import QColor, QFont, QPainter, QPalette, QPen, QPolygonF, QTextCursor
 from qtpy.QtWidgets import QToolTip, QWidget
 
 from . import gremlins as gremlins_mod
 from .editor_shared import (
+    BREAKPOINT_COLOR,
+    BREAKPOINT_WIDTH,
     CHANGE_COLORS,
     COVERAGE_COLORS,
     COVERAGE_WIDTH,
+    EXECUTION_COLOR,
     GREMLIN_WIDTH,
     MARKER_COLORS,
     worst_severity,
@@ -42,7 +45,15 @@ class LineNumberArea(QWidget):
     def event(self, event):
         if event.type() == event.Type.ToolTip:
             line = self.editor.line_at_y(event.pos().y())
-            if event.pos().x() < self.editor._coverage_column() and self.editor.coverage_note(line):
+            if event.pos().x() < self.editor._breakpoint_column():
+                tip = self.editor.breakpoint_tip(line)
+                if tip:
+                    QToolTip.showText(event.globalPos(), tip, self)
+                else:
+                    QToolTip.hideText()
+                return True
+            origin = self.editor._breakpoint_column()
+            if origin <= event.pos().x() < origin + self.editor._coverage_column() and self.editor.coverage_note(line):
                 QToolTip.showText(event.globalPos(), self.editor.coverage_note(line), self)
                 return True
             change_tip = self._change_tip(event.pos(), line)
@@ -102,9 +113,11 @@ class LineNumberArea(QWidget):
         super().leaveEvent(event)
 
     def mousePressEvent(self, event):
-        # Clicking a number selects that line.
+        # Clicking the breakpoint column sets or clears one; a number selects that line.
         line = self.editor.line_at_y(event.pos().y())
-        if line:
+        if line and event.pos().x() < self.editor._breakpoint_column():
+            self.editor.toggle_breakpoint(line)
+        elif line:
             self.editor.go_to_line(line, select=True)
 
 
@@ -114,7 +127,57 @@ class EditorGutterMixin:
     def gutter_width(self) -> int:
         digits = max(3, len(str(max(1, self.blockCount()))))
         return (22 + self.fontMetrics().horizontalAdvance("9") * digits + self._coverage_column()
-                + self._gremlin_column())
+                + self._gremlin_column() + self._breakpoint_column())
+
+    def _breakpoint_column(self) -> int:
+        return BREAKPOINT_WIDTH if self.debuggable else 0
+
+    # ------------------------------------------------------------ breakpoints
+    def breakpoint_lines(self) -> list[int]:
+        """The lines (1-based) with a breakpoint, as they are now (they move with edits)."""
+        return sorted({cursor.blockNumber() + 1 for cursor in self._breakpoints})
+
+    def set_breakpoint_lines(self, lines: list[int]):
+        """Breakpoints on these lines (those past the end: dropped)."""
+        doc = self.document()
+        self._breakpoints = []
+        for line in sorted(set(lines)):
+            block = doc.findBlockByNumber(line - 1)
+            if block.isValid():
+                self._breakpoints.append(QTextCursor(block))
+        self.breakpoint_problems = {}
+        self.gutter.update()
+
+    def toggle_breakpoint(self, line: int):
+        """A breakpoint on ``line`` set, or cleared (gutter click, F9)."""
+        if not self.debuggable:
+            return
+        lines = self.breakpoint_lines()
+        self.set_breakpoint_lines([n for n in lines if n != line] if line in lines else [*lines, line])
+        self.breakpoints_changed.emit()
+
+    def set_breakpoint_problems(self, problems: dict[int, str]):
+        """Why the debugger couldn't place some of them (line -> why): drawn hollow."""
+        if problems != self.breakpoint_problems:
+            self.breakpoint_problems = dict(problems)
+            self.gutter.update()
+
+    def breakpoint_tip(self, line: int) -> str:
+        if line == self.execution_line:
+            return "Stopped here (the debugger)"
+        if line in self.breakpoint_problems:
+            return f"Breakpoint not placed: {self.breakpoint_problems[line]}"
+        if line in self.breakpoint_lines():
+            return "Breakpoint (click to remove)"
+        return "Click to set a breakpoint (F9)" if line else ""
+
+    def set_execution_line(self, line: int | None):
+        """Where the debugger stopped, in this file (None: not here): an arrow
+        in the gutter, and the line tinted."""
+        if line != self.execution_line:
+            self.execution_line = line
+            self.gutter.update()
+            self.update_extra_selections()
 
     def _gremlin_column(self) -> int:
         return GREMLIN_WIDTH if self.gremlins else 0
@@ -217,7 +280,8 @@ class EditorGutterMixin:
         # (Called at every repaint of the whole view: recoloring a big file
         # repaints it once per line. Worked out again only when the number of
         # digits, the font or the columns may have changed.)
-        key = (len(str(self.blockCount())), self.font().key(), self._coverage_column(), self._gremlin_column())
+        key = (len(str(self.blockCount())), self.font().key(), self._coverage_column(), self._gremlin_column(),
+               self._breakpoint_column())
         if key == getattr(self, "_gutter_key", None):
             return
         self._gutter_key = key
@@ -250,15 +314,20 @@ class EditorGutterMixin:
         height = self.fontMetrics().height()
         width = self.gutter.width()
         painter.setRenderHint(QPainter.Antialiasing)
+        origin = self._breakpoint_column()  # (the breakpoints, at the left edge: the rest after them)
+        breakpoints = set(self.breakpoint_lines()) if origin else set()
         while block.isValid() and top <= event.rect().bottom():
             if block.isVisible() and bottom >= event.rect().top():
                 line = number + 1
+                if origin:
+                    self._paint_breakpoint(painter, line, line in breakpoints, top, height)
                 left = self._coverage_column()
                 state = self.coverage_state(line) if left else None
                 if state:  # (ran: green; ran, not every branch: amber; didn't: red)
                     painter.setPen(Qt.NoPen)
                     painter.setBrush(QColor(COVERAGE_COLORS[state]))
-                    painter.drawRect(QRectF(0, top, 3, bottom - top))
+                    painter.drawRect(QRectF(origin, top, 3, bottom - top))
+                left += origin
                 if line in self.gremlins:
                     size = min(GREMLIN_WIDTH - 2, height)
                     gremlins_mod.paint_gremlin(painter, QRectF(1 + left, top + (height - size) / 2, size, size))
@@ -296,6 +365,28 @@ class EditorGutterMixin:
             bottom = top + round(self.blockBoundingRect(block).height())
             number += 1
         painter.end()
+
+    def _paint_breakpoint(self, painter: QPainter, line: int, on: bool, top: int, height: int):
+        """A line's breakpoint (a dot: hollow if the debugger couldn't place
+        it) and, where the program is stopped, an arrow over it."""
+        d = min(BREAKPOINT_WIDTH - 5, height - 4)
+        x, y = (BREAKPOINT_WIDTH - d) / 2, top + (height - d) / 2
+        if on:
+            color = QColor(BREAKPOINT_COLOR)
+            if line in self.breakpoint_problems:
+                painter.setPen(QPen(color, 1.5))
+                painter.setBrush(Qt.NoBrush)
+            else:
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(color)
+            painter.drawEllipse(QRectF(x, y, d, d))
+        if line == self.execution_line:
+            painter.setPen(QPen(QColor(EXECUTION_COLOR).darker(140), 1))
+            painter.setBrush(QColor(EXECUTION_COLOR))
+            mid = top + height / 2
+            painter.drawPolygon(QPolygonF([QPointF(1.5, mid - d / 2), QPointF(1.5 + d * 0.55, mid - d / 2),
+                                           QPointF(BREAKPOINT_WIDTH - 1.5, mid),
+                                           QPointF(1.5 + d * 0.55, mid + d / 2), QPointF(1.5, mid + d / 2)]))
 
     def set_change_marks(self, marks: dict[int, str], deletions: dict[int, tuple[str, int]]):
         if marks != self.change_marks or deletions != self.deletions:

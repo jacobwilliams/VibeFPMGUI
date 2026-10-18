@@ -67,6 +67,9 @@ LINT_DELAY_MS = 600  # lint once typing pauses this long
 GREMLIN_WIDTH = 16  # the gutter's gremlin column (only while the file has gremlins)
 
 COVERAGE_WIDTH = 5  # the gutter's coverage bars, at its left edge (only while the file has coverage)
+BREAKPOINT_WIDTH = 15  # the gutter's breakpoint column, at its left edge (source files the debugger can stop in)
+BREAKPOINT_COLOR = "#e5484d"  # a breakpoint's dot
+EXECUTION_COLOR = "#f5b700"  # the debugger's current line: the gutter's arrow, and the line's tint
 
 COVERAGE_COLORS = {"ran": "#2f9e44", "partial": "#f08c00", "missed": "#e03131"}  # (gutter bars, minimap)
 
