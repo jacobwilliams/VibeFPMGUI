@@ -503,7 +503,7 @@ class RunningMixin:
             return
         self._append(data, colored=True)
         plain = ansi.strip(data)  # color codes would get in the way of parsing
-        if self._phase == "list":
+        if self._phase in ("list", "valgrind"):
             self._captured.append(plain)
         if self._monitoring:
             # Output can arrive mid-line; only parse complete lines.
@@ -566,6 +566,8 @@ class RunningMixin:
             self._after_collect(code, crashed)
         elif phase == "debug":
             self._after_debug_build(code, crashed)
+        elif phase == "valgrind":
+            self._after_valgrind(code, crashed)
 
     def _process_error(self, error):
         if error == QProcess.FailedToStart:

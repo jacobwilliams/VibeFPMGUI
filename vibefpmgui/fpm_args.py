@@ -47,3 +47,13 @@ def runner_command(collect: bool = False) -> str:
     ``collect``: one that only prints the test's command line)."""
     parts = [sys.executable, "-I", TEST_RUNNER] + (["--collect"] if collect else [])
     return join_args(parts)  # quoted for the platform's shell
+
+
+# Valgrind's memory check, as fpm's runner: every leak, and exit code 1 when it finds an error.
+VALGRIND_RUNNER = "valgrind --leak-check=full --show-leak-kinds=all --error-exitcode=1"
+
+
+def with_runner(args: list[str], runner: str) -> list[str]:
+    """fpm's ``args`` with ``--runner runner`` (before any program arguments)."""
+    cut = args.index("--") if "--" in args else len(args)
+    return args[:cut] + ["--runner", runner] + args[cut:]

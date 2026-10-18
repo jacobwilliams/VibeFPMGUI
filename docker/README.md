@@ -1,8 +1,9 @@
 # VibeFPMGUI in a Linux container (on a Mac)
 
 The image (`docker/Dockerfile`) is Ubuntu 24.04 with the project's pixi
-environment (the same one CI uses: gfortran, fpm, Python, PySide6…), git,
-and what Qt needs to show its window on an X11 display. On a Mac, XQuartz
+environment (the same one CI uses: gfortran, fpm, Python, PySide6…, and on
+Linux gdb and Valgrind), git, the C library's debug symbols (Valgrind needs
+them on arm64), and what Qt needs to show its window on an X11 display. On a Mac, XQuartz
 is that display: the app's window opens beside your Mac windows.
 
 It's built for your Mac's own architecture: arm64 Linux on Apple Silicon

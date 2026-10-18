@@ -40,7 +40,8 @@ def actions(menu) -> dict:
 def test_a_program_s_menu(qtbot, card):
     program = str(card.config.programs[0][1])
     menu = actions(menu_at(card, "program"))
-    assert list(menu) == ["Run", "Run in Terminal", "Debug", reveal_label(), "Copy Path"]
+    assert list(menu) == ["Run", "Run in Terminal", "Debug", "Run with Valgrind", reveal_label(),
+                          "Copy Path"]
     for text, signal in (("Run", card.run_requested), ("Run in Terminal", card.run_in_terminal_requested),
                          (reveal_label(), card.reveal_requested)):
         with qtbot.waitSignal(signal) as blocker:

@@ -343,6 +343,25 @@ def delete_folders(paths: list[Path]) -> list[str]:
 
 
 # --------------------------------------------------------------------- view
+NO_VALGRIND = ("Valgrind wasn't found (on the PATH). It checks a program's memory use (leaks, invalid reads "
+               "and writes) on Linux: install it there (the project's pixi environment has it on Linux), "
+               "or with the system's package manager.")
+
+
+def valgrind_found() -> bool:
+    return shutil.which("valgrind") is not None
+
+
+VALGRIND_SUMMARY_RE = re.compile(r"^==\d+== ERROR SUMMARY: ([\d,]+) errors?", re.MULTILINE)
+
+
+def valgrind_errors(output: str) -> int | None:
+    """How many errors Valgrind's summaries (one per program it ran) in
+    ``output`` say it found; None: there are none (it didn't run)."""
+    counts = [int(n.replace(",", "")) for n in VALGRIND_SUMMARY_RE.findall(output)]
+    return sum(counts) if counts else None
+
+
 def executable_name(path: Path) -> str:
     """The program's (test's, example's) name, as fpm knows it (no ".exe")."""
     return path.stem if path.suffix.lower() == ".exe" else path.name
@@ -352,6 +371,7 @@ class ConfigCard(QFrame):
     run_requested = Signal(str)
     run_in_terminal_requested = Signal(str)
     debug_requested = Signal(str, str)  # kind ("program", "test", "example"), name
+    valgrind_requested = Signal(str, str)  # kind, name
     reveal_requested = Signal(str)
     delete_requested = Signal(object)  # Configuration
 
@@ -441,6 +461,17 @@ class ConfigCard(QFrame):
             debug.setAttribute(Qt.WA_LayoutUsesWidgetRect)
             debug.clicked.connect(lambda _=False, k=kind, n=name: self.debug_requested.emit(k, n))
             row.addWidget(debug)
+            valgrind = QPushButton("Valgrind")
+            valgrind.setAttribute(Qt.WA_LayoutUsesWidgetRect)
+            if valgrind_found():
+                valgrind.setToolTip(f"Check {name}'s memory use: built again with the Build options (the debug "
+                                    "profile, if none is chosen), then run by fpm under Valgrind (leaks, invalid "
+                                    "reads and writes; the report goes to Output)")
+            else:
+                valgrind.setEnabled(False)
+                valgrind.setToolTip(NO_VALGRIND)
+            valgrind.clicked.connect(lambda _=False, k=kind, n=name: self.valgrind_requested.emit(k, n))
+            row.addWidget(valgrind)
             layout.addLayout(row)
         if not config.programs and not config.libraries:
             layout.addWidget(QLabel(f"<span style='color:{muted}'>No programs or library here "
@@ -458,6 +489,9 @@ class ConfigCard(QFrame):
                 action = menu.addAction("Run in Terminal", lambda: self.run_in_terminal_requested.emit(str(path)))
                 action.setToolTip("Type the command in the Terminal panel (for programs that read input)")
                 menu.addAction("Debug", lambda: self.debug_requested.emit(kind, executable_name(path)))
+                action = menu.addAction("Run with Valgrind",
+                                        lambda: self.valgrind_requested.emit(kind, executable_name(path)))
+                action.setEnabled(valgrind_found())
             menu.addAction(reveal_label(), lambda: self.reveal_requested.emit(str(path)))
             menu.addAction("Copy Path", lambda: QApplication.clipboard().setText(str(path)))
             return menu
@@ -481,6 +515,7 @@ class BuildOutputsView(QWidget):
     run_requested = Signal(str)
     run_in_terminal_requested = Signal(str)
     debug_requested = Signal(str, str)  # kind, name (see ConfigCard)
+    valgrind_requested = Signal(str, str)  # kind, name
     reveal_requested = Signal(str)
     delete_requested = Signal(object)   # list[Configuration]
     refresh_requested = Signal()
@@ -537,6 +572,7 @@ class BuildOutputsView(QWidget):
             card.run_requested.connect(self.run_requested)
             card.run_in_terminal_requested.connect(self.run_in_terminal_requested)
             card.debug_requested.connect(self.debug_requested)
+            card.valgrind_requested.connect(self.valgrind_requested)
             card.reveal_requested.connect(self.reveal_requested)
             card.delete_requested.connect(lambda c: self.delete_requested.emit([c]))
             card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)

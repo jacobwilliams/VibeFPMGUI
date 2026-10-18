@@ -173,6 +173,18 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   evaluate an expression (`a(2:3)`, `p%x`). Continue (F5), Step Over (F10),
   Step Into (F11), Step Out (⇧F11), Pause, Stop (⇧F5). On macOS, lldb shows
   no variables of gfortran's programs: debug in the Linux container for those.
+* Valgrind (Linux; in the project's pixi environment there): the
+  **Valgrind** button beside each program, test and example in *Build
+  outputs* (or *Run with Valgrind* on its right-click) builds it with the
+  Build options (the debug profile, for files and lines, unless a profile or
+  features are chosen) and has fpm run it under Valgrind's memory check:
+  `fpm test NAME --runner "valgrind --leak-check=full --show-leak-kinds=all
+  --error-exitcode=1"` (`fpm run`, `fpm run --example` for the others, with
+  the Program args). The report (leaks, invalid reads and writes, each with
+  its file and line) goes to the *Output* panel, and the status bar says how
+  many errors it found. Where Valgrind isn't found (macOS, Windows) the
+  button is disabled; on arm64 Linux Valgrind also needs the C library's
+  debug symbols (`libc6-dbg` on Debian and Ubuntu; the Docker image has it).
 * Test coverage: tick *Build options → Coverage* (gfortran) and run Test.
   fpm builds with `--coverage` (a build of its own), the tests' counts are
   read with gcov (which comes with gfortran) after the run, and the
@@ -466,10 +478,12 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   the settings it was built with (recorded when the GUI runs the build;
   older folders are grouped as "built outside the app"), when it was built,
   its size, the library and module counts, and its programs, tests and
-  examples with a **Run** button (runs them directly, without rebuilding).
+  examples with a **Run** button (runs them directly, without rebuilding),
+  a **Debug** button (as *Start Debugging*, for that one) and a
+  **Valgrind** button (see Valgrind above).
   Right-click a program for *Run in Terminal* (types the command in the
-  Terminal panel, for programs that read input), *Show in Finder/Explorer*
-  and *Copy Path*; right-click the card to show its build folder, copy its
+  Terminal panel, for programs that read input), *Debug*, *Run with
+  Valgrind*, *Show in Finder/Explorer* and *Copy Path*; right-click the card to show its build folder, copy its
   flags or delete it.
   Delete a configuration, or all except the current one, to free space.
 * *Show Compile Command* (right-click a file in the Build tab or a source in

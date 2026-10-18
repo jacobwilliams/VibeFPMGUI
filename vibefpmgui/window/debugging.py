@@ -29,7 +29,7 @@ from ..debug_adapters import NOT_FOUND, find_adapter
 from ..debug_panel import DebugPanel
 from ..debug_session import IDLE, STOPPED, DebugSession, Frame
 from ..editor import EditorTab
-from ..fpm_args import runner_command
+from ..fpm_args import runner_command, with_runner
 from ..test_monitor import EXE_RE
 
 # What can be debugged: fpm's command for it, and what it's called.
@@ -136,22 +136,29 @@ class DebuggingMixin:
         ) != QMessageBox.Yes:
             return
         sub, _word = KINDS[kind]
-        try:
-            args = self.build_arguments(sub, True, targets=targets)
-        except ValueError as exc:
-            QMessageBox.warning(self, "Invalid arguments", str(exc))
+        args = self.debug_arguments(kind, targets, runner_command(collect=True))
+        if args is None:
             return
-        if not self.selected_features and self.profile_combo.currentIndex() <= 0:
-            # (No profile: fpm (0.13) then passes the compiler none of its flags, -g
-            # among them: no debug information. The debug profile's, then.)
-            args[1:1] = ["--profile", "debug"]
-        cut = args.index("--") if "--" in args else len(args)  # (the runner: before any program arguments)
-        args = args[:cut] + ["--runner", runner_command(collect=True)] + args[cut:]
         self._debug_adapter, self._debug_candidates = adapter, []
         self._debug_kind, self._debug_targets = kind, targets
         self.debug_panel.begin("…")
         self.statusBar().showMessage("Building, to debug…")
         self.run_fpm(sub[:1], True, False, phase="debug", args=args)
+
+    def debug_arguments(self, kind: str, targets: list[str] | None, runner: str) -> list[str] | None:
+        """fpm's arguments to build and run a ``kind`` of executable (`KINDS`)
+        with the Build options, with debug information, through ``runner``
+        (None: a field's quotes don't match, which is said)."""
+        try:
+            args = self.build_arguments(KINDS[kind][0], True, targets=targets)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid arguments", str(exc))
+            return None
+        if not self.selected_features and self.profile_combo.currentIndex() <= 0:
+            # (No profile: fpm (0.13) then passes the compiler none of its flags, -g
+            # among them: no debug information. The debug profile's, then.)
+            args[1:1] = ["--profile", "debug"]
+        return with_runner(args, runner)
 
     def debug_named(self, kind: str, name: str):
         """A test (or program) to debug, picked in the Tests (or Run) panel."""

@@ -9,8 +9,10 @@ FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# git: the Git panel, and fpm fetching git dependencies. The rest: what Qt's
-# X11 (xcb) platform plugin loads from the system, and fonts.
+# git: the Git panel, and fpm fetching git dependencies. libc6-dbg: the C
+# library's symbols, which Valgrind (in the pixi environment) needs on arm64
+# to start. The rest: what Qt's X11 (xcb) platform plugin loads from the
+# system, and fonts.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git \
         libgl1 libegl1 libglib2.0-0 libdbus-1-3 libfontconfig1 libfreetype6 \
@@ -18,6 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 \
         libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1 libxrender1 libxi6 libsm6 libice6 \
         fonts-dejavu-core x11-apps \
+        libc6-dbg \
     && rm -rf /var/lib/apt/lists/*
 
 # pixi, the version CI uses.

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import html
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -22,7 +23,7 @@ from qtpy.QtWidgets import (
 
 from .. import build_outputs as bo
 from ..compat import join_args, quote_arg, split_args
-from ..fpm_args import TEST_RUNNER, split_runner
+from ..fpm_args import TEST_RUNNER, VALGRIND_RUNNER, split_runner
 from ..project_tree import reveal_in_file_manager
 from ..widgets import run_dialog
 
@@ -36,6 +37,7 @@ class BuildOutputsMixin:
         self.outputs_view.run_requested.connect(self.run_program)
         self.outputs_view.run_in_terminal_requested.connect(self.run_program_in_terminal)
         self.outputs_view.debug_requested.connect(self.debug_named)  # (built again: see window.debugging)
+        self.outputs_view.valgrind_requested.connect(self.run_valgrind)
         self.outputs_view.reveal_requested.connect(reveal_in_file_manager)
         self.outputs_view.delete_requested.connect(self.delete_configurations)
         self.outputs_view.refresh_requested.connect(self.refresh_build_outputs)
@@ -89,6 +91,44 @@ class BuildOutputsMixin:
             QMessageBox.warning(self, "Build outputs", "Some folders could not be deleted:\n" + "\n".join(errors))
         else:
             self.statusBar().showMessage(f"Deleted {size} of build outputs", 5000)
+
+    def run_valgrind(self, kind: str, name: str):
+        """Build a program, test or example (``kind``) with the Build options
+        and run it under Valgrind's memory check, through fpm (``--runner``):
+        its report goes to the Output panel."""
+        if self.busy() or not self.manifest_path:
+            return
+        if shutil.which("valgrind") is None:
+            QMessageBox.information(self, "Valgrind", bo.NO_VALGRIND)
+            return
+        args = self.debug_arguments(kind, [name], VALGRIND_RUNNER)  # (debug information: files and lines)
+        if args is None:
+            return
+        self._valgrind_name = name
+        self.run_fpm(args[:1], True, False, phase="valgrind", args=args)
+        if self.process is not None:
+            self.show_all_output()
+            self.statusBar().showMessage(f"Building {name}, to run it under Valgrind…")
+
+    def _after_valgrind(self, code: int, stopped: bool):
+        """Valgrind's run is over: say what it found (the report's in Output).
+        Its summary says, not the exit code: fpm's is 1 for a failed build too."""
+        name = self._valgrind_name
+        if stopped:
+            return
+        errors = bo.valgrind_errors("".join(self._captured))
+        if errors is None:
+            message = (f"{name} wasn't run under Valgrind: the build failed, or Valgrind couldn't start "
+                       "(see Build and Output)" if code else f"fpm ran nothing called {name}")
+        elif errors:
+            message = f"Valgrind found {errors} error{'s' * (errors != 1)} in {name} (see Output)"
+        elif code:
+            message = f"Valgrind: no memory errors in {name}, but it failed (exit code {code})"
+        else:
+            message = f"Valgrind: no errors in {name}"
+        self._append(f"[{message}]\n", bold=True)
+        self.statusBar().showMessage(message)
+        self.show_panel(self._content(self.docks["output"]))
 
     def run_program_in_terminal(self, path: str):
         """Type the command to run an already-built program (with the Program

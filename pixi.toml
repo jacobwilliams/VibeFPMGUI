@@ -48,7 +48,9 @@ pywinpty = ">=3.0.5,<4"
 [target.linux-aarch64.dependencies]
 gdb = ">=18.1,<19"
 gxx = "15.*"
+valgrind = ">=3.27.1,<4"
 
 [target.linux-64.dependencies]
 gdb = ">=18.1,<19"
 gxx = "15.*"
+valgrind = ">=3.27.1,<4"
