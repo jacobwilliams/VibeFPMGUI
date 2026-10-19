@@ -113,6 +113,51 @@ def test_a_style_change_while_lexing_is_not_lost(qtbot, edit, monkeypatch):
     assert formats(edit) == recolor_everything(qtbot, edit, "monokai")  # (the new style's colors)
 
 
+def test_a_big_file_just_opened_has_the_lines_on_view_colored_at_once(qtbot, monkeypatch):
+    """While the whole file is lexed on the thread, the lines on view are
+    lexed on their own: colored at once, not when the thread is done."""
+    monkeypatch.setattr(hl, "LEX_IN_THREAD", 100)  # (this one counts as big)
+    monkeypatch.setattr(hl, "VIEW_LINES", 40)
+    lexing = []
+    monkeypatch.setattr(hl.PygmentsHighlighter, "_lex_in_thread", lambda self, *a: lexing.append(a))  # (not done)
+    widget = QPlainTextEdit()
+    qtbot.addWidget(widget)
+    widget.setPlainText(SOURCE)  # (360 lines)
+    highlighter = hl.PygmentsHighlighter(widget.document(), FortranLexer(), "default")
+    highlighter.line_on_view = lambda: 100  # (scrolled down: these colored first)
+    highlighter._relex()
+    assert lexing and highlighter._lexing  # (the whole file: on the thread, still)
+    colored = [i for i, line in enumerate(formats(widget)) if line]
+    assert colored and min(colored) >= 100 and max(colored) < 140  # (on view, and no further)
+    monkeypatch.undo()  # (the thread lexing for real now, to the same colors as ever)
+    highlighter._lexing = False
+    highlighter._relex()
+    qtbot.waitUntil(lambda: highlighter.is_current(), timeout=10_000)
+    widget.highlighter = highlighter
+    full = formats(widget)
+    assert all(full[i] for i in (1, 200, 300))  # (every line now, not just those on view)
+    assert full == recolor_everything(qtbot, widget)
+
+
+def test_a_line_colored_on_its_own_as_the_whole_file_colors_it():
+    """(Each line of Fortran is colored the same lexed on its own: the colors
+    shown at once are those that stay.)"""
+    from qtpy.QtGui import QTextDocument
+
+    whole = QTextDocument(SOURCE)
+    quick = QTextDocument(SOURCE)
+    a = hl.PygmentsHighlighter(whole, FortranLexer(), "default")
+    a._relex()
+    b = hl.PygmentsHighlighter(quick, FortranLexer(), "default")
+    b._color_view_first()
+    def colors(document, i):
+        return [(r.start, r.length, r.format.foreground().color().name())
+                for r in document.findBlockByNumber(i).layout().formats()]
+
+    for i in range(40):
+        assert colors(whole, i) == colors(quick, i), i
+
+
 def test_common_prefix_and_suffix():
     a = "x" * 10_000 + "abc" + "y" * 9_000
     b = "x" * 10_000 + "aXc" + "y" * 9_000

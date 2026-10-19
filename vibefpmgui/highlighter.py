@@ -6,7 +6,9 @@ that overlap it. After an edit (once typing pauses) the document is lexed
 again, on a thread for a big one, and only the lines whose colors changed
 are recolored. Meanwhile the line being typed on is lexed on its own, at
 once, so what's typed is colored straight away (the whole-document lexing
-then corrects anything that depends on other lines).
+then corrects anything that depends on other lines). In the same way, a big
+file just opened has the lines on view lexed on their own at once, while the
+whole of it is lexed on the thread (colors in a moment, not seconds later).
 """
 
 from __future__ import annotations
@@ -243,6 +245,7 @@ def _quick_thread_switching(interval: float = 0.0005):
 
 
 QUICK_LINES = 50  # lines colored on their own per edit (more, e.g. the whole text replaced: wait for the lexing)
+VIEW_LINES = 150  # a big file's lines on view (and a little more) colored on their own until it's lexed
 CHUNK_LINES = 2000  # recolored at a time (more: the lines on view first, the rest a chunk at a time)
 
 
@@ -265,6 +268,7 @@ class PygmentsHighlighter(QSyntaxHighlighter):
         self._busy = False
         self._closed = False      # its tab is closed (see close): a lexing thread then drops its answer
         self._quick_budget = QUICK_LINES  # (see _quick_line)
+        self._provisional = False  # coloring the lines on view on their own (see _color_view_first)
         self._pending: list[tuple[int, int]] = []  # lines (0-based, first and last) still to recolor
         self._job = 0            # (a recoloring a chunk at a time: changes when it's dropped)
         self.line_on_view = None  # () -> the first line on view (0-based), set by the editor: colored first
@@ -414,8 +418,27 @@ class PygmentsHighlighter(QSyntaxHighlighter):
             self._lexing = True
             threading.Thread(target=self._lex_in_thread, args=(generation, args),
                              daemon=True, name="Syntax highlighting").start()
+            if not self._spans:  # (nothing colored yet: a file just opened)
+                self._color_view_first()
         else:
             self._apply((generation, self._work(*args)))
+
+    def _color_view_first(self):
+        """The lines on view colored now, each lexed on its own, while the
+        whole document is lexed on the thread (that then colors every line,
+        correcting what depends on other lines: a string continued on the
+        next, say)."""
+        first = self.line_on_view() if self.line_on_view is not None else 0
+        self._provisional = self._busy = True  # (recoloring isn't an edit)
+        try:
+            block = self.document().findBlockByNumber(max(first, 0))
+            for _ in range(VIEW_LINES):
+                if not block.isValid():
+                    break
+                self.rehighlightBlock(block)
+                block = block.next()
+        finally:
+            self._provisional = self._busy = False
 
     def _lex_in_thread(self, generation, args):
         # The lexer is Python too: while it runs, the window's code waits its
@@ -489,6 +512,9 @@ class PygmentsHighlighter(QSyntaxHighlighter):
             self._busy = False
 
     def highlightBlock(self, text: str):
+        if self._provisional:
+            self._lex_line(text)
+            return
         start = self.currentBlock().position()
         end = start + len(text)
         lexed = self._text
@@ -521,6 +547,10 @@ class PygmentsHighlighter(QSyntaxHighlighter):
         if self._quick_budget == QUICK_LINES:
             QTimer.singleShot(0, self, self._reset_quick_budget)  # (the budget is per edit)
         self._quick_budget -= 1
+        return self._lex_line(text)
+
+    def _lex_line(self, text: str) -> bool:
+        """Color the current line by lexing it on its own (False: it failed)."""
         pos = 0
         try:
             for ttype, value in lex(text, self.lexer):
