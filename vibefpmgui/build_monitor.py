@@ -224,17 +224,22 @@ def index_sources(graph: m.DependencyGraph | None) -> dict[str, list[tuple[str, 
                 if p.directory and p.directory.is_dir() and p.kind != m.MISSING]
     package_dirs = {p.directory.resolve() for p in packages}
     for pkg in packages:
-        own = pkg.directory.resolve()
-        for dirpath, dirnames, filenames in os.walk(own):
-            # Skip build trees (they hold other packages' sources), VCS dirs,
-            # and nested packages (e.g. a path dependency inside the project),
-            # which are indexed under their own name.
-            dirnames[:] = [d for d in dirnames if d != "build" and not d.startswith(".")
-                           and (Path(dirpath) / d).resolve() not in package_dirs]
-            for f in filenames:
-                if Path(f).suffix.lower() in SOURCE_EXTS:
-                    index.setdefault(f, []).append((pkg.name, Path(dirpath) / f))
+        index_package(index, pkg.name, pkg.directory, package_dirs)
     return index
+
+
+def index_package(index: dict[str, list[tuple[str, Path]]], name: str, directory: Path,
+                  package_dirs: set[Path] = frozenset()):
+    """Add a package's source files to ``index`` (see index_sources)."""
+    for dirpath, dirnames, filenames in os.walk(directory.resolve()):
+        # Skip build trees (they hold other packages' sources), VCS dirs,
+        # and nested packages (e.g. a path dependency inside the project),
+        # which are indexed under their own name.
+        dirnames[:] = [d for d in dirnames if d != "build" and not d.startswith(".")
+                       and (Path(dirpath) / d).resolve() not in package_dirs]
+        for f in filenames:
+            if Path(f).suffix.lower() in SOURCE_EXTS:
+                index.setdefault(f, []).append((name, Path(dirpath) / f))
 
 
 # ----------------------------------------------------------------- drawing
@@ -747,6 +752,8 @@ class BuildMonitor(SortableTable, QWidget):
         self.package_colors = dict(DEFAULT_PACKAGE_COLORS)
         self.diagnostics = DiagnosticParser()
         self.project_dir: Path | None = None
+        self._expected: dict[Path, tuple[str, str]] = {}  # (see start and _index_new_dependencies)
+        self._indexed: set[Path] = set()
         self._logs: LogFinder | None = None  # (where the compile logs are: see _read_log)
         self.hover_row = -1
         self.selected_row = -1
@@ -882,6 +889,13 @@ class BuildMonitor(SortableTable, QWidget):
         self.table.setRowCount(0)
         self.sources = index_sources(graph)
         self.package_kinds = {n: p.kind for n, p in graph.packages.items()} if graph else {}
+        # Dependencies fpm downloads during this build aren't on disk yet: they're
+        # indexed when they are (see _index_new_dependencies). The graph's names
+        # and kinds for the folders it expects them in:
+        self._expected = {p.directory.resolve(): (n, m.GIT if p.git else m.REGISTRY)
+                          for n, p in (graph.packages.items() if graph else ()) if p.directory}
+        self._indexed = {p.directory.resolve() for p in (graph.packages.values() if graph else ())
+                         if p.directory and p.directory.is_dir() and p.kind != m.MISSING}
         self.diagnostics = DiagnosticParser()
         self.project_dir = project_dir
         self._logs = LogFinder(project_dir)  # (fresh for each build: new folders)
@@ -1085,6 +1099,8 @@ class BuildMonitor(SortableTable, QWidget):
         self.table.item(row, 0).setText(name)
         self.table.item(row, 0).setToolTip(kind)
         if kind == "Source":
+            if name not in self.sources:
+                self._index_new_dependencies()
             target.candidates = self.sources.get(name, [])
             if len(target.candidates) == 1:
                 self._set_owner(target, *target.candidates[0])
@@ -1103,6 +1119,24 @@ class BuildMonitor(SortableTable, QWidget):
             self.table.scrollToItem(self.table.item(row, 0))
         self.schedule_sort()
         return target
+
+    def _index_new_dependencies(self):
+        """Index the dependencies downloaded since the build started (in
+        build/dependencies; their own dependencies too, which the graph
+        didn't know of before): each folder once."""
+        folder = self.project_dir / "build" / "dependencies" if self.project_dir else None
+        if folder is None or not folder.is_dir():
+            return
+        for directory in sorted(folder.iterdir()):
+            here = directory.resolve()
+            if here in self._indexed or not (directory / "fpm.toml").is_file():
+                continue
+            self._indexed.add(here)
+            name, kind = self._expected.get(here, (directory.name, m.GIT if (directory / ".git").exists()
+                                                    else m.REGISTRY))
+            index_package(self.sources, name, directory)
+            if self.package_kinds.get(name, m.MISSING) == m.MISSING:
+                self.package_kinds[name] = kind  # (its color: not "not downloaded" any more)
 
     def _set_owner(self, target: Target, package: str, path: Path):
         target.package = package
