@@ -274,7 +274,11 @@ class PackagesMixin:
         pkg = self.graph.packages[name]
         e = html.escape
         rows = [("Type", KIND_LABELS[pkg.kind])]
-        for label, value in [("Version", pkg.version), ("License", pkg.license),
+        # The version: a dependency's own fpm.toml's (which the tag it's pinned to,
+        # below, takes precedence over), or else the one asked for or fpm recorded.
+        own = pkg.manifest_version if pkg.kind != m.ROOT else ""
+        other = pkg.version if pkg.version != own else ""
+        for label, value in [("Version", other), ("Manifest version", own), ("License", pkg.license),
                              ("Author", pkg.author)]:
             if value:
                 rows.append((label, e(value)))

@@ -41,6 +41,7 @@ class Package:
     name: str
     kind: str
     version: str = ""
+    manifest_version: str = ""  # the version its own fpm.toml gives ("": none)
     directory: Path | None = None
     manifest: Path | None = None
     license: str = ""
@@ -140,7 +141,8 @@ def _collect_deps(data: dict, is_root: bool) -> list[tuple[str, object, bool]]:
 
 def _fill_from_manifest(pkg: Package, data: dict) -> None:
     if pkg.directory is not None:
-        pkg.version = _read_version(data.get("version"), pkg.directory) or pkg.version
+        pkg.manifest_version = _read_version(data.get("version"), pkg.directory)
+        pkg.version = pkg.manifest_version or pkg.version
     pkg.license = _as_text(data.get("license"))
     pkg.author = _as_text(data.get("author"))
     pkg.description = _as_text(data.get("description"))
@@ -259,7 +261,8 @@ def _locate(name, spec, parent: Package, root_dir: Path, cached: dict):
         # The commit actually checked out; build/cache.toml's "rev" can be
         # stale (fpm update leaves the old one there).
         pkg.git_rev = checked_out_commit(directory) or str(cached.get("rev", ""))
-    if cached.get("version") and not pkg.version:
+    # (fpm writes "0" for a package whose manifest gives no version: none, then.)
+    if cached.get("version") and str(cached["version"]) != "0" and not pkg.version:
         pkg.version = str(cached["version"])
 
     manifest = directory / "fpm.toml"

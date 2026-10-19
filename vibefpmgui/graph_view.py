@@ -140,18 +140,29 @@ def node_border(theme: dict, kind: str) -> QColor:
 
 
 # ------------------------------------------------------------------ items
-def _asked_for(package: m.Package) -> str:
-    """The tag, branch or commit a package not downloaded asks for, or the
-    kind it would be ("Git"…) if none ("" if it's downloaded: its version
-    is shown)."""
-    if package.kind != m.DEV_ONLY:
-        return ""
+def _pinned(package: m.Package) -> str:
+    """The tag, branch or commit a git dependency is pinned to ("" if none)."""
     if not package.git_ref:
-        return KIND_LABELS.get(package.asked_kind, "")
+        return ""
     key, _, value = package.git_ref.partition(" ")
     if key == "tag":
         return f"v{value}" if value[:1].isdigit() else value  # ("1.6.1" as the others' "v1.6.1")
     return value[:7] if key == "rev" else package.git_ref
+
+
+def _subtitle(package: m.Package) -> str:
+    """Under a box's name: the tag, branch or commit it's pinned to (what the
+    manifest asks for comes first: the package's own fpm.toml may give an
+    older version; the sidebar shows that one), else its version, else its
+    kind ("Git"…; for a dependency's dev-dependency fpm doesn't download: the
+    kind it would be)."""
+    pinned = _pinned(package)
+    if pinned:
+        return pinned
+    if package.version:
+        return f"v{package.version}"
+    kind = package.asked_kind if package.kind == m.DEV_ONLY else package.kind
+    return KIND_LABELS.get(kind, "") or KIND_LABELS.get(package.kind, "")
 
 
 class NodeItem(pg.GraphicsObject):
@@ -186,8 +197,7 @@ class NodeItem(pg.GraphicsObject):
 
     def set_package(self, package: m.Package):
         self.package = package
-        self.subtitle = (f"v{package.version}" if package.version else _asked_for(package)
-                         or KIND_LABELS[package.kind])
+        self.subtitle = _subtitle(package)
         tw = QFontMetricsF(self.title_font).horizontalAdvance(package.name)
         sw = QFontMetricsF(self.sub_font).horizontalAdvance(self.subtitle)
         th = QFontMetricsF(self.title_font).height()
