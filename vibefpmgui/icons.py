@@ -17,6 +17,7 @@ from qtpy.QtGui import (
     QPainterPath,
     QPen,
     QPixmap,
+    QPolygonF,
 )
 
 SIZE = 24  # logical size; drawn at several pixel ratios for crisp HiDPI
@@ -155,6 +156,29 @@ def _bug(p: QPainter, c: QColor):
     p.setPen(Qt.NoPen)
     p.setBrush(c)
     p.drawEllipse(QPointF(12, 7.2), 3.2, 2.6)  # head
+
+
+def _refresh(p: QPainter, c: QColor):
+    """A circular arrow: read again."""
+    p.setPen(_pen(c, 2))
+    p.setBrush(Qt.NoBrush)
+    arc = QPainterPath()
+    arc.arcMoveTo(QRectF(4.5, 4.5, 15, 15), 70)
+    arc.arcTo(QRectF(4.5, 4.5, 15, 15), 70, 290)
+    p.drawPath(arc)
+    end = arc.currentPosition()  # (the circle's right: the head there, pointing on round it, up)
+    p.setPen(Qt.NoPen)
+    p.setBrush(c)
+    p.drawPolygon(QPolygonF([end + QPointF(-4, 0.5), end + QPointF(4, 0.5), end + QPointF(0, -4.5)]))
+
+
+def _unified(p: QPainter, c: QColor):
+    """A diff in one column (not two side by side): lines in one box."""
+    p.setPen(_pen(c, 1.8))
+    p.setBrush(Qt.NoBrush)
+    p.drawRoundedRect(QRectF(4, 3.5, 16, 17), 2.5, 2.5)
+    for y in (8, 12, 16):
+        p.drawLine(QPointF(7.5, y), QPointF(16.5 if y != 12 else 13.5, y))
 
 
 def _pause(p: QPainter, c: QColor):
@@ -318,6 +342,8 @@ DRAWERS = {
     "clean-all": _trash,
     "stop": _stop,
     "pause": _pause,
+    "refresh": _refresh,
+    "unified": _unified,
     "bug": _bug,
     "continue": _continue,
     "step-over": _step_over,

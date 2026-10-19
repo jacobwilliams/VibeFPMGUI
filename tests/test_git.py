@@ -172,6 +172,29 @@ def test_the_panel_lists_the_changes_and_shows_a_diff(qtbot, tmp_path):
     assert panel.selected().path == "new.txt"
 
 
+def test_the_panel_s_buttons_are_icons_with_tooltips(qtbot):
+    from qtpy.QtCore import Qt
+    from qtpy.QtWidgets import QToolButton
+
+    from vibefpmgui.git_panel import GitPanel
+
+    panel = GitPanel()
+    qtbot.addWidget(panel)
+    unified, refresh = panel.unified_button, panel.refresh_button
+    for button in (unified, refresh):
+        assert isinstance(button, QToolButton) and button.toolButtonStyle() == Qt.ToolButtonIconOnly
+        assert not button.icon().isNull()
+    assert unified.toolTip().startswith("Show the diff as one list") and unified.isCheckable()
+    assert refresh.toolTip() == "Read the repository's status again"
+    with qtbot.waitSignal(panel.refresh_requested):
+        refresh.click()
+    unified.click()  # (on: the diff in one list)
+    assert panel.diff.unified and panel.diff.stack.currentIndex() == 1
+    key = unified.icon().cacheKey()
+    panel.refresh_palette()  # (a theme change: drawn again)
+    assert unified.icon().cacheKey() != key
+
+
 def test_the_window_s_git_panel(qtbot, window, project):
     git(project, "init", "-q")
     git(project, "add", "-A")

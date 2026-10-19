@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from qtpy.QtCore import Qt, Signal
+from qtpy.QtCore import QSize, Qt, Signal
 from qtpy.QtGui import QBrush, QColor, QFont
 from qtpy.QtWidgets import (
     QApplication,
@@ -28,6 +28,7 @@ from . import git_status as gs
 from .background import call_in_background
 from .build_monitor import PALETTES, TitleIcon, app_is_light, panel_stylesheet
 from .diff_view import DiffView
+from .icons import make_icon
 from .widgets import StatusLabel
 
 CHANGE_ROLE = Qt.UserRole + 1  # a file's row: its git_status.Change
@@ -55,16 +56,21 @@ class GitPanel(QWidget):
         self.title_icon = TitleIcon("git")
         self.title = QLabel("Git")
         self.subtitle = StatusLabel()
+        # Icon buttons (as the Debug panel's: see refresh_palette), their tooltips saying what they do.
         self.unified_button = QToolButton()
         self.unified_button.setText("Unified")
         self.unified_button.setCheckable(True)
         self.unified_button.setToolTip("Show the diff as one list (removed lines, then added ones) "
                                        "instead of side by side")
         self.unified_button.toggled.connect(lambda on: self.diff.set_unified(on))
-        refresh = QToolButton()
+        refresh = self.refresh_button = QToolButton()
         refresh.setText("Refresh")
         refresh.setToolTip("Read the repository's status again")
         refresh.clicked.connect(self.refresh_requested)
+        for button in (self.unified_button, refresh):
+            button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+            button.setIconSize(QSize(18, 18))
+            button.setAutoRaise(True)
         header = QHBoxLayout()
         header.setSpacing(6)
         header.addWidget(self.title_icon)
@@ -116,8 +122,13 @@ class GitPanel(QWidget):
     def refresh_palette(self):
         self.is_light = app_is_light()
         self.palette_colors = pal = PALETTES["light" if self.is_light else "dark"]
-        self.setStyleSheet(panel_stylesheet(self.objectName(), pal))
+        # (Unified, while on: a background, so it shows.)
+        self.setStyleSheet(panel_stylesheet(self.objectName(), pal)
+                           + f"#{self.objectName()} QToolButton:checked {{ background: rgba(128,128,128,70);"
+                             " border: none; border-radius: 5px; }")
         self.title_icon.draw(pal["text"], self.title)
+        self.unified_button.setIcon(make_icon("unified", pal["text"]))
+        self.refresh_button.setIcon(make_icon("refresh", pal["text"]))
         for label in (self.subtitle, self.empty, self.diff_title):
             label.setStyleSheet(f"color: {pal['muted']};")
         self.diff.refresh_style()
