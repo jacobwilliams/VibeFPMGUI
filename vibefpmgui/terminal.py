@@ -45,6 +45,7 @@ from qtpy.QtCore import (
     QObject,
     QPointF,
     QRectF,
+    QSize,
     QSocketNotifier,
     Qt,
     QTimer,
@@ -63,6 +64,7 @@ from qtpy.QtWidgets import (
 )
 
 from .ansi import DARK, LIGHT
+from .icons import make_icon
 
 MAC = sys.platform == "darwin"
 WINDOWS = sys.platform == "win32"
@@ -1166,8 +1168,10 @@ class TerminalPanel(QWidget):
         self.shell: PtyShell | WinptyShell | None = None
         self.title = QLabel()
         self.title.setContentsMargins(6, 2, 6, 2)
-        self.restart_button = QToolButton()
+        self.restart_button = QToolButton()  # (an icon button, as the Debug and Git panels': see refresh_colors)
         self.restart_button.setText("Restart")
+        self.restart_button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        self.restart_button.setIconSize(QSize(18, 18))
         self.restart_button.setAutoRaise(True)
         self.restart_button.setToolTip("End this shell and start a new one in the project's folder")
         self.restart_button.clicked.connect(self.restart)
@@ -1267,6 +1271,7 @@ class TerminalPanel(QWidget):
 
     def refresh_colors(self):
         self.view.set_colors(*terminal_colors(QApplication.palette()))
+        self.restart_button.setIcon(make_icon("refresh", QApplication.palette().color(QPalette.WindowText)))
 
     def set_font(self, font: QFont):
         self.view.set_terminal_font(font)

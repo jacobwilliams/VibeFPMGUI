@@ -129,6 +129,22 @@ def test_light_and_dark_colors(panel):
     assert view._color("ff8700", view.foreground) == QColor("#ff8700")
 
 
+def test_restart_is_an_icon_button(qtbot, monkeypatch):
+    """As the Debug and Git panels' buttons: an icon, its tooltip saying what it does. (No shell started.)"""
+    restarted = []
+    monkeypatch.setattr(terminal.TerminalPanel, "restart", lambda self: restarted.append(True))
+    panel = terminal.TerminalPanel()
+    qtbot.addWidget(panel)
+    button = panel.restart_button
+    assert button.toolButtonStyle() == Qt.ToolButtonIconOnly and not button.icon().isNull()
+    assert button.toolTip() == "End this shell and start a new one in the project's folder"
+    button.click()
+    assert restarted == [True]
+    key = button.icon().cacheKey()
+    panel.refresh_colors()  # (a theme change: drawn again)
+    assert button.icon().cacheKey() != key
+
+
 # ----------------------------------------------- the terminal (no shell needed)
 @pytest.fixture
 def view(qtbot):
