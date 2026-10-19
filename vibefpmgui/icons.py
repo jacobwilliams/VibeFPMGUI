@@ -181,6 +181,47 @@ def _unified(p: QPainter, c: QColor):
         p.drawLine(QPointF(7.5, y), QPointF(16.5 if y != 12 else 13.5, y))
 
 
+def _pencil(p: QPainter, c: QColor):
+    """Edit."""
+    p.translate(12, 12)
+    p.rotate(45)
+    p.setPen(_pen(c, 1.8))
+    p.setBrush(Qt.NoBrush)
+    body = QPainterPath(QPointF(-2.6, -9))  # (from the eraser end down to the point)
+    body.lineTo(2.6, -9)
+    body.lineTo(2.6, 4.5)
+    body.lineTo(0, 9.5)
+    body.lineTo(-2.6, 4.5)
+    body.closeSubpath()
+    p.drawPath(body)
+    p.drawLine(QPointF(-2.6, -5.5), QPointF(2.6, -5.5))  # (the eraser's band)
+
+
+def _save(p: QPainter, c: QColor):
+    """A floppy disk: save."""
+    p.setPen(_pen(c, 1.8))
+    p.setBrush(Qt.NoBrush)
+    disk = QPainterPath(QPointF(4.5, 6))
+    disk.quadTo(4.5, 4.5, 6, 4.5)
+    disk.lineTo(16, 4.5)
+    disk.lineTo(19.5, 8)
+    disk.lineTo(19.5, 18)
+    disk.quadTo(19.5, 19.5, 18, 19.5)
+    disk.lineTo(6, 19.5)
+    disk.quadTo(4.5, 19.5, 4.5, 18)
+    disk.closeSubpath()
+    p.drawPath(disk)
+    p.drawRect(QRectF(8, 4.5, 7, 4.5))  # (the shutter)
+    p.drawRect(QRectF(7.5, 13, 9, 6.5))  # (the label)
+
+
+def _menu(p: QPainter, c: QColor):
+    """Three lines: a menu of more."""
+    p.setPen(_pen(c, 2))
+    for y in (7, 12, 17):
+        p.drawLine(QPointF(5, y), QPointF(19, y))
+
+
 def _pause(p: QPainter, c: QColor):
     p.setPen(Qt.NoPen)
     p.setBrush(c)
@@ -342,6 +383,9 @@ DRAWERS = {
     "clean-all": _trash,
     "stop": _stop,
     "pause": _pause,
+    "pencil": _pencil,
+    "save": _save,
+    "menu": _menu,
     "refresh": _refresh,
     "unified": _unified,
     "bug": _bug,

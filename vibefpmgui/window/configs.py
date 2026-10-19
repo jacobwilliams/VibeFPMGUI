@@ -18,7 +18,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from qtpy.QtCore import QSize, Qt
+from qtpy.QtGui import QPalette
 from qtpy.QtWidgets import (
+    QApplication,
     QComboBox,
     QFileDialog,
     QHBoxLayout,
@@ -30,6 +33,7 @@ from qtpy.QtWidgets import (
 )
 
 from .. import build_configs as bc
+from ..icons import make_icon
 from .options import project_key
 
 NEW_CONFIGURATION = "New configuration"
@@ -81,9 +85,16 @@ class ConfigsMixin:
         menu.addAction("Open Configuration File…", self.browse_configuration)
         self.config_show_action = menu.addAction("Show Configuration File in Editor", self._show_config_file)
         menu.setToolTipsVisible(True)
-        # (Opened by hand: a button's own menu adds an arrow that squeezed the "⋯".)
+        # (Opened by hand: a button's own menu adds an arrow beside the icon.)
         more.clicked.connect(lambda: menu.popup(more.mapToGlobal(more.rect().bottomLeft())))
         self._config_more_menu = menu
+        self.config_more_button = more
+        # Icon buttons, as the Debug and Git panels' (the texts kept, for the tooltips' and
+        # screen readers' sake; the icons: see _draw_config_icons).
+        for button in (self.config_edit_button, self.config_save_button, more):
+            button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+            button.setIconSize(QSize(18, 18))
+            button.setAutoRaise(True)
         row = QHBoxLayout()
         row.addWidget(self.config_combo, 1)
         row.addWidget(self.config_edit_button)
@@ -266,11 +277,21 @@ class ConfigsMixin:
         combo.blockSignals(False)
         self._update_config_ui()
 
+    def _draw_config_icons(self):
+        """The Configuration row's icons in the theme's text color (again when
+        it changes: see window.view): Edit a pencil (Cancel, while editing, an
+        ×), Save a disk, ⋯ three lines."""
+        color = QApplication.palette().color(QPalette.WindowText)
+        self.config_edit_button.setIcon(make_icon("close" if self._editing else "pencil", color))
+        self.config_save_button.setIcon(make_icon("save", color))
+        self.config_more_button.setIcon(make_icon("menu", color))
+
     def _update_config_ui(self):
         locked, editing = self.options_locked(), bool(self._editing)
         unsaved = self.has_unsaved_configuration()
         has_project = getattr(self, "manifest_path", None) is not None
         self.config_edit_button.setText("Cancel" if editing else "Edit")
+        self._draw_config_icons()
         self.config_edit_button.setEnabled(locked or editing)
         self.config_edit_button.setToolTip(
             "Stop editing: the configuration's options as saved" if editing else

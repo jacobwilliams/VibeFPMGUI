@@ -240,6 +240,32 @@ def test_edit_and_save_under_its_name(saved, project):
     assert not editable(window) and window.config_edit_button.text() == "Edit"
 
 
+def test_the_row_s_buttons_are_icons(saved):
+    """Edit (a pencil; Cancel while editing: an ×), Save (a disk) and ⋯ (three
+    lines): icon buttons, their tooltips saying what they do."""
+    from qtpy.QtCore import Qt
+    from qtpy.QtGui import QPalette
+    from qtpy.QtWidgets import QApplication
+
+    from vibefpmgui.icons import make_icon
+
+    window = saved
+    edit, save, more = window.config_edit_button, window.config_save_button, window.config_more_button
+    color = QApplication.palette().color(QPalette.WindowText)
+
+    def drawn(button, name: str) -> bool:
+        return button.icon().pixmap(18, 18).toImage() == make_icon(name, color).pixmap(18, 18).toImage()
+
+    for button in (edit, save, more):
+        assert button.toolButtonStyle() == Qt.ToolButtonIconOnly and button.toolTip()
+    assert drawn(edit, "pencil") and drawn(save, "save") and drawn(more, "menu")
+    assert edit.toolTip().startswith("Change this configuration's options")
+    edit.click()  # (editing: Edit is Cancel)
+    assert drawn(edit, "close") and edit.toolTip().startswith("Stop editing")
+    edit.click()
+    assert drawn(edit, "pencil")
+
+
 def test_cancel_puts_it_back(saved):
     saved.edit_configuration()
     saved.flag_edit.setText("-g")
