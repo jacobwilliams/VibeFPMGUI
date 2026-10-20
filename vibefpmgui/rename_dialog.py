@@ -2,7 +2,9 @@
 
 Each file has a checkbox. Files outside the project (dependencies) start
 unticked: fpm re-downloads git dependencies, so edits there would be lost,
-and a dependency is usually not yours to change.
+and a dependency is usually not yours to change. Each changed line is shown
+as it will read, in the editor's syntax colors (as in the Search panel), the
+new name highlighted.
 """
 
 from __future__ import annotations
@@ -10,21 +12,89 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from qtpy.QtCore import Qt
-from qtpy.QtGui import QFont
+from pygments.styles import get_style_by_name
+from qtpy.QtCore import QRect, Qt
+from qtpy.QtGui import QColor, QFont, QFontMetrics, QPalette
 from qtpy.QtWidgets import (
+    QApplication,
     QDialog,
     QDialogButtonBox,
     QLabel,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
 )
 
+from . import highlighter as hl
 from . import lsp as lsp_mod
 from .references_panel import short_path
+from .result_tree import MATCH_COLOR, paint_code, syntax_formats
 
 PATH_ROLE = Qt.UserRole + 1
+LINE_ROLE = Qt.UserRole + 2  # a changed line's row: (file, line (0-based), the new name's (start, end) in it)
+
+
+def renamed_spans(edits: list[lsp_mod.TextEdit], line: int) -> list[tuple[int, int]]:
+    """Where a line's edits put their new text, in the line as it will read
+    (each edit shifts those after it on the line)."""
+    spans, shift = [], 0
+    for edit in sorted((e for e in edits if e.line == line == e.end_line), key=lambda e: e.column):
+        start = edit.column + shift
+        spans.append((start, start + len(edit.new_text)))
+        shift += len(edit.new_text) - (edit.end_column - edit.column)
+    return spans
+
+
+class _LineDelegate(QStyledItemDelegate):
+    """A changed line: its number, then the line in the editor's font and
+    syntax colors, the new name highlighted (plain on the selected row)."""
+
+    def __init__(self, dialog: RenamePreviewDialog):
+        super().__init__(dialog.tree)
+        self.dialog = dialog
+
+    def paint(self, painter, option, index):
+        where = index.data(LINE_ROLE)
+        if where is None:
+            super().paint(painter, option, index)
+            return
+        path, line, spans = where
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        opt.text = ""
+        style = opt.widget.style() if opt.widget else QApplication.style()
+        style.drawControl(QStyle.CE_ItemViewItem, opt, painter, opt.widget)
+        selected = bool(opt.state & QStyle.State_Selected)
+        group = QPalette.Active if opt.state & QStyle.State_Active else QPalette.Inactive
+        plain = opt.palette.color(group, QPalette.HighlightedText if selected else QPalette.Text)
+        dim = QColor(plain)
+        dim.setAlpha(140)
+        mono = self.dialog.mono
+        full = self.dialog.lines(path)[line] if line < len(self.dialog.lines(path)) else ""
+        code = full.lstrip()
+        column = len(full) - len(code)
+        painter.save()
+        painter.setClipRect(opt.rect)
+        number = f"{line + 1:>5}  "
+        painter.setFont(mono)
+        painter.setPen(dim)
+        width = QFontMetrics(mono).horizontalAdvance(number)
+        painter.drawText(QRect(opt.rect.left() + 4, opt.rect.top(), width, opt.rect.height()),
+                         Qt.AlignVCenter | Qt.AlignLeft, number)
+        left = opt.rect.left() + 4 + width
+        metrics = QFontMetrics(mono)
+        for start, end in spans:  # (the new name: highlighted, as the Search panel's matches)
+            a, b = max(start - column, 0), max(end - column, 0)
+            x = left + metrics.horizontalAdvance(code[:a])
+            painter.fillRect(QRect(x, opt.rect.top() + 2, metrics.horizontalAdvance(code[a:b]),
+                                   opt.rect.height() - 4), MATCH_COLOR)
+        formats = None if selected else self.dialog.line_formats(path, line)
+        paint_code(painter, QRect(left, opt.rect.top(), opt.rect.right() - left, opt.rect.height()), code,
+                   formats, column, mono, plain)
+        painter.restore()
 
 
 def is_dependency(path: Path, project_dir: Path | None) -> bool:
@@ -48,9 +118,15 @@ class RenamePreviewDialog(QDialog):
                        f"{len(edits)} file{'s' * (len(edits) != 1)}. Files open in the editor are changed "
                        "there (unsaved, Undo reverts); other files are saved straight away.")
         intro.setWordWrap(True)
+        self.mono = mono or QFont()
+        self._lines: dict[str, list[str]] = {}  # file -> its lines as they will read
+        self._style = get_style_by_name(hl.style_name(QApplication.palette()))
+        self._formats: dict = {}  # token type -> format
+        self._line_formats: dict[tuple[str, int], list | None] = {}
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
         self.tree.setUniformRowHeights(True)
+        self.tree.setItemDelegate(_LineDelegate(self))
         deps = False
         for path in sorted(edits, key=lambda p: (is_dependency(p, project_dir), short_path(p, project_dir))):
             file_edits = edits[path]
@@ -74,11 +150,13 @@ class RenamePreviewDialog(QDialog):
             except OSError:
                 old_lines = []
             new_lines = lsp_mod.apply_edits("\n".join(old_lines), file_edits).split("\n")
+            self._lines[str(path)] = new_lines
             for line in sorted({e.line for e in file_edits}):
                 after = new_lines[line].strip() if line < len(new_lines) else ""
                 before = old_lines[line].strip() if line < len(old_lines) else ""
                 child = QTreeWidgetItem([f"{line + 1}:  {after}"])
                 child.setToolTip(0, f"Before: {before}\nAfter:  {after}")
+                child.setData(0, LINE_ROLE, (str(path), line, renamed_spans(file_edits, line)))
                 if mono is not None:
                     child.setFont(0, mono)
                 child.setFlags(child.flags() & ~Qt.ItemIsUserCheckable)
@@ -98,6 +176,18 @@ class RenamePreviewDialog(QDialog):
             warn.setStyleSheet("color: gray;")
             layout.addWidget(warn)
         layout.addWidget(buttons)
+
+    def lines(self, path: str) -> list[str]:
+        return self._lines.get(path, [])
+
+    def line_formats(self, path: str, line: int) -> list | None:
+        """The syntax format of each column of a changed line, as it will read
+        (lexed with the lines before it, as the Search panel's)."""
+        key = (path, line)
+        if key not in self._line_formats:
+            self._line_formats[key] = syntax_formats(self.lines(path), line + 1, Path(path), self._style,
+                                                     self._formats)
+        return self._line_formats[key]
 
     def selected(self) -> list[Path]:
         out = []

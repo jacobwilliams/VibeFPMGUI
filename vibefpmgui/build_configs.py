@@ -3,7 +3,7 @@ JSON file beside its fpm.toml (`FILE_NAME` unless another is opened), so
 they can be shared (e.g. committed with the project).
 
 The file::
-
+```json
     {
       "vibefpm": 1,
       "configurations": [
@@ -13,6 +13,7 @@ The file::
          "verbose": false}
       ]
     }
+```
 
 A configuration has every Build option but the fpm executable (a path on
 this computer, kept in the app's settings). An option left out of a

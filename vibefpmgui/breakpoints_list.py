@@ -16,12 +16,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pygments.styles import get_style_by_name
-from qtpy.QtCore import QPointF, QRect, QRectF, Qt, Signal
+from qtpy.QtCore import QPointF, QRectF, Qt, Signal
 from qtpy.QtGui import (
     QAction,
     QColor,
     QFont,
-    QFontMetrics,
     QIcon,
     QPainter,
     QPalette,
@@ -43,7 +42,7 @@ from qtpy.QtWidgets import (
 
 from . import highlighter as hl
 from .editor_shared import BREAKPOINT_COLOR, BREAKPOINT_UNPLACED, EXECUTION_COLOR
-from .result_tree import syntax_formats
+from .result_tree import paint_code, syntax_formats
 
 ENABLED, DISABLED, UNPLACED = "enabled", "disabled", "unplaced"
 KEY_ROLE = Qt.UserRole  # an item's (path, line)
@@ -117,29 +116,9 @@ class _CodeDelegate(QStyledItemDelegate):
         code = entry.code.lstrip()
         column = len(entry.code) - len(code)  # (where the code shown starts in the line)
         formats = None if selected or entry.state == DISABLED else self.tree.line_formats(entry)
-        rect = opt.rect.adjusted(4, 0, 0, 0)
-        x = rect.left()
         painter.save()
         painter.setClipRect(opt.rect)
-        start = 0
-        for i in range(1, len(code) + 1):  # (a run of text in one color at a time)
-            fmt = formats[column + start] if formats and column + start < len(formats) else None
-            if i < len(code) and formats and column + i < len(formats) and formats[column + i] is fmt:
-                continue
-            font = QFont(self.tree.mono)
-            if fmt is not None:
-                font.setBold(fmt.fontWeight() >= QFont.Bold)
-                font.setItalic(fmt.fontItalic())
-            brush = fmt.foreground() if fmt is not None else None
-            painter.setFont(font)
-            painter.setPen(brush.color() if brush is not None and brush.style() != Qt.NoBrush else plain)
-            piece = code[start:i]
-            width = QFontMetrics(font).horizontalAdvance(piece)
-            painter.drawText(QRect(x, rect.top(), width, rect.height()), Qt.AlignVCenter | Qt.AlignLeft, piece)
-            x += width
-            if x > rect.right():
-                break
-            start = i
+        paint_code(painter, opt.rect.adjusted(4, 0, 0, 0), code, formats, column, self.tree.mono, plain)
         painter.restore()
 
 

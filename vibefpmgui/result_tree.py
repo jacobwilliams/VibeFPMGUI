@@ -143,6 +143,33 @@ def syntax_formats(lines: list[str], line: int, path: Path, style, formats: dict
     return result
 
 
+def paint_code(painter, rect: QRect, code: str, formats: list | None, column: int, font: QFont,
+               plain: QColor) -> int:
+    """Draw a line of code from ``rect``'s left, a run of one syntax color at
+    a time (``formats``: each column's format, None: plain; ``code`` starts at
+    the line's ``column``), clipped to ``rect``; the x it ended at."""
+    x, start = rect.left(), 0
+    for i in range(1, len(code) + 1):
+        fmt = formats[column + start] if formats and column + start < len(formats) else None
+        if i < len(code) and formats and column + i < len(formats) and formats[column + i] is fmt:
+            continue
+        run = QFont(font)
+        if fmt is not None:
+            run.setBold(fmt.fontWeight() >= QFont.Bold)
+            run.setItalic(fmt.fontItalic())
+        brush = fmt.foreground() if fmt is not None else None
+        painter.setFont(run)
+        painter.setPen(brush.color() if brush is not None and brush.style() != Qt.NoBrush else plain)
+        piece = code[start:i]
+        width = QFontMetrics(run).horizontalAdvance(piece)
+        painter.drawText(QRect(x, rect.top(), width, rect.height()), Qt.AlignVCenter | Qt.AlignLeft, piece)
+        x += width
+        if x > rect.right():
+            break
+        start = i
+    return x
+
+
 def _badge_font(font: QFont) -> QFont:
     """The small bold font of a problem's badge."""
     small = QFont(font)
