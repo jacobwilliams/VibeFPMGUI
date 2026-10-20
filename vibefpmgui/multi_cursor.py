@@ -112,6 +112,44 @@ class MultiCursorMixin:
         self.setTextCursor(main)
         self._cursors_changed()
 
+    def visual_column(self, cursor: QTextCursor) -> int:
+        """The column a position shows at (a tab: to the next tab stop)."""
+        tab = max(1, round(self.tabStopDistance() / max(1, self.fontMetrics().horizontalAdvance(" "))))
+        column = 0
+        for ch in cursor.block().text()[:cursor.positionInBlock()]:
+            column = (column // tab + 1) * tab if ch == "\t" else column + 1
+        return column
+
+    def align_cursors(self) -> bool:
+        """Edit → Lines → Align Cursors: spaces before each cursor left of the
+        right-most one, so they're all in its column (one Undo step). Several
+        cursors on a line: the first on each line aligned, then the second, and
+        so on. A cursor with a selection: by its left edge (the selection moves
+        along). False: fewer than two cursors (nothing to align)."""
+        cursors = self.all_cursors()
+        if len(cursors) < 2:
+            return False
+        lines: dict[int, list[QTextCursor]] = {}
+        for c in cursors:
+            edge = QTextCursor(c)  # (where the spaces go: a selection's left edge)
+            edge.setPosition(c.selectionStart())
+            lines.setdefault(edge.blockNumber(), []).append(edge)
+        for row in lines.values():
+            row.sort(key=lambda c: c.position())
+        main = self.textCursor()
+        main.beginEditBlock()
+        for k in range(max(len(row) for row in lines.values())):
+            column_k = [row[k] for row in lines.values() if len(row) > k]
+            target = max(self.visual_column(c) for c in column_k)
+            for c in column_k:
+                gap = target - self.visual_column(c)
+                if gap > 0:
+                    c.insertText(" " * gap)  # (the cursors after it on the line move along)
+        main.endEditBlock()
+        self.setTextCursor(main)
+        self._cursors_changed()
+        return True
+
     def _move_each_cursor(self, operation, select: bool):
         mode = QTextCursor.KeepAnchor if select else QTextCursor.MoveAnchor
         main = self.textCursor()

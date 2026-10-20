@@ -135,6 +135,12 @@ class EditingMixin:
                                               lambda e: e.editor.sort_selected_lines(descending=True), lines_menu)
         for action in (self.sort_up_action, self.sort_down_action):
             action.setStatusTip("Sort the selected lines, ignoring case (select two or more lines)")
+        lines_menu.addSeparator()
+        self.align_cursors_action = editor_action("Align Cursors", "", self.align_cursors, lines_menu)
+        self.align_cursors_action.setStatusTip(
+            "Line the cursors up in the column of the right-most one, with spaces before those further left "
+            + ("(several cursors: ⌥-click, or ⌘⇧-click for one on each line)" if sys.platform == "darwin"
+               else "(several cursors: Alt-click, or Ctrl+Shift-click for one on each line)"))
         case_menu = self.case_menu = menu.addMenu("Change Case")  # (kept: PySide would let it go)
         for case, text in ((line_edits.UPPER, "UPPER CASE"), (line_edits.LOWER, "lower case"),
                            (line_edits.TITLE, "Title Case")):
@@ -178,6 +184,14 @@ class EditingMixin:
             action.triggered.connect(lambda _=False, n=newline: self.convert_line_endings(n))
             self.line_ending_actions[newline] = action
         self.line_endings_menu.aboutToShow.connect(self._check_line_endings)
+
+    def align_cursors(self, editor: EditorTab):
+        """Edit → Lines → Align Cursors (see CodeEditor.align_cursors)."""
+        if not editor.editor.align_cursors():
+            self.statusBar().showMessage(
+                "Align Cursors: needs two or more cursors — "
+                + ("⌥-click to add one, ⌘⇧-click for one on each line" if sys.platform == "darwin"
+                   else "Alt-click to add one, Ctrl+Shift-click for one on each line"), 6000)
 
     def trim_trailing_whitespace(self, editor: EditorTab):
         trimmed = editor.trim_trailing_whitespace()

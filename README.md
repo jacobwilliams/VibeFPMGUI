@@ -309,7 +309,10 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   selection). Typing, deleting,
   Enter, Tab, the arrow keys (with ⇧ to select), copy, cut and paste then
   work at all of them (pasting as many lines as there are cursors puts one
-  at each); Esc or a click goes back to one cursor. Saving the project's `fpm.toml`
+  at each); *Edit → Lines → Align Cursors* lines them up in the column of
+  the right-most one, with spaces before the others (several on a line: the
+  first of each line together, then the second…); Esc or a click goes back to
+  one cursor. Saving the project's `fpm.toml`
   reloads the project. *View → Open Files in Built-in Editor* switches back
   to your default application. *View → Syntax Colors* picks any installed
   Pygments style (listed as light or dark) for the editor and `fpm.toml`;
