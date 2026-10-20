@@ -24,7 +24,7 @@ from .. import lint, lsp, spelling, themes
 from ..about import FPM_DOCS_URL, AboutDialog
 from ..build_monitor import set_ui_scale
 from ..code_editor import CodeEditor
-from ..command_palette import CommandPalette
+from ..command_palette import Command, CommandPalette
 from ..editor import EditorTab, monospace_font
 from ..editor_shared import INDENT_WIDTHS
 from ..widgets import run_dialog
@@ -259,6 +259,8 @@ class ViewMixin:
             recent = [str(t) for t in self.settings.value("palette_recent", [], type=list) or []]
             self._command_palette = CommandPalette(self, recent)
             self._command_palette.recent_changed = lambda titles: self.settings.setValue("palette_recent", titles)
+            # (Hidden: in no menu; shown only when its name is typed. See vibefpmgui.punch_card.)
+            self._command_palette.hidden = [Command(("Punch Card",), self.punch_card_action)]
         self._command_palette.open()
 
     def _fill_window_style_menu(self):

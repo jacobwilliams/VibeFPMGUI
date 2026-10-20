@@ -10,6 +10,8 @@ from qtpy.QtWidgets import QApplication, QMessageBox
 from .. import formatter, line_edits, lint
 from ..background import call_in_background
 from ..editor import EditorTab
+from ..punch_card import PunchCardDialog
+from ..widgets import run_dialog
 
 
 class EditingMixin:
@@ -135,6 +137,10 @@ class EditingMixin:
                                               lambda e: e.editor.sort_selected_lines(descending=True), lines_menu)
         for action in (self.sort_up_action, self.sort_down_action):
             action.setStatusTip("Sort the selected lines, ignoring case (select two or more lines)")
+        # A hidden command (in no menu: typed in the Command Palette, see window.view).
+        self.punch_card_action = QAction("Punch Card", self)
+        self.punch_card_action.setStatusTip("The line at the cursor as an IBM punched card")
+        self.punch_card_action.triggered.connect(lambda: self._with_editor(self.show_punch_card))
         lines_menu.addSeparator()
         self.align_cursors_action = editor_action("Align Cursors", "", self.align_cursors, lines_menu)
         self.align_cursors_action.setStatusTip(
@@ -184,6 +190,12 @@ class EditingMixin:
             action.triggered.connect(lambda _=False, n=newline: self.convert_line_endings(n))
             self.line_ending_actions[newline] = action
         self.line_endings_menu.aboutToShow.connect(self._check_line_endings)
+
+    def show_punch_card(self, editor: EditorTab):
+        """The hidden Punch Card command: the line at the cursor as an IBM card."""
+        lines = editor.editor.toPlainText().split("\n")
+        name = "a new file" if editor.untitled else editor.path.name
+        run_dialog(PunchCardDialog(lines, editor.editor.textCursor().blockNumber(), name, self))
 
     def align_cursors(self, editor: EditorTab):
         """Edit → Lines → Align Cursors (see CodeEditor.align_cursors)."""
@@ -237,6 +249,7 @@ class EditingMixin:
         for submenu in (self.lines_menu, self.case_menu):
             submenu.setEnabled(editor is not None)
         self.trim_action.setEnabled(editor is not None)
+        self.punch_card_action.setEnabled(editor is not None)
         for action in (self.definition_action, self.implementation_action, self.references_action,
                        self.rename_action, self.complete_action):
             action.setEnabled(editor is not None and editor.lsp is not None)

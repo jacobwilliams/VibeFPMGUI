@@ -140,6 +140,16 @@ def score(query: str, command: Command) -> int | None:
     return total
 
 
+REVEAL_LETTERS = 5  # a hidden command's name: at least this much of it typed, to show it
+
+
+def revealed(query: str, command: Command) -> bool:
+    """Whether a hidden command shows for what's typed: the start of its name,
+    at least REVEAL_LETTERS letters of it (spaces and case aside)."""
+    typed = "".join(query.lower().split())
+    return len(typed) >= REVEAL_LETTERS and "".join(command.name.lower().split()).startswith(typed)
+
+
 def ranked(query: str, commands: list[Command], recent: list[str]) -> list[Command]:
     """The commands matching ``query``, best first: the best match, then the
     most recently used, then those available now (the others are listed,
@@ -213,6 +223,7 @@ class CommandPalette(QFrame):
         self.recent = recent if recent is not None else []
         self.recent_changed = None
         self.commands: list[Command] = []
+        self.hidden: list[Command] = []  # (in no menu: shown only when their name is typed, see revealed)
         self.setFrameShape(QFrame.StyledPanel)
         self.field = QLineEdit()
         self.field.setPlaceholderText("Type a command (letters in order: \"mvup\" finds Move Line Up)")
@@ -247,7 +258,8 @@ class CommandPalette(QFrame):
 
     def _filter(self, text: str):
         self.list.clear()
-        for command in ranked(text, self.commands, self.recent):
+        shown = self.commands + [c for c in self.hidden if revealed(text, c)]
+        for command in ranked(text, shown, self.recent):
             item = QListWidgetItem(command.title)
             item.setData(COMMAND_ROLE, command)
             if not command.action.isEnabled():
