@@ -6,6 +6,7 @@ environment, CI, the Docker image), the rest anywhere."""
 from __future__ import annotations
 
 import shutil
+import subprocess
 
 import pytest
 from conftest import write_files
@@ -153,8 +154,20 @@ end program leaky
 """
 
 
-@pytest.mark.skipif(not (shutil.which("valgrind") and shutil.which("fpm") and shutil.which("gfortran")),
-                    reason="needs valgrind, fpm and gfortran (Linux)")
+def valgrind_starts() -> bool:
+    """Whether Valgrind can run a program here: on Linux it needs the C
+    library's debug symbols (libc6-dbg on Debian and Ubuntu), else it stops
+    at startup ("Fatal error at startup: a function redirection…")."""
+    valgrind, true = shutil.which("valgrind"), shutil.which("true")
+    if not (valgrind and true):
+        return False
+    done = subprocess.run([valgrind, "-q", "--error-exitcode=99", true], capture_output=True, text=True,
+                          timeout=120, check=False)
+    return done.returncode == 0
+
+
+@pytest.mark.skipif(not (shutil.which("fpm") and shutil.which("gfortran") and valgrind_starts()),
+                    reason="needs fpm, gfortran and a Valgrind that starts (Linux, with libc6-dbg)")
 @pytest.mark.parametrize("name, code, says", [("clean", 0, "Valgrind: no errors in clean"),
                                               ("leaky", 1, "Valgrind found 1 error in leaky")])
 def test_valgrind_finds_a_leak(make_window, tmp_path, qtbot, name, code, says):

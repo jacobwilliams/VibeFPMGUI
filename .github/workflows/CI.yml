@@ -38,6 +38,12 @@ jobs:
     - name: Security audit (bandit)
       run: pixi run audit
 
+    # Valgrind (in the pixi environment) needs the C library's debug symbols
+    # to start: the system's, not in the environment (the Valgrind tests skip
+    # themselves without them).
+    - name: Install the C library's debug symbols (for Valgrind)
+      run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libc6-dbg
+
     # GUI and unit tests (pytest + pytest-qt), with an HTML code coverage
     # report in web/coverage (deployed with the website, linked from the API
     # docs). There's no display on the runner: Qt draws offscreen
