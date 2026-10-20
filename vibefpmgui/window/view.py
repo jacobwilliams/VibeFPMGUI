@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import sys
 
-from qtpy.QtCore import QEvent, QSize, QUrl
+from qtpy.QtCore import QEvent, QSize, Qt, QUrl
 from qtpy.QtGui import (
     QAction,
     QActionGroup,
@@ -219,6 +219,19 @@ class ViewMixin:
         self.window_style_menu.setStatusTip("How buttons, tabs and the panels' dividers are drawn: the "
                                             "theme's choice, or one of Qt's styles")
         self.window_style_menu.aboutToShow.connect(self._fill_window_style_menu)
+        # The toolbar: small icons, labels or not (also its right-click menu: see running._build_commands).
+        self.toolbar_menu = view_menu.addMenu("Toolbar")  # (kept: PySide would let it go)
+        self.small_icons_action = self.toolbar_menu.addAction("Small Icons")
+        self.small_icons_action.setCheckable(True)
+        self.small_icons_action.setChecked(self.settings.value("toolbar_small_icons", False, type=bool))
+        self.small_icons_action.setStatusTip("Smaller icons on the toolbar (the window's text size still counts)")
+        self.toolbar_labels_action = self.toolbar_menu.addAction("Show Labels")
+        self.toolbar_labels_action.setCheckable(True)
+        self.toolbar_labels_action.setChecked(self.settings.value("toolbar_labels", True, type=bool))
+        self.toolbar_labels_action.setStatusTip("The commands' names under the toolbar's icons (off: icons only, "
+                                                "their names in the tooltips)")
+        self.small_icons_action.toggled.connect(lambda on: self._set_toolbar_option("toolbar_small_icons", on))
+        self.toolbar_labels_action.toggled.connect(lambda on: self._set_toolbar_option("toolbar_labels", on))
         hl.chosen_style = self.settings.value("syntax_style", hl.AUTO) or hl.AUTO
         self.style_menu = view_menu.addMenu("Syntax Colors")
         self.style_menu.setStatusTip("The Pygments color style for the editor and fpm.toml")
@@ -349,6 +362,20 @@ class ViewMixin:
 
     FONT_DELTA_RANGE = (-4, 12)  # points relative to the system size
 
+    def _set_toolbar_option(self, key: str, on: bool):
+        self.settings.setValue(key, on)  # (the app's setting, for every project: as the theme)
+        self.apply_toolbar_look()
+
+    def apply_toolbar_look(self):
+        """The toolbar's icons, small (16) or not (22, scaled with the text
+        size), with their labels under them or not (View → Toolbar)."""
+        if not hasattr(self, "command_toolbar"):
+            return
+        size = round((16 if self.small_icons_action.isChecked() else 22) * getattr(self, "_ui_factor", 1.0))
+        self.command_toolbar.setIconSize(QSize(size, size))
+        self.command_toolbar.setToolButtonStyle(Qt.ToolButtonTextUnderIcon if self.toolbar_labels_action.isChecked()
+                                                else Qt.ToolButtonIconOnly)
+
     def set_font_delta(self, delta: int, announce: bool = True):
         """Make all text in the window ``delta`` points bigger (or smaller)
         than the system size."""
@@ -375,7 +402,8 @@ class ViewMixin:
             self.git_panel.set_code_font(code)
         if hasattr(self, "complexity_panel"):
             self.complexity_panel.set_code_font(code)
-        self.command_toolbar.setIconSize(QSize(round(22 * factor), round(22 * factor)))
+        self._ui_factor = factor
+        self.apply_toolbar_look()
         self.build_monitor.refresh_fonts()
         self.test_monitor.refresh_fonts()
         self.run_monitor.refresh_fonts()

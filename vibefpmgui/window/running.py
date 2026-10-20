@@ -205,6 +205,10 @@ class RunningMixin:
         self.addToolBar(Qt.TopToolBarArea, toolbar)
         self.setUnifiedTitleAndToolBarOnMac(True)
         self.command_toolbar = toolbar
+        # Right-click: the toolbar's look (View → Toolbar's choices; Qt's own menu would list the panels).
+        toolbar.setContextMenuPolicy(Qt.CustomContextMenu)
+        toolbar.customContextMenuRequested.connect(
+            lambda pos: self.toolbar_menu.popup(toolbar.mapToGlobal(pos)))
         self._update_command_icons()
 
     def _update_command_icons(self):
