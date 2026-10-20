@@ -330,6 +330,7 @@ class ViewMixin:
             self.git_panel.refresh_palette()
             self.complexity_panel.refresh_palette()
             self.debug_panel.refresh_palette()
+            self.outputs_view.refresh_palette()
             self._draw_config_icons()
             self.terminal_panel.refresh_colors()
             for editor in self.editors():

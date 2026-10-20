@@ -227,6 +227,9 @@ p { margin: 0 0 14px; }
 .shot.full { max-width: 1060px; margin-inline: auto; }
 .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
 .tree-pair { grid-template-columns: 2fr 5fr; align-items: center; }
+/* Screenshots of a narrow panel (Build options) or a tall one (Valgrind's report): not stretched. */
+.shot.narrow { max-width: 360px; margin-inline: auto; }
+.shot.tall { max-width: 440px; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 48px; align-items: start; }
 .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 26px; }
 .top-gap { margin-top: 56px; }

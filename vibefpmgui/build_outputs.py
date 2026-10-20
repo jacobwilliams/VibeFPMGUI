@@ -523,6 +523,7 @@ class BuildOutputsView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.configs: list[Configuration] = []
+        self.project_dir: Path | None = None
         self.summary = QLabel()
         refresh = QToolButton()
         refresh.setText("Refresh")
@@ -557,8 +558,13 @@ class BuildOutputsView(QWidget):
         self._scroll = scroll
         self.set_configurations([], None)
 
+    def refresh_palette(self):
+        """The theme changed: the cards drawn again in its colors (the same
+        configurations: the build folders aren't read again)."""
+        self.set_configurations(self.configs, self.project_dir)
+
     def set_configurations(self, configs: list[Configuration], project_dir: Path | None):
-        self.configs = configs
+        self.configs, self.project_dir = configs, project_dir
         while self.cards_layout.count():
             item = self.cards_layout.takeAt(0)
             if item.widget():

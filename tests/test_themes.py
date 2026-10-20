@@ -141,3 +141,23 @@ def test_the_window_style_menu(window):
     assert app_style() == "windows"
     window._fill_window_style_menu()
     assert next(a for a in window.window_style_menu.actions() if a.data() == "Windows").isChecked()
+
+
+def test_build_outputs_cards_follow_a_theme_change(window, tmp_path, qtbot):
+    """The Build outputs cards are drawn in the theme's colors: drawn again
+    when it changes (they kept the old colors until the panel was refreshed)."""
+    from vibefpmgui import build_outputs as bo
+
+    folder = tmp_path / "build" / "gfortran_0123456789ABCDEF"
+    folder.mkdir(parents=True)
+    config = bo.Configuration("debug · gfortran", [bo.BuildFolder(folder, "gfortran")], True, "", current=True)
+    window.outputs_view.set_configurations([config], tmp_path)
+
+    def card_background() -> str:
+        (card,) = window.outputs_view.findChildren(bo.ConfigCard)
+        return card.styleSheet().split("background:", 1)[1].split(";", 1)[0].strip()
+
+    # (The window hears of the new palette through the event loop, as the other panels do.)
+    for theme, colors in (("solarized-light", "light"), ("nord", "dark"), ("solarized-light", "light")):
+        window.set_theme(theme)
+        qtbot.waitUntil(lambda c=colors: card_background() == bo.PALETTES[c]["bg"], timeout=3000)
