@@ -42,6 +42,7 @@ class GitPanel(QWidget):
     refresh_requested = Signal()
     open_requested = Signal(str, int)  # file, line
     reveal_requested = Signal(str)  # a changed file's "Show in Project Files": its path
+    discard_requested = Signal(object)  # a changed file's "Discard Changes…": its gs.Change
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -251,7 +252,8 @@ class GitPanel(QWidget):
         self.diff.show_diff(old, new, change.path)
 
     def _file_menu(self, pos):
-        """A changed file's menu (a right-click on it): Show in Project Files."""
+        """A changed file's menu (a right-click on it): Show in Project Files,
+        Discard Changes… (asked first: see window.git)."""
         item = self.files.itemAt(pos)
         change = item.data(0, CHANGE_ROLE) if item is not None else None
         if change is None or self.status is None:
@@ -262,6 +264,12 @@ class GitPanel(QWidget):
         if not path.exists():
             show.setEnabled(False)
             show.setText("Show in Project Files (deleted)")
+        menu.addSeparator()
+        discard = menu.addAction("Delete File…" if change.area == gs.UNTRACKED else "Discard Changes…",
+                                 lambda: self.discard_requested.emit(change))
+        if change.area == gs.CONFLICT:
+            discard.setEnabled(False)
+            discard.setText("Discard Changes… (resolve the conflict, or abort the merge, first)")
         menu.aboutToHide.connect(menu.deleteLater)
         menu.popup(self.files.viewport().mapToGlobal(pos))
 

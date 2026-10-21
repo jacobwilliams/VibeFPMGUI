@@ -140,6 +140,30 @@ def read_status(path: Path) -> RepoStatus | None:
     return parse_status(root, output)
 
 
+def discard(root: Path, change: Change) -> list[Path]:
+    """Discard a file's changes (the Git panel's Discard Changes…). In
+    Changes: back to its staged version (or the last commit's), what's staged
+    kept. In Staged Changes: back to the last commit's version, staged and
+    not (a file new in it unstaged, a renamed one back under its old name).
+    The files then to remove, which git has no copy of (an untracked file, a
+    new one unstaged): returned, not deleted here (see the window: they go
+    to the Trash). Raises GitError (git's message)."""
+    if change.area == CONFLICT:
+        raise GitError("a file with a conflict: resolve it, or abort the merge, first")
+    if change.area == UNTRACKED:
+        return [root / change.path]
+    if change.area == CHANGED:
+        _check(root, "restore", "--worktree", "--", change.path)
+        return []
+    if change.kind in ("added", "renamed"):  # (not in the last commit under this name)
+        _check(root, "rm", "--cached", "--quiet", "--", change.path)
+        if change.kind == "renamed" and change.old_path:
+            _check(root, "restore", "--source=HEAD", "--staged", "--worktree", "--", change.old_path)
+        return [root / change.path]
+    _check(root, "restore", "--source=HEAD", "--staged", "--worktree", "--", change.path)
+    return []
+
+
 def parse_status(root: Path, output: bytes) -> RepoStatus:
     """``git status --porcelain=v2 --branch -z`` read."""
     status = RepoStatus(root)

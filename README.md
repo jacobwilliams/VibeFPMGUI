@@ -150,7 +150,11 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   how many commits ahead or behind), and its changed files: staged, not
   staged, untracked, in conflict. Select a file to see its diff, side by side
   (or *Unified*), syntax-colored, with unchanged stretches folded;
-  double-click a line to open the file there. It refreshes when a file is
+  double-click a line to open the file there. Right-click a file to show it
+  in *Project files*, or *Discard Changes…* (asked first, saying what's
+  lost): a change goes back to its staged version or the last commit's; a
+  staged one to the last commit's; an untracked file (*Delete File…*), or a
+  new one that was staged, is moved to the Trash. It refreshes when a file is
   saved, the project is reloaded, or the app is used again after another
   (git in a terminal), and with *Refresh*. Read with the
   [git](https://git-scm.com) program, which must be installed (on the
