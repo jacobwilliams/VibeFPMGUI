@@ -126,6 +126,7 @@ class _Tile(QWidget):
 
 class GitStatsView(QWidget):
     mode_changed = Signal(str)  # TOTAL or MONTHLY chosen above the plot
+    reload_requested = Signal()  # (the Git panel's pages' signal: see GitLogView; the stats have no options of their own)
 
     TILES: ClassVar[list[tuple[str, str]]] = [("commits", "Commits"), ("people", "People"), ("age", "Age"), ("latest", "Latest commit"),
              ("recent", "Last 30 days"), ("branches", "Branches"), ("tags", "Tags"), ("files", "Files"),
@@ -139,6 +140,7 @@ class GitStatsView(QWidget):
         self.curves: dict[str, pg.PlotDataItem | pg.BarGraphItem] = {}  # each line's (or bars'), by whom
         self.colors: dict[str, QColor] = {}
         self.mode = TOTAL
+        self._stale = False  # (the plot's to be drawn again when it's next shown: see _redraw)
         self.months: tuple[list[int], list[tuple[str, list[int]]]] | None = None  # (Per month's: see per_month)
         self.tiles = {key: _Tile(caption) for key, caption in self.TILES}
         tiles = QWidget()
@@ -235,8 +237,7 @@ class GitStatsView(QWidget):
         backdrop = QColor(pal["bg"])
         backdrop.setAlphaF(0.75)  # (a little of the plot shows through)
         self.legend.setBrush(backdrop)
-        if self.stats is not None:
-            self._draw()
+        self._redraw()
 
     def _label(self):
         self.plot.setLabel("left", "Commits a month" if self.mode == MONTHLY else "Commits",
@@ -250,12 +251,38 @@ class GitStatsView(QWidget):
         self.mode = mode
         self.mode_buttons[mode].setChecked(True)
         self._label()
-        if self.stats is not None:
-            self._draw()
+        self._redraw()
         if user:
             self.mode_changed.emit(mode)
 
+    def _redraw(self):
+        """The plot drawn again (new colors, another plot): now if it's on
+        show, else when it's next shown."""
+        if self.stats is None:
+            return
+        if self.isVisible():
+            self._draw()
+        else:
+            self._stale = True
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._stale and self.stats is not None:
+            self._draw()
+
+    # ------------------------------------------------------- read by the panel
+    # (The Git panel's pages that read from the repository: see vibefpmgui.git_panel.)
+    def reload_key(self) -> tuple:
+        return ()
+
+    def reader(self, root):
+        return lambda: gst.read_stats(root)
+
+    def show_result(self, stats: gst.RepoStats):
+        self.show_stats(stats)
+
     def show_message(self, text: str):
+        self.stats = None
         self.message.setText(text)
         self.stack.setCurrentWidget(self.message)
 
@@ -301,6 +328,7 @@ class GitStatsView(QWidget):
         self.stack.setCurrentWidget(self.content)
 
     def _draw(self, now: float | None = None):
+        self._stale = False
         stats = self.stats
         now = time.time() if now is None else now
         self.plot.clear()

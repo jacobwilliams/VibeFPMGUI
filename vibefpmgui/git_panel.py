@@ -1,4 +1,4 @@
-"""The *Git* tab, with two views to switch between in its header:
+"""The *Git* tab, with three views to switch between in its header:
 
 * *Diff*: the project's repository's status (its branch, and the changed
   files: staged, not staged, untracked, in conflict), and the diff of the
@@ -8,9 +8,13 @@
   how they join; a commit's details, files and diffs (see
   `vibefpmgui.git_log`, `vibefpmgui.git_log_view`).
 * *Stats*: numbers about the repository and each person's commits over time
-  (see `vibefpmgui.git_stats`, `vibefpmgui.git_stats_view`), read when the
-  view is on show and HEAD has moved since (or Refresh is clicked), as
-  the History is.
+  (see `vibefpmgui.git_stats`, `vibefpmgui.git_stats_view`).
+
+The History and the Stats are read when they're on show and HEAD has moved
+since (or Refresh is clicked; or something of their own changed, such as
+the History's All branches: see `reload_key`). Each of those pages has the
+same few methods for this (`reload_key`, `reader`, `show_result`,
+`show_message`), so the panel needs nothing of either's own.
 
 What git says is read on a pool thread.
 """
@@ -36,12 +40,10 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from . import git_log as gl
-from . import git_stats as gst
 from . import git_status as gs
 from .background import call_in_background
 from .build_monitor import PALETTES, TitleIcon, app_is_light, panel_stylesheet
-from .diff_view import DiffView
+from .file_diff import FileDiff
 from .git_log_view import GitLogView
 from .git_stats_view import GitStatsView
 from .icons import make_icon
@@ -58,7 +60,9 @@ LETTER_COLORS = {"M": "#e8a317", "A": "#2f9e44", "D": "#e03131", "R": "#4c6ef5",
 
 
 class GitPanel(QWidget):
-    """The changed files (left) and the selected one's diff (right)."""
+    """Its header (the views' buttons, the branch, Unified and Refresh) over
+    the view chosen: Diff (the changed files, left, and the selected one's
+    diff, right), History or Stats."""
 
     refresh_requested = Signal()
     open_requested = Signal(str, int)  # file, line
@@ -69,7 +73,6 @@ class GitPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.status: gs.RepoStatus | None = None
-        self._showing: tuple[Path, gs.Change] | None = None  # (the change whose versions are being read)
         self.icon_for = None  # a file's QIcon, as in Project files (set by the window)
         self.is_light = True
         self.palette_colors = PALETTES["light"]
@@ -87,8 +90,7 @@ class GitPanel(QWidget):
         self.unified_button.setCheckable(True)
         self.unified_button.setToolTip("Show the diff as one list (removed lines, then added ones) "
                                        "instead of side by side")
-        self.unified_button.toggled.connect(lambda on: (self.diff.set_unified(on),
-                                                        self.log_view.diff.set_unified(on)))
+        self.unified_button.toggled.connect(self._set_unified)
         refresh = self.refresh_button = QToolButton()
         refresh.setText("Refresh")
         refresh.setToolTip("Read the repository's status again")
@@ -132,18 +134,11 @@ class GitPanel(QWidget):
         self.files.setContextMenuPolicy(Qt.CustomContextMenu)
         self.files.customContextMenuRequested.connect(self._file_menu)
         self.file_menu: QMenu | None = None  # (kept while it's open)
-        self.diff_title = StatusLabel()
-        self.diff = DiffView()
-        self.diff.open_requested.connect(self._open_line)
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(4)
-        right_layout.addWidget(self.diff_title)
-        right_layout.addWidget(self.diff, 1)
+        self.file_diff = FileDiff()
+        self.file_diff.open_requested.connect(self._open_line)
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.addWidget(self.files)
-        self.splitter.addWidget(right)
+        self.splitter.addWidget(self.file_diff)
         self.splitter.setStretchFactor(0, 1)
         self.splitter.setStretchFactor(1, 3)
 
@@ -160,11 +155,14 @@ class GitPanel(QWidget):
         self.log_view = GitLogView()
         self.log_view.open_requested.connect(self.open_requested)
         self.log_view.reveal_requested.connect(self.reveal_requested)
-        self.log_view.reload_requested.connect(self._read_view)
+        # The pages read from the repository (see the module's description).
+        self.read_pages: dict[str, GitLogView | GitStatsView] = {HISTORY: self.log_view, STATS: self.stats_view}
+        for page in self.read_pages.values():
+            page.reload_requested.connect(self._read_view)
         self.pages = QStackedWidget()
-        self.pages.addWidget(diff_page)
-        self.pages.addWidget(self.log_view)
-        self.pages.addWidget(self.stats_view)
+        self.views: dict[str, QWidget] = {DIFF: diff_page, **self.read_pages}
+        for page in self.views.values():
+            self.pages.addWidget(page)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 10, 14, 6)
@@ -187,11 +185,11 @@ class GitPanel(QWidget):
         self.title_icon.draw(pal["text"], self.title)
         self.unified_button.setIcon(make_icon("unified", pal["text"]))
         self.refresh_button.setIcon(make_icon("refresh", pal["text"]))
-        for label in (self.subtitle, self.empty, self.diff_title):
+        for label in (self.subtitle, self.empty):
             label.setStyleSheet(f"color: {pal['muted']};")
-        self.diff.refresh_style()
-        self.stats_view.refresh_palette(pal, not self.is_light)
-        self.log_view.refresh_palette(pal, not self.is_light)
+        self.file_diff.refresh_style(pal["muted"])
+        for page in self.read_pages.values():
+            page.refresh_palette(pal, not self.is_light)
 
     def refresh_fonts(self):
         font = QFont(QApplication.font())
@@ -202,43 +200,48 @@ class GitPanel(QWidget):
 
     def set_code_font(self, font: QFont):
         """The diffs' font (the editor's)."""
-        self.diff.set_font(font)
+        self.file_diff.set_font(font)
         self.log_view.set_code_font(font)
+
+    def _set_unified(self, on: bool):
+        """Unified: the diffs (the Diff page's, the History's) as one list."""
+        for diff in (self.file_diff, self.log_view.file_diff):
+            diff.set_unified(on)
 
     # -------------------------------------------------------------- views
     def view(self) -> str:
         page = self.pages.currentWidget()
-        return STATS if page is self.stats_view else HISTORY if page is self.log_view else DIFF
+        return next((view for view, shown in self.views.items() if shown is page), DIFF)
 
     def set_view(self, view: str, user: bool = False):
         """Show the Diff, the History or the Stats (``user``: chosen in the
         header: said with view_changed, to be remembered)."""
-        view = view if view in VIEW_TITLES else DIFF
+        view = view if view in self.views else DIFF
         self.view_buttons[view].setChecked(True)
-        self.pages.setCurrentWidget({STATS: self.stats_view, HISTORY: self.log_view}.get(view, self.pages.widget(0)))
+        self.pages.setCurrentWidget(self.views[view])
         self.unified_button.setVisible(view in (DIFF, HISTORY))  # (both have a diff)
         self._read_view()
         if user:
             self.view_changed.emit(view)
 
     def _refresh_clicked(self):
-        self._shown.clear()  # (read again even if HEAD hasn't moved: a new branch, a tag, a fetch…)
+        # (Read again even if HEAD hasn't moved: a new branch, a tag, a fetch… And a read under way
+        # since before: its answer may be from before, so it's dropped.)
+        self._shown.clear()
+        self._reading.clear()
         self.refresh_requested.emit()
 
-    def _page(self, view: str):
-        return {HISTORY: self.log_view, STATS: self.stats_view}[view]
-
     def _key(self, view: str) -> tuple:
-        key = (self.status.root, self.status.head)
-        return (*key, self.log_view.all_branches.isChecked()) if view == HISTORY else key
+        """What the view's on show for: the repository, HEAD, and what the page adds (its reload_key)."""
+        return (self.status.root, self.status.head, *self.read_pages[view].reload_key())
 
     def _read_view(self):
-        """The History or the Stats, read again if they're on show and HEAD
-        has moved (or, the History, All branches was toggled)."""
+        """The view on show (History or Stats), read again if what it's for
+        has changed (see _key)."""
         view = self.view()
-        if view == DIFF or self.status is None:
+        if view not in self.read_pages or self.status is None:
             return
-        page, key = self._page(view), self._key(view)
+        page, key = self.read_pages[view], self._key(view)
         if key in (self._shown.get(view), self._reading.get(view)):
             return
         if self.status.head is None:
@@ -248,9 +251,7 @@ class GitPanel(QWidget):
         if self._shown.get(view) is None or self._shown[view][0] != key[0]:
             page.show_message("Reading the repository…")
         self._reading[view] = key
-        root = self.status.root
-        read = ((lambda: gl.read_log(root, all_branches=key[2])) if view == HISTORY
-                else (lambda: gst.read_stats(root)))
+        read = page.reader(self.status.root)
         call_in_background(lambda: self._safely(read), lambda result: self._view_read(view, key, result), self)
 
     @staticmethod
@@ -262,18 +263,16 @@ class GitPanel(QWidget):
 
     def _view_read(self, view: str, key: tuple, result):
         if self._reading.get(view) != key:
-            return  # (another one asked for meanwhile, or the project closed)
+            return  # (another one asked for meanwhile, Refresh clicked, or the project closed)
         self._reading.pop(view)
         self._shown[view] = key
-        page = self._page(view)
+        page = self.read_pages[view]
         if isinstance(result, str):
             page.show_message(f"Couldn't read the repository's history: {result}")
         elif result is None:
             page.show_message(f"No commits in {key[0].name} yet.")
-        elif view == HISTORY:
-            page.show_log(result)
         else:
-            page.show_stats(result)
+            page.show_result(result)
         if self.status is None or self._key(view) != key:
             self._read_view()  # (it moved on meanwhile)
 
@@ -281,18 +280,16 @@ class GitPanel(QWidget):
     def show_message(self, message: str):
         """Nothing to list: why."""
         self.status = None
-        self._showing = None
         self._shown.clear()
         self._reading.clear()
-        self.stats_view.stats = None
-        self.stats_view.show_message(message)
-        self.log_view.show_message(message)
+        for page in self.read_pages.values():
+            page.show_message(message)
         self.subtitle.setText("")
         self.empty.setText(message)
         self.empty.show()
         self.splitter.hide()
         self.files.clear()
-        self.diff.clear()
+        self.file_diff.clear()
 
     def show_status(self, status: gs.RepoStatus):
         """A repository's status; the file shown before stays selected if it's
@@ -335,8 +332,7 @@ class GitPanel(QWidget):
             self.empty.setText(f"No changes in {status.root.name} (on {status.summary()}).")
             self.empty.show()
             self.splitter.hide()
-            self._showing = None
-            self.diff.clear()
+            self.file_diff.clear()
             return
         self.empty.hide()
         self.splitter.show()
@@ -361,33 +357,12 @@ class GitPanel(QWidget):
         if change is None or self.status is None:
             return
         root = self.status.root
-        self._showing = (root, change)
-        self.diff_title.setText(f"<b>{change.path}</b> · reading…")
-        call_in_background(lambda: self._versions(root, change),
-                           lambda result: self._show_versions(root, change, result), self)
 
-    @staticmethod
-    def _versions(root: Path, change: gs.Change):
-        try:
-            return gs.versions(root, change)
-        except (gs.GitError, OSError) as error:
-            return str(error)
+        def read():
+            old, new, old_label, new_label = gs.versions(root, change)
+            return old, new, f"{old_label} → {new_label}" if old_label else f"new file ({new_label})"
 
-    def _show_versions(self, root: Path, change: gs.Change, result):
-        if self._showing != (root, change):
-            return  # (another file chosen meanwhile)
-        if isinstance(result, str):
-            self.diff_title.setText(f"<b>{change.path}</b> · couldn't read it: {result}")
-            self.diff.clear()
-            return
-        old, new, old_label, new_label = result
-        if gs.BINARY in (old, new):
-            self.diff_title.setText(f"<b>{change.path}</b> · binary or very big: no diff shown")
-            self.diff.clear()
-            return
-        compared = f"{old_label} → {new_label}" if old_label else f"new file ({new_label})"
-        self.diff_title.setText(f"<b>{change.path}</b> · {compared}")
-        self.diff.show_diff(old, new, change.path)
+        self.file_diff.load((root, change), change.path, read)
 
     def _file_menu(self, pos):
         """A changed file's menu (a right-click on it): Show in Project Files,

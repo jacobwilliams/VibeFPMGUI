@@ -156,9 +156,9 @@ def test_the_history_view(qtbot, tmp_path):
     assert set(paths) == {"a.txt", "gone.txt", "new.txt"}
     item = next(view.files.topLevelItem(i) for i in range(3) if paths[i] == "a.txt")
     view.files.setCurrentItem(item)
-    qtbot.waitUntil(lambda: "a.txt" in view.diff_title.text() and "→" in view.diff_title.text(), timeout=10000)
+    qtbot.waitUntil(lambda: "a.txt" in view.file_diff.title.text() and "→" in view.file_diff.title.text(), timeout=10000)
     with qtbot.waitSignal(panel.open_requested) as opened:
-        view.diff.open_requested.emit(2)
+        view.file_diff.open_requested.emit(2)
     assert opened.args == [str(root.resolve() / "a.txt"), 2]
 
 
@@ -227,3 +227,31 @@ def test_show_a_commit_s_file_in_project_files(qtbot, tmp_path):
     with qtbot.waitSignal(panel.reveal_requested) as said:
         show.trigger()
     assert said.args == [str(root.resolve() / "new.txt")]
+
+
+def test_a_theme_change_keeps_the_commit_and_file_chosen(qtbot, tmp_path, monkeypatch):
+    """New colors: the card drawn again from what was read (git not asked again), the file and its diff kept."""
+    root = make_history(tmp_path)
+    panel = history_panel(qtbot, root)
+    view = panel.log_view
+    qtbot.waitUntil(lambda: view.files.topLevelItemCount() == 3, timeout=10000)
+    view.files.setCurrentItem(view.files.topLevelItem(2))
+    chosen = view.files.currentItem().data(0, glv.CHANGE_ROLE).path
+    qtbot.waitUntil(lambda: "→" in view.file_diff.title.text(), timeout=10000)
+    diff_title = view.file_diff.title.text()
+    monkeypatch.setattr(gb, "commit_details", lambda *args: pytest.fail("read again"))
+    monkeypatch.setattr(gl, "file_versions", lambda *args: pytest.fail("read again"))
+    before = view.card.toHtml()
+    panel.refresh_palette()
+    view.refresh_palette(gp.PALETTES["dark"], True)
+    assert view.card.toHtml() != before and "fourth" in view.card.toPlainText()  # (its new colors)
+    assert view.files.topLevelItemCount() == 3 and view.files.currentItem().data(0, glv.CHANGE_ROLE).path == chosen
+    assert view.file_diff.title.text() == diff_title
+
+
+def test_each_page_read_through_the_same_few_methods():
+    """(The Git panel needs nothing of a page's own: see git_panel.)"""
+    for page in (gp.GitLogView, gp.GitStatsView):
+        for method in ("reload_key", "reader", "show_result", "show_message", "refresh_palette"):
+            assert callable(getattr(page, method)), (page, method)
+        assert hasattr(page, "reload_requested")

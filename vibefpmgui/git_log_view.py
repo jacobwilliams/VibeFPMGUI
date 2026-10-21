@@ -45,7 +45,7 @@ from . import git_blame as gb
 from . import git_log as gl
 from . import git_status as gs
 from .background import call_in_background
-from .diff_view import DiffView
+from .file_diff import FileDiff
 
 COLUMNS = ["Commit", "Author", "Date", "Hash"]
 MAX_LANES = 16  # lanes drawn (a wider graph: the rest cut off)
@@ -211,7 +211,7 @@ class GitLogView(QWidget):
     open_requested = Signal(str, int)        # a file of the working tree, a line
     reveal_requested = Signal(str)           # a changed file's "Show in Project Files": its path now
     all_branches_changed = Signal(bool)      # All branches toggled
-    reload_requested = Signal()              # (All branches toggled: read again)
+    reload_requested = Signal()              # (All branches toggled: read again: see reload_key)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -219,8 +219,8 @@ class GitLogView(QWidget):
         self.pal: dict = {}
         self.dark = False
         self.icon_for = None   # a file's QIcon (set by the panel)
-        self._details_for: str | None = None   # the commit whose details are being read
-        self._diff_for: tuple | None = None    # (commit, file) whose versions are being read
+        self._details: tuple[str, object] | None = None  # (a commit, its details: CommitDetails, None
+        #                                                   while they're read, or why git couldn't), the one chosen
 
         self.all_branches = QToolButton()
         self.all_branches.setObjectName("GitView")
@@ -262,15 +262,8 @@ class GitLogView(QWidget):
         self.files.setContextMenuPolicy(Qt.CustomContextMenu)
         self.files.customContextMenuRequested.connect(self._file_menu)
         self.file_menu: QMenu | None = None  # (kept while it's open)
-        self.diff_title = QLabel()
-        self.diff = DiffView()
-        self.diff.open_requested.connect(self._open_line)
-        diff_side = QWidget()
-        diff_layout = QVBoxLayout(diff_side)
-        diff_layout.setContentsMargins(0, 0, 0, 0)
-        diff_layout.setSpacing(4)
-        diff_layout.addWidget(self.diff_title)
-        diff_layout.addWidget(self.diff, 1)
+        self.file_diff = FileDiff()
+        self.file_diff.open_requested.connect(self._open_line)
         details = QSplitter(Qt.Vertical)
         details.addWidget(self.card)
         details.addWidget(self.files)
@@ -278,7 +271,7 @@ class GitLogView(QWidget):
         details.setStretchFactor(1, 2)
         self.bottom = QSplitter(Qt.Horizontal)
         self.bottom.addWidget(details)
-        self.bottom.addWidget(diff_side)
+        self.bottom.addWidget(self.file_diff)
         self.bottom.setStretchFactor(0, 2)
         self.bottom.setStretchFactor(1, 3)
         self.splitter = QSplitter(Qt.Vertical)
@@ -304,16 +297,36 @@ class GitLogView(QWidget):
 
     # ------------------------------------------------------------ styling
     def refresh_palette(self, pal: dict, dark: bool):
+        """New colors: drawn again from what's been read (git isn't asked again;
+        the commit and file chosen, and the diff's place, stay)."""
         self.pal, self.dark = pal, dark
-        for label in (self.count, self.message, self.diff_title):
+        for label in (self.count, self.message):
             label.setStyleSheet(f"color: {pal['muted']};")
-        self.diff.refresh_style()
+        self.file_diff.refresh_style(pal["muted"])
         self.table.viewport().update()
-        if self.log is not None:
-            self._commit_chosen(self.table.currentIndex())  # (the card's colors)
+        commit = self.current_commit()
+        if commit is not None and self._details is not None and self._details[0] == commit.sha:
+            self._show_card(commit, self._details[1])
+        muted = QBrush(QColor(pal["muted"]))
+        for i in range(self.files.topLevelItemCount()):
+            self.files.topLevelItem(i).setForeground(1, muted)
 
     def set_code_font(self, font: QFont):
-        self.diff.set_font(font)
+        self.file_diff.set_font(font)
+
+    # ------------------------------------------------------- read by the panel
+    # (The Git panel's pages that read from the repository: see vibefpmgui.git_panel.)
+    def reload_key(self) -> tuple:
+        """What, besides the repository and HEAD, the history read depends on."""
+        return (self.all_branches.isChecked(),)
+
+    def reader(self, root: Path):
+        """What reads it (on a pool thread)."""
+        all_branches = self.all_branches.isChecked()
+        return lambda: gl.read_log(root, all_branches=all_branches)
+
+    def show_result(self, log: gl.Log):
+        self.show_log(log)
 
     # -------------------------------------------------------------- state
     def show_message(self, text: str):
@@ -354,23 +367,22 @@ class GitLogView(QWidget):
     def _commit_chosen(self, index, _previous=None):
         commit = index.data(COMMIT_ROLE) if index.isValid() else None
         self.files.clear()
-        self.diff.clear()
-        self.diff_title.setText("")
+        self.file_diff.clear()
         if commit is None or self.log is None:
+            self._details = None
             self.card.clear()
             return
-        self._details_for = commit.sha
+        self._details = (commit.sha, None)
         self._show_card(commit, None)
         root = self.log.root
-        call_in_background(lambda: self._details(root, commit.sha),
-                           lambda result: self._details_read(commit, result), self)
 
-    @staticmethod
-    def _details(root: Path, sha: str):
-        try:
-            return gb.commit_details(root, sha)
-        except (gs.GitError, OSError) as error:
-            return str(error) or type(error).__name__
+        def read():
+            try:
+                return gb.commit_details(root, commit.sha)
+            except (gs.GitError, OSError) as error:
+                return str(error) or type(error).__name__
+
+        call_in_background(read, lambda result: self._details_read(commit, result), self)
 
     def _show_card(self, commit: gl.LogCommit, details):
         shown = details
@@ -382,13 +394,12 @@ class GitLogView(QWidget):
         self.card.setHtml(html)
 
     def _details_read(self, commit: gl.LogCommit, result):
-        if self._details_for != commit.sha:
+        if self._details is None or self._details[0] != commit.sha:
             return  # (another commit chosen meanwhile)
+        self._details = (commit.sha, result)
         self._show_card(commit, result)
         if not isinstance(result, gb.CommitDetails):
             return
-        bold = QFont(self.files.font())
-        bold.setBold(True)
         for change in result.files or []:
             name = f"{change.old_path} → {change.path}" if change.old_path else change.path
             counts = "binary" if change.added is None else f"+{change.added} −{change.deleted}"
@@ -417,35 +428,14 @@ class GitLogView(QWidget):
         commit = self.current_commit()
         if change is None or commit is None or self.log is None:
             return
-        self._diff_for = (commit.sha, change.path)
-        self.diff_title.setText(f"<b>{change.path}</b> · reading…")
         root = self.log.root
-        call_in_background(lambda: self._versions(root, commit, change),
-                           lambda result: self._versions_read(commit, change, result), self)
 
-    @staticmethod
-    def _versions(root: Path, commit: gl.LogCommit, change: gb.FileChange):
-        try:
-            return gl.file_versions(root, commit, change)
-        except (gs.GitError, OSError) as error:
-            return str(error) or type(error).__name__
+        def read():
+            before, after = gl.file_versions(root, commit, change)
+            parent = commit.parents[0][:8] if commit.parents else ""
+            return before, after, f"{parent} → {commit.sha[:8]}" if parent else f"added in {commit.sha[:8]}"
 
-    def _versions_read(self, commit: gl.LogCommit, change: gb.FileChange, result):
-        if self._diff_for != (commit.sha, change.path):
-            return
-        if isinstance(result, str):
-            self.diff_title.setText(f"<b>{change.path}</b> · couldn't read it: {result}")
-            self.diff.clear()
-            return
-        before, after = result
-        if gs.BINARY in (before, after):
-            self.diff_title.setText(f"<b>{change.path}</b> · binary or very big: no diff shown")
-            self.diff.clear()
-            return
-        parent = commit.parents[0][:8] if commit.parents else ""
-        self.diff_title.setText(f"<b>{change.path}</b> · " + (f"{parent} → {commit.sha[:8]}" if parent
-                                                              else f"added in {commit.sha[:8]}"))
-        self.diff.show_diff(before, after, change.path)
+        self.file_diff.load((commit.sha, change.path), change.path, read)
 
     def _file_menu(self, pos):
         """A changed file's menu (a right-click on it): Show in Project Files,

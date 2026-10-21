@@ -196,6 +196,7 @@ def test_the_per_month_bars(qtbot, tmp_path):
     root = history(tmp_path)
     view = gsv.GitStatsView()
     qtbot.addWidget(view)
+    view.show()  # (a hidden one's plot is drawn when it's next shown)
     view.show_stats(gst.read_stats(root))
     assert view.mode == gsv.TOTAL and all(isinstance(c, gsv.pg.PlotDataItem) for c in view.curves.values())
     with qtbot.waitSignal(view.mode_changed) as said:
@@ -248,3 +249,20 @@ def test_clicking_the_chosen_person_again_unchooses_them(qtbot, tmp_path):
     click(1, Qt.ControlModifier)  # (two people: a click on one of them chooses only that one)
     click(0)
     assert [i.text(0) for i in people.selectedItems()] == ["Ada"]
+
+
+def test_a_hidden_plot_is_drawn_when_it_s_shown(qtbot, tmp_path):
+    """(A theme change, or the plot switched, while the Stats aren't on view: drawn later, once.)"""
+    view = gsv.GitStatsView()
+    qtbot.addWidget(view)
+    view.show_stats(gst.read_stats(history(tmp_path)))
+    draws = []
+    real = view._draw
+    view._draw = lambda *args: (draws.append(1), real(*args))
+    view.set_mode(gsv.MONTHLY)
+    view.refresh_palette(view.pal or gp.PALETTES["dark"], True)
+    assert draws == [] and all(isinstance(c, gsv.pg.PlotDataItem) for c in view.curves.values())
+    view.show()
+    assert draws == [1] and all(isinstance(c, gsv.pg.BarGraphItem) for c in view.curves.values())
+    view.refresh_palette(gp.PALETTES["light"], False)  # (on show: at once)
+    assert draws == [1, 1]

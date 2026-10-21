@@ -159,15 +159,15 @@ def test_the_panel_lists_the_changes_and_shows_a_diff(qtbot, tmp_path):
     groups = [panel.files.topLevelItem(i).text(0) for i in range(panel.files.topLevelItemCount())]
     assert groups == ["Changes (1)", "Untracked (1)"]
     assert panel.selected() == gs.Change("a.f90", gs.CHANGED, "modified")  # (the first file, shown)
-    qtbot.waitUntil(lambda: "staged → working tree" in panel.diff_title.text(), timeout=5_000)  # (read meanwhile)
-    assert panel.diff.new_pane.toPlainText() == "program a\n  print *, 1\nend program a"
-    assert panel.diff.new_pane.rows.kinds == [dv.SAME, dv.ADDED, dv.SAME]
-    panel.diff.open_requested.emit(2)
+    qtbot.waitUntil(lambda: "staged → working tree" in panel.file_diff.title.text(), timeout=5_000)  # (read meanwhile)
+    assert panel.file_diff.diff.new_pane.toPlainText() == "program a\n  print *, 1\nend program a"
+    assert panel.file_diff.diff.new_pane.rows.kinds == [dv.SAME, dv.ADDED, dv.SAME]
+    panel.file_diff.open_requested.emit(2)
     assert opened == [("a.f90", 2)]
     untracked = panel.files.topLevelItem(1).child(0)
     panel.files.setCurrentItem(untracked)
-    assert untracked.data(0, CHANGE_ROLE).path == "new.txt" and "reading" in panel.diff_title.text()
-    qtbot.waitUntil(lambda: "new file" in panel.diff_title.text(), timeout=5_000)
+    assert untracked.data(0, CHANGE_ROLE).path == "new.txt" and "reading" in panel.file_diff.title.text()
+    qtbot.waitUntil(lambda: "new file" in panel.file_diff.title.text(), timeout=5_000)
     panel.show_status(gs.read_status(root))  # (again: the same file stays selected)
     assert panel.selected().path == "new.txt"
 
@@ -189,7 +189,7 @@ def test_the_panel_s_buttons_are_icons_with_tooltips(qtbot):
     with qtbot.waitSignal(panel.refresh_requested):
         refresh.click()
     unified.click()  # (on: the diff in one list)
-    assert panel.diff.unified and panel.diff.stack.currentIndex() == 1
+    assert panel.file_diff.diff.unified and panel.file_diff.diff.stack.currentIndex() == 1
     key = unified.icon().cacheKey()
     panel.refresh_palette()  # (a theme change: drawn again)
     assert unified.icon().cacheKey() != key
