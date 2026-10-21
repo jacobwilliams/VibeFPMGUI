@@ -111,13 +111,15 @@ MAX_FILES = 30  # files listed in the tooltip (more: "and N more")
 
 def commit_details(root: Path, sha: str) -> CommitDetails:
     """A commit's message, its author's email, its committer, and the files it
-    changed (each with its lines added and deleted). Raises GitError."""
+    changed (each with its lines added and deleted; a merge's: what it
+    brought into its first parent, not git's "combined" list, which leaves
+    out what came from one side only). Raises GitError."""
     header = gs._check(root, "show", "-s", "--no-color", "--format=%ae%x00%cn%x00%ct%x00%an%x00%B", sha)
     email, committer, commit_time, author, message = (header.decode("utf-8", "replace").split("\0", 4) + [""] * 5)[:5]
     statuses = gs._check(root, "-c", "core.quotepath=false", "show", "--no-color", "--format=", "--name-status",
-                         "-M", sha).decode("utf-8", "replace").splitlines()
+                         "-M", "-m", "--first-parent", sha).decode("utf-8", "replace").splitlines()
     counts = gs._check(root, "-c", "core.quotepath=false", "show", "--no-color", "--format=", "--numstat", "-M",
-                       sha).decode("utf-8", "replace").splitlines()
+                       "-m", "--first-parent", sha).decode("utf-8", "replace").splitlines()
     files = []
     for status_line, count_line in zip(statuses, counts, strict=False):
         parts = status_line.split("\t")

@@ -40,7 +40,7 @@ class GitMixin:
     def _build_git_panel(self):
         """The Git panel."""
         self.git_panel = GitPanel()
-        self.git_panel.icon_for = self.project_tree.icon_for
+        self.git_panel.icon_for = self.git_panel.log_view.icon_for = self.project_tree.icon_for
         self.git_panel.set_code_font(self._mono_font(editor=True))
         self.git_panel.refresh_requested.connect(self.refresh_git)
         self.git_panel.open_requested.connect(lambda path, line: self.navigate_to(path, line, 0, preview=True))
@@ -51,6 +51,9 @@ class GitMixin:
         stats = self.git_panel.stats_view
         stats.set_mode(str(self.settings.value("git_stats_plot", "total") or "total"))  # (Total or Per month)
         stats.mode_changed.connect(lambda mode: self.settings.setValue("git_stats_plot", mode))
+        history = self.git_panel.log_view
+        history.all_branches.setChecked(self.settings.value("git_all_branches", True, type=bool))
+        history.all_branches_changed.connect(lambda on: self.settings.setValue("git_all_branches", on))
         self._git_request = 0     # (an answer to an older request is dropped)
         self._git_stale = True    # (read again once the panel is on view)
         self._git_reading = False  # (a read is under way)

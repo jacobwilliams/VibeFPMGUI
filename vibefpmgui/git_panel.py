@@ -4,9 +4,13 @@
   files: staged, not staged, untracked, in conflict), and the diff of the
   selected file (see `vibefpmgui.git_status`, `vibefpmgui.diff_view`).
   Double-clicking a line of the diff opens the file there.
+* *History*: the commits, with their branches and tags and the graph of
+  how they join; a commit's details, files and diffs (see
+  `vibefpmgui.git_log`, `vibefpmgui.git_log_view`).
 * *Stats*: numbers about the repository and each person's commits over time
   (see `vibefpmgui.git_stats`, `vibefpmgui.git_stats_view`), read when the
-  view is on show and HEAD has moved since (or Refresh is clicked).
+  view is on show and HEAD has moved since (or Refresh is clicked), as
+  the History is.
 
 What git says is read on a pool thread.
 """
@@ -32,19 +36,22 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from . import git_log as gl
 from . import git_stats as gst
 from . import git_status as gs
 from .background import call_in_background
 from .build_monitor import PALETTES, TitleIcon, app_is_light, panel_stylesheet
 from .diff_view import DiffView
+from .git_log_view import GitLogView
 from .git_stats_view import GitStatsView
 from .icons import make_icon
 from .widgets import StatusLabel
 
 CHANGE_ROLE = Qt.UserRole + 1  # a file's row: its git_status.Change
-DIFF, STATS = "diff", "stats"  # the panel's views
-VIEW_TITLES = {DIFF: "Diff", STATS: "Stats"}
+DIFF, HISTORY, STATS = "diff", "history", "stats"  # the panel's views
+VIEW_TITLES = {DIFF: "Diff", HISTORY: "History", STATS: "Stats"}
 VIEW_TIPS = {DIFF: "The changed files, and the selected one's diff",
+             HISTORY: "The commits, with their branches and tags and the graph of how they join",
              STATS: "Statistics about the repository, and everyone's commits over time"}
 LETTER_COLORS = {"M": "#e8a317", "A": "#2f9e44", "D": "#e03131", "R": "#4c6ef5", "T": "#4c6ef5",
                  "U": "#2f9e44", "!": "#e03131"}
@@ -57,7 +64,7 @@ class GitPanel(QWidget):
     open_requested = Signal(str, int)  # file, line
     reveal_requested = Signal(str)  # a changed file's "Show in Project Files": its path
     discard_requested = Signal(object)  # a changed file's "Discard Changes…": its gs.Change
-    view_changed = Signal(str)  # DIFF or STATS chosen in the header
+    view_changed = Signal(str)  # DIFF, HISTORY or STATS chosen in the header
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -66,8 +73,8 @@ class GitPanel(QWidget):
         self.icon_for = None  # a file's QIcon, as in Project files (set by the window)
         self.is_light = True
         self.palette_colors = PALETTES["light"]
-        self._stats_shown: tuple | None = None    # (root, HEAD) of the stats on show
-        self._stats_reading: tuple | None = None  # (root, HEAD) being read
+        self._shown: dict[str, tuple] = {}    # HISTORY, STATS: what's on show ((root, HEAD…): see _key)
+        self._reading: dict[str, tuple] = {}  # and what's being read
         self.setObjectName("GitPanel")
         self.setAttribute(Qt.WA_StyledBackground, True)
 
@@ -80,7 +87,8 @@ class GitPanel(QWidget):
         self.unified_button.setCheckable(True)
         self.unified_button.setToolTip("Show the diff as one list (removed lines, then added ones) "
                                        "instead of side by side")
-        self.unified_button.toggled.connect(lambda on: self.diff.set_unified(on))
+        self.unified_button.toggled.connect(lambda on: (self.diff.set_unified(on),
+                                                        self.log_view.diff.set_unified(on)))
         refresh = self.refresh_button = QToolButton()
         refresh.setText("Refresh")
         refresh.setToolTip("Read the repository's status again")
@@ -88,7 +96,7 @@ class GitPanel(QWidget):
         # The views: a pair of buttons, one of them on.
         self.view_buttons: dict[str, QToolButton] = {}
         self.view_group = QButtonGroup(self)
-        for view in (DIFF, STATS):
+        for view in (DIFF, HISTORY, STATS):
             button = self.view_buttons[view] = QToolButton()
             button.setObjectName("GitView")
             button.setText(VIEW_TITLES[view])
@@ -149,8 +157,13 @@ class GitPanel(QWidget):
         diff_layout.addWidget(self.splitter, 1)
         diff_layout.addWidget(self.empty, 1)
         self.stats_view = GitStatsView()
+        self.log_view = GitLogView()
+        self.log_view.open_requested.connect(self.open_requested)
+        self.log_view.reveal_requested.connect(self.reveal_requested)
+        self.log_view.reload_requested.connect(self._read_view)
         self.pages = QStackedWidget()
         self.pages.addWidget(diff_page)
+        self.pages.addWidget(self.log_view)
         self.pages.addWidget(self.stats_view)
 
         layout = QVBoxLayout(self)
@@ -178,6 +191,7 @@ class GitPanel(QWidget):
             label.setStyleSheet(f"color: {pal['muted']};")
         self.diff.refresh_style()
         self.stats_view.refresh_palette(pal, not self.is_light)
+        self.log_view.refresh_palette(pal, not self.is_light)
 
     def refresh_fonts(self):
         font = QFont(QApplication.font())
@@ -187,74 +201,92 @@ class GitPanel(QWidget):
         self.refresh_palette()
 
     def set_code_font(self, font: QFont):
-        """The diff's font (the editor's)."""
+        """The diffs' font (the editor's)."""
         self.diff.set_font(font)
+        self.log_view.set_code_font(font)
 
     # -------------------------------------------------------------- views
     def view(self) -> str:
-        return STATS if self.pages.currentWidget() is self.stats_view else DIFF
+        page = self.pages.currentWidget()
+        return STATS if page is self.stats_view else HISTORY if page is self.log_view else DIFF
 
     def set_view(self, view: str, user: bool = False):
-        """Show the Diff or the Stats (``user``: chosen in the header: said
-        with view_changed, to be remembered)."""
+        """Show the Diff, the History or the Stats (``user``: chosen in the
+        header: said with view_changed, to be remembered)."""
         view = view if view in VIEW_TITLES else DIFF
         self.view_buttons[view].setChecked(True)
-        self.pages.setCurrentWidget(self.stats_view if view == STATS else self.pages.widget(0))
-        self.unified_button.setVisible(view == DIFF)
-        self._read_stats()
+        self.pages.setCurrentWidget({STATS: self.stats_view, HISTORY: self.log_view}.get(view, self.pages.widget(0)))
+        self.unified_button.setVisible(view in (DIFF, HISTORY))  # (both have a diff)
+        self._read_view()
         if user:
             self.view_changed.emit(view)
 
     def _refresh_clicked(self):
-        self._stats_shown = None  # (read again even if HEAD hasn't moved: a new branch, a tag…)
+        self._shown.clear()  # (read again even if HEAD hasn't moved: a new branch, a tag, a fetch…)
         self.refresh_requested.emit()
 
-    def _read_stats(self):
-        """The stats, read again if they're on show and HEAD has moved."""
-        if self.view() != STATS or self.status is None:
-            return
+    def _page(self, view: str):
+        return {HISTORY: self.log_view, STATS: self.stats_view}[view]
+
+    def _key(self, view: str) -> tuple:
         key = (self.status.root, self.status.head)
-        if key in (self._stats_shown, self._stats_reading):
+        return (*key, self.log_view.all_branches.isChecked()) if view == HISTORY else key
+
+    def _read_view(self):
+        """The History or the Stats, read again if they're on show and HEAD
+        has moved (or, the History, All branches was toggled)."""
+        view = self.view()
+        if view == DIFF or self.status is None:
+            return
+        page, key = self._page(view), self._key(view)
+        if key in (self._shown.get(view), self._reading.get(view)):
             return
         if self.status.head is None:
-            self.stats_view.show_message(f"No commits in {self.status.root.name} yet.")
-            self._stats_shown = key
+            page.show_message(f"No commits in {self.status.root.name} yet.")
+            self._shown[view] = key
             return
-        if self._stats_shown is None or self._stats_shown[0] != key[0]:
-            self.stats_view.show_message("Reading the repository…")
-        self._stats_reading = key
+        if self._shown.get(view) is None or self._shown[view][0] != key[0]:
+            page.show_message("Reading the repository…")
+        self._reading[view] = key
         root = self.status.root
-        call_in_background(lambda: self._stats(root), lambda result: self._show_stats(key, result), self)
+        read = ((lambda: gl.read_log(root, all_branches=key[2])) if view == HISTORY
+                else (lambda: gst.read_stats(root)))
+        call_in_background(lambda: self._safely(read), lambda result: self._view_read(view, key, result), self)
 
     @staticmethod
-    def _stats(root: Path):
+    def _safely(read):
         try:
-            return gst.read_stats(root)
+            return read()
         except (gs.GitError, OSError) as error:
             return str(error) or type(error).__name__
 
-    def _show_stats(self, key: tuple, result):
-        if self._stats_reading != key:
+    def _view_read(self, view: str, key: tuple, result):
+        if self._reading.get(view) != key:
             return  # (another one asked for meanwhile, or the project closed)
-        self._stats_reading = None
-        self._stats_shown = key
+        self._reading.pop(view)
+        self._shown[view] = key
+        page = self._page(view)
         if isinstance(result, str):
-            self.stats_view.show_message(f"Couldn't read the repository's history: {result}")
+            page.show_message(f"Couldn't read the repository's history: {result}")
         elif result is None:
-            self.stats_view.show_message(f"No commits in {key[0].name} yet.")
+            page.show_message(f"No commits in {key[0].name} yet.")
+        elif view == HISTORY:
+            page.show_log(result)
         else:
-            self.stats_view.show_stats(result)
-        if self.status is None or (self.status.root, self.status.head) != key:
-            self._read_stats()  # (it moved on meanwhile)
+            page.show_stats(result)
+        if self.status is None or self._key(view) != key:
+            self._read_view()  # (it moved on meanwhile)
 
     # -------------------------------------------------------------- state
     def show_message(self, message: str):
         """Nothing to list: why."""
         self.status = None
         self._showing = None
-        self._stats_shown = self._stats_reading = None
+        self._shown.clear()
+        self._reading.clear()
         self.stats_view.stats = None
         self.stats_view.show_message(message)
+        self.log_view.show_message(message)
         self.subtitle.setText("")
         self.empty.setText(message)
         self.empty.show()
@@ -298,7 +330,7 @@ class GitPanel(QWidget):
         self.files.header().setSectionResizeMode(0, self.files.header().ResizeMode.Stretch)
         self.files.header().setSectionResizeMode(1, self.files.header().ResizeMode.ResizeToContents)
         self.files.blockSignals(False)
-        self._read_stats()
+        self._read_view()
         if not status.changes:
             self.empty.setText(f"No changes in {status.root.name} (on {status.summary()}).")
             self.empty.show()

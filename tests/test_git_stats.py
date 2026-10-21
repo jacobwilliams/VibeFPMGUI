@@ -129,7 +129,7 @@ def test_read_again_when_head_moves_or_refresh_is_clicked(qtbot, tmp_path):
     qtbot.waitUntil(lambda: panel.stats_view.stats is not None, timeout=10000)
     first = panel.stats_view.stats
     panel.show_status(gs.read_status(root))  # (HEAD the same: not read again)
-    assert panel._stats_reading is None and panel.stats_view.stats is first
+    assert gp.STATS not in panel._reading and panel.stats_view.stats is first
     commit_as(root, "Dee", START + 9 * DAY)
     panel.show_status(gs.read_status(root))  # (a new commit)
     qtbot.waitUntil(lambda: panel.stats_view.stats is not first, timeout=10000)
