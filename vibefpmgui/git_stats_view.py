@@ -231,7 +231,9 @@ class GitStatsView(QWidget):
             axis.setTextPen(pal["muted"])
         self._label()
         self.legend.setLabelTextColor(pal["text"])
-        self.legend.setBrush(QColor(pal["bg"]))
+        backdrop = QColor(pal["bg"])
+        backdrop.setAlphaF(0.75)  # (a little of the plot shows through)
+        self.legend.setBrush(backdrop)
         if self.stats is not None:
             self._draw()
 
