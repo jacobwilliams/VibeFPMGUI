@@ -22,8 +22,8 @@ panels: Qt's dock layout could otherwise keep "animating" forever on macOS.
 from typing import NamedTuple
 
 from qtpy.QtCore import Qt
-from qtpy.QtGui import QColor, QPalette
-from qtpy.QtWidgets import QApplication, QProxyStyle, QStyle, QStyleFactory
+from qtpy.QtGui import QColor, QFont, QPalette
+from qtpy.QtWidgets import QApplication, QProxyStyle, QStyle, QStyleFactory, QTabBar
 
 
 class Theme(NamedTuple):
@@ -173,7 +173,21 @@ def apply(key: str):
     wanted = window_style(theme)
     if not isinstance(app.style(), StillStyle) or style_name(app.style()).lower() != wanted.lower():
         app.setStyle(StillStyle(wanted))
+        _unpolish_tab_bars(app)
     app.setPalette(QPalette() if theme.native else palette(theme))  # (native: the platform's, for the scheme)
+
+
+def _unpolish_tab_bars(app: QApplication):
+    """The macOS style gives a document-mode tab bar (the editor's tabs, the
+    panels') a near-black text color and a small font of its own when it
+    polishes it. At startup the app's font and palette replace them; after a
+    theme's change of style (Fusion → macOS) nothing did: dark text on a dark
+    bar, and names cut off (the tabs measured in the small font). Back to the
+    app's, as at startup."""
+    for widget in app.allWidgets():
+        if isinstance(widget, QTabBar) and widget.documentMode():
+            widget.setPalette(QPalette())
+            widget.setFont(QFont())
 
 
 def syntax_style() -> str:

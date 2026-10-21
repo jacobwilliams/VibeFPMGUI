@@ -161,3 +161,32 @@ def test_build_outputs_cards_follow_a_theme_change(window, tmp_path, qtbot):
     for theme, colors in (("solarized-light", "light"), ("nord", "dark"), ("solarized-light", "light")):
         window.set_theme(theme)
         qtbot.waitUntil(lambda c=colors: card_background() == bo.PALETTES[c]["bg"], timeout=3000)
+
+
+def test_tabs_follow_a_change_of_style(window, project, qtbot):
+    """The macOS style gives the editor's tabs (document mode) a near-black
+    text color and a small font when it polishes them; after a theme's change
+    of style (solarized-light, Fusion → System, macOS) they kept them: dark
+    names on a dark bar, cut off. The app's again, on any platform's styles."""
+    from conftest import open_editor
+    from qtpy.QtCore import Qt
+    from qtpy.QtGui import QFont
+
+    open_editor(window, project / "src" / "foo.f90")
+    window.set_tab_rows(True)
+    bar, rows = window.tabs.tabBar(), window.tab_rows
+    assert bar.documentMode()
+    polished = bar.palette()  # (what the macOS style's polish does)
+    polished.setColor(QPalette.WindowText, QColor(17, 17, 17))
+    bar.setPalette(polished)
+    bar.setAttribute(Qt.WA_SetPalette, False)
+    small = QFont(bar.font())
+    small.setPointSizeF(small.pointSizeF() - 3)
+    bar.setFont(small)
+    bar.setAttribute(Qt.WA_SetFont, False)
+    qtbot.waitUntil(lambda: rows.tab_rect(0).width() == bar.tabSizeHint(0).width())  # (the rows follow its font)
+    width = rows.tab_rect(0).width()
+    themes.set_window_style("Windows" if app_style() == "fusion" else "Fusion")  # (another style)
+    assert bar.palette().color(QPalette.WindowText) == QApplication.palette().color(QPalette.WindowText)
+    assert bar.font().pointSizeF() == QApplication.font().pointSizeF()
+    qtbot.waitUntil(lambda: rows.tab_rect(0).width() == bar.tabSizeHint(0).width() > width)

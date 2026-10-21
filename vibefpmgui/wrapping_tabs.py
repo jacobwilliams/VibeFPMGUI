@@ -11,7 +11,7 @@ tabs works as before).
 
 from __future__ import annotations
 
-from qtpy.QtCore import QPoint, QRect, QSize, Qt, Signal
+from qtpy.QtCore import QEvent, QPoint, QRect, QSize, Qt, QTimer, Signal
 from qtpy.QtGui import QColor, QFont, QPainter
 from qtpy.QtWidgets import (
     QApplication,
@@ -56,6 +56,7 @@ class WrappingTabBar(QWidget):
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         tabs.currentChanged.connect(self.refresh)
         self.bar.tabMoved.connect(self.refresh)
+        self.bar.installEventFilter(self)  # (its font or style changed: the tabs' sizes too)
 
     # ------------------------------------------------------------ layout
     def refresh(self, *_):
@@ -63,6 +64,11 @@ class WrappingTabBar(QWidget):
         self._layout(self.width())
         self.updateGeometry()
         self.update()
+
+    def eventFilter(self, obj, event):
+        if obj is self.bar and event.type() in (QEvent.FontChange, QEvent.StyleChange):
+            QTimer.singleShot(0, self, self.refresh)  # (once the bar has dropped its old text sizes)
+        return super().eventFilter(obj, event)
 
     def _layout(self, width: int) -> int:
         """Place the tabs in rows ``width`` wide; the height they take."""
