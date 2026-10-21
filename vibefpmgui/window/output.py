@@ -10,7 +10,6 @@ from qtpy.QtGui import QFontDatabase, QTextCursor
 from qtpy.QtWidgets import (
     QHBoxLayout,
     QLabel,
-    QPlainTextEdit,
     QPushButton,
     QSizePolicy,
     QStackedWidget,
@@ -20,6 +19,7 @@ from qtpy.QtWidgets import (
 
 from .. import ansi
 from ..compat import reveal_label
+from ..console_view import ConsoleView
 from ..editor import EditorTab
 from ..output_links import OutputLinks
 from ..project_tree import reveal_in_file_manager
@@ -50,12 +50,12 @@ class OutputMixin:
     def _build_output_panel(self):
         """The Output panel: all of a command's output, or one item's."""
         mono = QFontDatabase.systemFont(QFontDatabase.FixedFont)
-        self.console = QPlainTextEdit()
+        self.console = ConsoleView()  # (fpm's "[ 25%]" progress drawn as badges)
         self.console.setReadOnly(True)
         self.console.setFont(mono)
         self.console.setMaximumBlockCount(20000)
         # Output of a single test, shown when a test row is clicked.
-        self.test_output = QPlainTextEdit()
+        self.test_output = ConsoleView()
         self.test_output.setReadOnly(True)
         self.test_output.setFont(mono)
         # Compiler messages may be colored (lfortran always colors them).
