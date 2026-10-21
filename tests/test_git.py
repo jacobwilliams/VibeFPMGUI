@@ -121,6 +121,51 @@ def test_align_and_context():
     assert dv.lines_of(None) == [] and dv.lines_of("a\nb\n") == ["a", "b"] and dv.lines_of("a") == ["a"]
 
 
+def whole_file_align(old: list[str], new: list[str]) -> list[dv.Row]:
+    """align as it was: every line compared, none matched beforehand."""
+    import difflib
+
+    rows = []
+    for op, a0, a1, b0, b1 in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
+        if op == "equal":
+            rows += [dv.Row(dv.SAME, a0 + i + 1, old[a0 + i], b0 + i + 1, new[b0 + i]) for i in range(a1 - a0)]
+            continue
+        paired = min(a1 - a0, b1 - b0) if op == "replace" else 0
+        rows += [dv.Row(dv.CHANGED, a0 + i + 1, old[a0 + i], b0 + i + 1, new[b0 + i]) for i in range(paired)]
+        rows += [dv.Row(dv.REMOVED, a, old[a - 1], None, None) for a in range(a0 + paired + 1, a1 + 1)]
+        rows += [dv.Row(dv.ADDED, None, None, b, new[b - 1]) for b in range(b0 + paired + 1, b1 + 1)]
+    return rows
+
+
+@pytest.mark.parametrize(("old", "new"), [
+    ("abcdefghij", "abCdefghijk"),  # (changed in the middle, added at the end)
+    ("abcdef", "abcdef"),           # (no change)
+    ("abc", "xyz"),                 # (all changed)
+    ("", "abc"), ("abc", ""),        # (a new file, a deleted one)
+    ("abc", "xabc"), ("abc", "abcx"), ("xabc", "abc"),  # (a line added first, last; removed first)
+    ("aaaa", "aaaaa"), ("abab", "ab"),  # (repeats: what's alike at the start and at the end overlap)
+    ("abcdXefgh", "abcdYYefgh"),
+])
+def test_align_matches_the_ends_first_as_a_whole_comparison_would(old, new):
+    """(Lines alike at the start and the end are matched without comparing them: much faster for a
+    big file, the same rows.)"""
+    old, new = list(old), list(new)
+    assert dv.align(old, new) == whole_file_align(old, new)
+
+
+def test_a_diff_shown_again_is_colored_at_once(qtbot):
+    """(A pane's new text: colored straight away, not after typing's pause, nor with the old text's colors.)"""
+    view = dv.DiffView()
+    qtbot.addWidget(view)
+    view.show_diff("x = 1\n", "x = 2\n", "a.f90")
+    qtbot.wait(200)
+    view.show_diff("program p\n  print *, 1\nend program p\n", "program p\n  print *, 2\nend program p\n",
+                   "b.f90")
+    for pane in (view.old_pane, view.new_pane):
+        assert pane.highlighter.text == pane.toPlainText() and pane.highlighter.is_current()
+        assert pane.document().firstBlock().layout().formats()  # ("program": colored)
+
+
 def test_side_by_side_and_unified_rows():
     rows = dv.with_context(dv.align(["keep", "old", "gone"], ["keep", "new", "added", "more"]))
     old, new = dv.side_by_side(rows)
