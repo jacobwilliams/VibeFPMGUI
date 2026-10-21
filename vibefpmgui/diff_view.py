@@ -49,10 +49,22 @@ def lines_of(text: str | None) -> list[str]:
 
 def align(old: list[str], new: list[str]) -> list[Row]:
     """Every line of both versions, lined up: unchanged lines side by side,
-    edited ones paired (CHANGED), the rest REMOVED or ADDED."""
-    rows: list[Row] = []
-    matcher = difflib.SequenceMatcher(None, old, new, autojunk=False)
+    edited ones paired (CHANGED), the rest REMOVED or ADDED. The lines the
+    two begin and end with alike are matched as they are; only those
+    between (usually a small part of a file) are compared line by line,
+    which takes time growing with their number squared (a 12,000-line file
+    whole: a third of a second)."""
+    shorter = min(len(old), len(new))
+    start = 0
+    while start < shorter and old[start] == new[start]:
+        start += 1
+    end = 0  # (lines alike at the end, after those at the start)
+    while end < shorter - start and old[-1 - end] == new[-1 - end]:
+        end += 1
+    rows: list[Row] = [Row(SAME, i + 1, old[i], i + 1, new[i]) for i in range(start)]
+    matcher = difflib.SequenceMatcher(None, old[start:len(old) - end], new[start:len(new) - end], autojunk=False)
     for op, a0, a1, b0, b1 in matcher.get_opcodes():
+        a0, a1, b0, b1 = a0 + start, a1 + start, b0 + start, b1 + start
         if op == "equal":
             rows += [Row(SAME, a0 + i + 1, old[a0 + i], b0 + i + 1, new[b0 + i]) for i in range(a1 - a0)]
             continue
@@ -60,7 +72,15 @@ def align(old: list[str], new: list[str]) -> list[Row]:
         rows += [Row(CHANGED, a0 + i + 1, old[a0 + i], b0 + i + 1, new[b0 + i]) for i in range(paired)]
         rows += [Row(REMOVED, a, old[a - 1], None, None) for a in range(a0 + paired + 1, a1 + 1)]
         rows += [Row(ADDED, None, None, b, new[b - 1]) for b in range(b0 + paired + 1, b1 + 1)]
+    rows += [Row(SAME, len(old) - end + i + 1, old[len(old) - end + i], len(new) - end + i + 1,
+                 new[len(new) - end + i]) for i in range(end)]
     return rows
+
+
+def compare(old: str | None, new: str | None) -> list[Row]:
+    """Two versions' rows to show (`align`, folded with `with_context`): no
+    Qt, so it can be worked out on a pool thread (see DiffView.show_rows)."""
+    return with_context(align(lines_of(old), lines_of(new)))
 
 
 def with_context(rows: list[Row], context: int = CONTEXT) -> list[Row]:
@@ -201,9 +221,8 @@ class DiffPane(QPlainTextEdit):
         lexer = lexer_for_path(path)
         if self.highlighter is None:
             self.highlighter = PygmentsHighlighter(self.document(), lexer)
-        else:
-            self.highlighter.set_lexer(lexer)
-        self.setPlainText("\n".join(rows.text))
+        with self.highlighter.replacing_text(lexer):  # (colored at once: not typed)
+            self.setPlainText("\n".join(rows.text))
         apply_style(self, self.highlighter)
         self._place_gutter()
         self._tint()
@@ -318,8 +337,12 @@ class DiffView(QWidget):
     def show_diff(self, old: str | None, new: str | None, path: str):
         """Compare two versions (None: there's no such version, so every line
         of the other is added or removed)."""
+        self.show_rows(compare(old, new), path)
+
+    def show_rows(self, rows: list[Row], path: str):
+        """Rows already compared (`compare`, on a pool thread for big files)."""
         self.path = path
-        self.rows = with_context(align(lines_of(old), lines_of(new)))
+        self.rows = rows
         self._show()
 
     def clear(self):

@@ -329,6 +329,26 @@ class PygmentsHighlighter(QSyntaxHighlighter):
         self._generation += 1
         self._relex()
 
+    @contextmanager
+    def replacing_text(self, lexer=None):
+        """The document's whole text set (within it) at once, not typed (a
+        diff shown): colored straight away, not after the pause that typing
+        waits for, nor meanwhile with the old text's colors (in the wrong
+        places). ``lexer``: another one for it."""
+        if lexer is not None:
+            self.lexer = keep_positions(lexer)
+        self._spans, self._starts = [], []
+        self._full = True
+        self._generation += 1
+        self._job += 1
+        self._pending = []
+        self._busy = True  # (the text's change isn't an edit to wait for)
+        try:
+            yield
+        finally:
+            self._busy = False
+        self._relex()
+
     def set_style(self, name: str):
         if name == self._style_name:
             return

@@ -1,7 +1,7 @@
 """A file's diff with a line over it saying what's compared ("staged →
 working tree", "3f9db510 → 930ec19c"): the Git panel's Diff page and its
-History's. The two versions are read on a pool thread; a file chosen
-meanwhile wins (the older answer is dropped).
+History's. The two versions are read, and compared, on a pool thread; a
+file chosen meanwhile wins (the older answer is dropped).
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from qtpy.QtGui import QFont
 from qtpy.QtWidgets import QVBoxLayout, QWidget
 
 from .background import call_in_background
-from .diff_view import DiffView
+from .diff_view import DiffView, compare
 from .git_status import BINARY
 from .widgets import StatusLabel
 
@@ -47,9 +47,11 @@ class FileDiff(QWidget):
 
         def work():
             try:
-                return read()
+                old, new, compared = read()
             except (OSError, RuntimeError) as error:
                 return str(error) or type(error).__name__
+            # (Compared here too: a third of a second for a big file, which the window shouldn't wait for.)
+            return compared, None if BINARY in (old, new) else compare(old, new)
 
         call_in_background(work, lambda result: self._read(key, path, result), self)
 
@@ -60,13 +62,13 @@ class FileDiff(QWidget):
             self.title.setText(f"<b>{path}</b> · couldn't read it: {result}")
             self.diff.clear()
             return
-        old, new, compared = result
-        if BINARY in (old, new):
+        compared, rows = result
+        if rows is None:
             self.title.setText(f"<b>{path}</b> · binary or very big: no diff shown")
             self.diff.clear()
             return
         self.title.setText(f"<b>{path}</b> · {compared}")
-        self.diff.show_diff(old, new, path)
+        self.diff.show_rows(rows, path)
 
     def clear(self):
         self._loading = None
