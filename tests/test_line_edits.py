@@ -37,6 +37,7 @@ def test_comment_fixed_form_in_the_first_column():
 def test_other_files_comments():
     assert le.comment_style("fpm.toml") == ("#", False) and le.comment_style("a.c") == ("//", False)
     assert le.comment_style("x.f90") == ("!", False) and le.comment_style("x.F") == ("!", True)
+    assert le.comment_style("x.fypp") == ("!", False)  # (fypp: Fortran)
     assert le.comment_style("Makefile") == ("#", False) and le.comment_style("README.md") == ("", False)
     assert le.toggle_comment(['name = "x"'], "#") == ['# name = "x"']
     assert le.toggle_comment(["a"], "") == ["a"]  # (no line comment: nothing)

@@ -544,7 +544,7 @@ LOGO_PATH = Path(__file__).with_name("resources") / "fpm-logo-color.svg"
 FORTRAN_FILE_PATH = Path(__file__).with_name("resources") / "fortran-file.svg"
 # Fortran sources (any case, e.g. .F90): shown with the Fortran file icon.
 FORTRAN_SUFFIXES = {".f", ".for", ".ftn", ".f77", ".f90", ".f95", ".f03", ".f08", ".f18", ".f23",
-                    ".fpp"}
+                    ".fpp", ".fypp"}
 # Fortran include files: the same icon in gray.
 FORTRAN_INCLUDE_SUFFIXES = {".inc", ".if"}
 _fortran_icons: dict[bool, QIcon] = {}

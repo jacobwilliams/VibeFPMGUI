@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from pygments import lex
+from pygments.lexer import inherit
 from pygments.lexers import (
     FortranFixedLexer,
     FortranLexer,
@@ -103,6 +104,7 @@ def apply_style(widget, highlighter):
 # Fortran extensions Pygments doesn't know (or maps to another language).
 _FIXED_FORM = {".for", ".ftn", ".f77"}
 _FREE_FORM = {".f95", ".f03", ".f08", ".fpp", ".inc"}
+_FYPP = {".fypp"}  # Fortran with fypp's preprocessing (see FyppLexer)
 # "JSON with Comments" (as VS Code calls it): workspace files, .jsonc, and the
 # .json files in a .vscode folder (settings, launch, tasks…).
 _JSONC = {".code-workspace", ".jsonc"}
@@ -117,6 +119,25 @@ class JsonWithCommentsLexer(JsonLexer):
     filenames: ClassVar[list[str]] = ["*.jsonc", "*.code-workspace"]
 
 
+class FyppLexer(FortranLexer):
+    """Fortran with fypp (https://fypp.readthedocs.io) in it: its directive
+    lines (``#:if``, ``#:for``, ``$:``, ``@:``), comments (``#!``) and inline
+    expressions (``${...}$``, ``@{...}@``) as preprocessing, the rest as
+    Fortran."""
+
+    name = "Fortran (fypp)"
+    aliases: ClassVar[list[str]] = ["fypp"]
+    filenames: ClassVar[list[str]] = ["*.fypp"]
+    tokens: ClassVar[dict] = {
+        "root": [
+            (r"(#[:!]|[@$]:)[^\n]*", Comment.Preproc),  # (a line's directive, indented or not)
+            (r"\$\{.*?\}\$|@\{.*?\}@", Comment.Preproc),  # (an expression inside a line)
+            (r"[a-z]\w*(?=\$\{|@\{)|(?<=\}\$)\w+|(?<=\}@)\w+", Name),  # (a name made with one: x_${k}$_y)
+            inherit,
+        ],
+    }
+
+
 def lexer_for_path(path) -> object:
     """A Pygments lexer chosen from the file name (plain text if unknown),
     which keeps the text's positions (see keep_positions)."""
@@ -128,6 +149,8 @@ def lexer_for_path(path) -> object:
         return keep_positions(FortranFixedLexer())
     if suffix in _FREE_FORM:
         return keep_positions(FortranLexer())
+    if suffix in _FYPP:
+        return keep_positions(FyppLexer())
     if suffix in _JSONC or (suffix == ".json" and Path(name).parent.name == ".vscode"):
         return keep_positions(JsonWithCommentsLexer())
     try:

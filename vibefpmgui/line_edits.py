@@ -29,7 +29,7 @@ def comment_style(path: Path | str) -> tuple[str, bool]:
     "" for a file without a line comment."""
     path = Path(path)
     suffix = path.suffix.lower()
-    if suffix in FORTRAN or suffix in (".inc", ".fi"):
+    if suffix in FORTRAN or suffix in (".inc", ".fi", ".fypp"):
         return "!", suffix in FIXED_FORM
     if suffix in HASH_COMMENTS or path.name.lower() in HASH_NAMES:
         return "#", False

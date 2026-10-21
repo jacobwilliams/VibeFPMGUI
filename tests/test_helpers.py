@@ -99,12 +99,33 @@ def test_apply_edits():
     ("a.F90", "Fortran"),
     ("a.f", "FortranFixed"),
     ("a.f08", "Fortran"),
+    ("a.fypp", "Fortran (fypp)"),
+    ("a.FYPP", "Fortran (fypp)"),
     ("fpm.toml", "TOML"),
     ("x.code-workspace", "JSON with Comments"),
     ("unknown.zzz", "Text only"),
 ])
 def test_lexer_for_path(name, lexer):
     assert hl.lexer_for_path(name).name == lexer
+
+
+def test_fypp_is_fortran_with_its_preprocessing():
+    from pygments.token import Comment, Keyword, Name
+
+    code = ("#:for k in KINDS\n"
+            "  real(${k}$) :: x_${k}$_y  ! Fortran's comment\n"
+            "  @:assert(n > 0)\n"
+            "  $:mkname('a')\n"
+            "  #! fypp's comment\n"
+            "  call @{name}@(1)\n"
+            "#:endfor\n")
+    tokens = [(t, v) for t, v in hl.lexer_for_path("a.fypp").get_tokens(code) if v.strip()]
+    preproc = [v for t, v in tokens if t in Comment.Preproc]
+    assert preproc == ["#:for k in KINDS", "${k}$", "${k}$", "@:assert(n > 0)", "$:mkname('a')",
+                       "#! fypp's comment", "@{name}@", "#:endfor"]
+    assert (Keyword.Type, "real") in tokens and (Name, "x_") in tokens and (Name, "_y") in tokens
+    assert any(t in Comment and t not in Comment.Preproc and "Fortran's" in v for t, v in tokens)
+    assert not any(t in hl.Token.Error for t, _v in tokens)
 
 
 def test_no_file_name_is_plain_text_without_a_search(monkeypatch):

@@ -14,6 +14,8 @@ import os
 import time
 from bisect import bisect_right
 from datetime import datetime
+from itertools import pairwise
+from typing import ClassVar
 
 import qtpy
 
@@ -125,7 +127,7 @@ class _Tile(QWidget):
 class GitStatsView(QWidget):
     mode_changed = Signal(str)  # TOTAL or MONTHLY chosen above the plot
 
-    TILES = [("commits", "Commits"), ("people", "People"), ("age", "Age"), ("latest", "Latest commit"),
+    TILES: ClassVar[list[tuple[str, str]]] = [("commits", "Commits"), ("people", "People"), ("age", "Age"), ("latest", "Latest commit"),
              ("recent", "Last 30 days"), ("branches", "Branches"), ("tags", "Tags"), ("files", "Files"),
              ("size", "Size (.git)")]
 
@@ -264,8 +266,8 @@ class GitStatsView(QWidget):
             "people": (f"{len(stats.authors):,}", "who made commits (by name)"),
             "age": (gst.span_words(now - stats.first), f"the first commit: {date_words(stats.first)}"),
             "latest": (date_words(stats.last), f"{gst.span_words(now - stats.last)} ago"),
-            "recent": (f"{stats.since(30 * gst.DAY, now):,}", "commits in the last 30 days; "
-                       f"{stats.since(365 * gst.DAY, now):,} in the last year"),
+            "recent": (f"{stats.since(30 * gst.DAY, now):,}",
+                       f"commits in the last 30 days; {stats.since(365 * gst.DAY, now):,} in the last year"),
             "branches": (f"{stats.branches:,}", f"local; {stats.remote_branches:,} remote"),
             "tags": (f"{stats.tags:,}", "tags"),
             "files": (f"{stats.files:,}", "files tracked by git"),
@@ -321,8 +323,8 @@ class GitStatsView(QWidget):
         active at the bottom)."""
         edges, counts = self.months = per_month(self.stats, now)
         gap = 0.08  # (of a month: between the bars)
-        x0 = [a + (b - a) * gap / 2 for a, b in zip(edges, edges[1:])]
-        x1 = [b - (b - a) * gap / 2 for a, b in zip(edges, edges[1:])]
+        x0 = [a + (b - a) * gap / 2 for a, b in pairwise(edges)]
+        x1 = [b - (b - a) * gap / 2 for a, b in pairwise(edges)]
         bottom = [0] * len(x0)
         for who, months in counts:
             top = [b + c for b, c in zip(bottom, months)]
