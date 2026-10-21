@@ -181,6 +181,21 @@ def _unified(p: QPainter, c: QColor):
         p.drawLine(QPointF(7.5, y), QPointF(16.5 if y != 12 else 13.5, y))
 
 
+def _memcheck(p: QPainter, c: QColor):
+    """A memory chip under a magnifying glass: Valgrind's memory check."""
+    p.setPen(_pen(c, 1.6))
+    p.setBrush(Qt.NoBrush)
+    p.drawRoundedRect(QRectF(3.5, 5.5, 11, 11), 1.5, 1.5)  # the chip
+    for i in (8, 11, 14):  # its pins
+        p.drawLine(QPointF(i - 1.5, 3), QPointF(i - 1.5, 5.5))
+        p.drawLine(QPointF(i - 1.5, 16.5), QPointF(i - 1.5, 19))
+        p.drawLine(QPointF(1, i - 0.5), QPointF(3.5, i - 0.5))
+    p.setPen(_pen(c, 2))
+    p.setBrush(QColor(0, 0, 0, 0))
+    p.drawEllipse(QPointF(15, 15), 4.2, 4.2)  # the glass
+    p.drawLine(QPointF(18, 18), QPointF(21.5, 21.5))  # its handle
+
+
 def _pencil(p: QPainter, c: QColor):
     """Edit."""
     p.translate(12, 12)
@@ -384,6 +399,7 @@ DRAWERS = {
     "stop": _stop,
     "pause": _pause,
     "pencil": _pencil,
+    "memcheck": _memcheck,
     "save": _save,
     "menu": _menu,
     "refresh": _refresh,

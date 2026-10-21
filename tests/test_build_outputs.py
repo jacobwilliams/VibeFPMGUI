@@ -55,9 +55,9 @@ def test_a_program_s_menu(qtbot, card):
 
 
 def test_a_debug_button_beside_run(qtbot, card):
-    from qtpy.QtWidgets import QPushButton
+    from qtpy.QtWidgets import QToolButton
 
-    buttons = {b.text(): b for b in card.findChildren(QPushButton)}
+    buttons = {b.text(): b for b in card.findChildren(QToolButton)}
     assert {"Run", "Debug"} <= set(buttons)
     with qtbot.waitSignal(card.debug_requested) as blocker:
         buttons["Debug"].click()

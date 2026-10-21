@@ -27,7 +27,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from qtpy.QtCore import Qt, Signal
+from qtpy.QtCore import QSize, Qt, Signal
 from qtpy.QtGui import QFont
 from qtpy.QtWidgets import (
     QApplication,
@@ -35,7 +35,6 @@ from qtpy.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMenu,
-    QPushButton,
     QScrollArea,
     QSizePolicy,
     QToolButton,
@@ -45,6 +44,7 @@ from qtpy.QtWidgets import (
 
 from .build_monitor import PALETTES, app_is_light
 from .compat import WINDOWS, quote_arg, reveal_label
+from .icons import make_icon
 
 BUILD_DIR_RE = re.compile(r"^(?P<compiler>.+)_(?P<hash>[0-9A-F]{16})$")
 PROGRAM_KINDS = {"app": "program", "test": "test", "example": "example"}
@@ -449,22 +449,19 @@ class ConfigCard(QFrame):
             self.rows[label] = (kind, program)
             row.addWidget(label)
             row.addStretch(1)
-            run = QPushButton("Run")
+            run = self._icon_button("Run", "run", pal)
             run.setToolTip(f"Run {program} directly (no rebuild), with the Program args")
-            run.setAttribute(Qt.WA_LayoutUsesWidgetRect)
             run.clicked.connect(lambda _=False, p=str(program): self.run_requested.emit(p))
             row.addWidget(run)
             name = executable_name(program)
-            debug = QPushButton("Debug")
+            debug = self._icon_button("Debug", "bug", pal)
             debug.setToolTip(f"Debug {name}: built again with the Build options (the debug profile, if none is "
                              "chosen), then run under the debugger (Debug menu)")
-            debug.setAttribute(Qt.WA_LayoutUsesWidgetRect)
             debug.clicked.connect(lambda _=False, k=kind, n=name: self.debug_requested.emit(k, n))
             row.addWidget(debug)
-            valgrind = QPushButton("Valgrind")
-            valgrind.setAttribute(Qt.WA_LayoutUsesWidgetRect)
+            valgrind = self._icon_button("Valgrind", "memcheck", pal)
             if valgrind_found():
-                valgrind.setToolTip(f"Check {name}'s memory use: built again with the Build options (the debug "
+                valgrind.setToolTip(f"Valgrind: check {name}'s memory use: built again with the Build options (the debug "
                                     "profile, if none is chosen), then run by fpm under Valgrind (leaks, invalid "
                                     "reads and writes; the report goes to Output)")
             else:
@@ -476,6 +473,19 @@ class ConfigCard(QFrame):
         if not config.programs and not config.libraries:
             layout.addWidget(QLabel(f"<span style='color:{muted}'>No programs or library here "
                                     "(compiled files only).</span>"))
+
+    @staticmethod
+    def _icon_button(text: str, icon: str, pal: dict) -> QToolButton:
+        """A program's Run, Debug or Valgrind button: its icon (the text kept,
+        for screen readers; the tooltip says what it does)."""
+        button = QToolButton()
+        button.setText(text)
+        button.setIcon(make_icon(icon, pal["text"]))
+        button.setIconSize(QSize(18, 18))
+        button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        button.setAutoRaise(True)
+        button.setAttribute(Qt.WA_LayoutUsesWidgetRect)
+        return button
 
     def context_menu(self, pos) -> QMenu:
         """The right-click menu at ``pos``: for a program or library when it's

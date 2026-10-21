@@ -10,7 +10,8 @@ import subprocess
 
 import pytest
 from conftest import write_files
-from qtpy.QtWidgets import QMessageBox, QPushButton
+from qtpy.QtCore import Qt
+from qtpy.QtWidgets import QMessageBox, QToolButton
 
 from vibefpmgui import build_outputs as bo
 from vibefpmgui.fpm_args import VALGRIND_RUNNER, with_runner
@@ -33,8 +34,13 @@ def card(qtbot, tmp_path, monkeypatch):
 
 
 def test_a_valgrind_button_beside_debug(qtbot, card):
-    buttons = {b.text(): b for b in card.findChildren(QPushButton)}
-    assert list(buttons) == ["Run", "Debug", "Valgrind"] and buttons["Valgrind"].isEnabled()
+    buttons = {b.text(): b for b in card.findChildren(QToolButton)}
+    program_buttons = [text for text in buttons if text in ("Run", "Debug", "Valgrind")]
+    assert program_buttons == ["Run", "Debug", "Valgrind"] and buttons["Valgrind"].isEnabled()
+    for text in program_buttons:  # (icons, their tooltips saying what they do)
+        assert buttons[text].toolButtonStyle() == Qt.ToolButtonIconOnly and not buttons[text].icon().isNull()
+        assert buttons[text].toolTip()
+    assert buttons["Valgrind"].toolTip().startswith("Valgrind: check")
     with qtbot.waitSignal(card.valgrind_requested) as blocker:
         buttons["Valgrind"].click()
     assert blocker.args == ["test", "check_leaks"]
@@ -56,7 +62,7 @@ def test_without_valgrind_the_button_says_so(qtbot, tmp_path, monkeypatch):
                                                                programs=[("program", program)])], True, ""),
                          bo.PALETTES["light"])
     qtbot.addWidget(card)
-    button = next(b for b in card.findChildren(QPushButton) if b.text() == "Valgrind")
+    button = next(b for b in card.findChildren(QToolButton) if b.text() == "Valgrind")
     assert not button.isEnabled() and "wasn't found" in button.toolTip()
 
 
