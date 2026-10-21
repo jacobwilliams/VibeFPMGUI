@@ -97,7 +97,9 @@ menu item says "not found" and the feature is off; without fprettify the
 | `vibefpmgui.wrapping_tabs` | The editor's tabs on several rows (View → Editor Tabs) |
 | `vibefpmgui.console` | Console programs started without a console window flashing up (Windows); no Qt |
 | `vibefpmgui.git_status` | A repository's status and the versions of a changed file (the git program; no Qt) |
-| `vibefpmgui.git_panel` | The *Git* tab: the branch, the changed files, and the selected one's diff |
+| `vibefpmgui.git_panel` | The *Git* tab: *Diff* (the branch, the changed files, the selected one's diff) or *Stats* |
+| `vibefpmgui.git_stats` | A repository's statistics: its commits, people, branches, tags, files, size (no Qt) |
+| `vibefpmgui.git_stats_view` | The Git tab's *Stats*: tiles, the people, and their commits over time (pyqtgraph) |
 | `vibefpmgui.diff_view` | Two versions of a file side by side or unified: aligning them, folding unchanged lines |
 | `vibefpmgui.complexity` | Fortran code complexity, lizard's metrics (CCN, NLOC, tokens, parameters, length, depth); no Qt |
 | `vibefpmgui.metrics_table` | A sortable table drawn on demand (the Complexity tab's procedures and files) |
