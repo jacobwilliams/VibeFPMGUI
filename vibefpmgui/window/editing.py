@@ -209,7 +209,10 @@ class EditingMixin:
         if self._quick_open is None:
             self._quick_open = QuickOpen(self, lambda path: self.open_file(path, force_editor=True),
                                          tree.icon_for)
+        if self._command_palette is not None and self._command_palette.isVisible():
+            self._command_palette.close()  # (one palette at a time)
         open_paths = [str(e.path) for e in self.editors() if not e.untitled]
+        self._quick_open.set_icon(self.go_to_file_action.icon())  # (in the theme's colors now)
         self._quick_open.open(tree.all_files(), open_paths, tree.include_ignored.isChecked())
 
     def show_punch_card(self, editor: EditorTab):

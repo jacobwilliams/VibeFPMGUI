@@ -14,7 +14,7 @@ import re
 from typing import NamedTuple
 
 from qtpy.QtCore import QEvent, QRect, QSize, Qt, QTimer
-from qtpy.QtGui import QAction, QColor, QFontMetrics, QKeySequence, QPalette
+from qtpy.QtGui import QAction, QColor, QFontMetrics, QIcon, QKeySequence, QPalette
 from qtpy.QtWidgets import (
     QApplication,
     QFrame,
@@ -230,6 +230,8 @@ class CommandPalette(QFrame):
         self.field.setClearButtonEnabled(True)
         self.field.textChanged.connect(self._filter)
         self.field.installEventFilter(self)
+        # Its icon, in front of what's typed (the menu item's: see set_icon).
+        self.icon_action = self.field.addAction(QIcon(), QLineEdit.LeadingPosition)
         self.list = QListWidget()
         self.list.setItemDelegate(_ItemDelegate(self.list))
         self.list.setUniformItemSizes(True)
@@ -240,6 +242,10 @@ class CommandPalette(QFrame):
         layout.setSpacing(6)
         layout.addWidget(self.field)
         layout.addWidget(self.list)
+
+    def set_icon(self, icon: QIcon):
+        """The icon in front of the field (the menu item's, in the theme's colors)."""
+        self.icon_action.setIcon(icon)
 
     def open(self):
         """Read the menus, and show the palette at the top of the window."""

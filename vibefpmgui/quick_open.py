@@ -14,7 +14,7 @@ from __future__ import annotations
 from pathlib import Path, PurePosixPath
 
 from qtpy.QtCore import QEvent, QRect, QSize, Qt
-from qtpy.QtGui import QFont, QFontMetrics, QPalette
+from qtpy.QtGui import QFont, QFontMetrics, QIcon, QPalette
 from qtpy.QtWidgets import (
     QApplication,
     QFrame,
@@ -145,6 +145,8 @@ class QuickOpen(QFrame):
         self.field.setClearButtonEnabled(True)
         self.field.textChanged.connect(self._filter)
         self.field.installEventFilter(self)
+        # Its icon, in front of what's typed (the menu item's: see set_icon).
+        self.icon_action = self.field.addAction(QIcon(), QLineEdit.LeadingPosition)
         self.list = QListWidget()
         self.list.setItemDelegate(_FileDelegate(self))
         self.list.setUniformItemSizes(True)
@@ -159,6 +161,10 @@ class QuickOpen(QFrame):
         layout.addWidget(self.list)
         layout.addWidget(self.note)
         self.include_ignored = False
+
+    def set_icon(self, icon: QIcon):
+        """The icon in front of the field (the menu item's, in the theme's colors)."""
+        self.icon_action.setIcon(icon)
 
     def open(self, files: list[ProjectFile], open_paths: list[str], include_ignored: bool):
         """Show the palette at the top of the window, for these files."""

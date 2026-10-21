@@ -181,6 +181,36 @@ def _unified(p: QPainter, c: QColor):
         p.drawLine(QPointF(7.5, y), QPointF(16.5 if y != 12 else 13.5, y))
 
 
+def _palette(p: QPainter, c: QColor):
+    """The Command Palette: a panel with a prompt (">") in its field, a list under it."""
+    p.setPen(_pen(c, 1.8))
+    p.setBrush(Qt.NoBrush)
+    p.drawRoundedRect(QRectF(3, 3, 18, 18), 2.5, 2.5)
+    p.drawLine(QPointF(3, 10.5), QPointF(21, 10.5))  # (the field's edge)
+    p.drawPolyline([QPointF(6.2, 5.2), QPointF(8.6, 6.9), QPointF(6.2, 8.6)])  # the prompt
+    p.drawLine(QPointF(10.2, 8.6), QPointF(14, 8.6))
+    for y, end in ((14, 17.5), (17.5, 14.5)):  # the commands listed
+        p.drawLine(QPointF(6.5, y), QPointF(end, y))
+
+
+def _find_file(p: QPainter, c: QColor):
+    """Go to File: a page (its corner folded) under a magnifying glass."""
+    p.setPen(_pen(c, 1.7))
+    p.setBrush(Qt.NoBrush)
+    page = QPainterPath(QPointF(5, 3))
+    page.lineTo(12.5, 3)
+    page.lineTo(17, 7.5)
+    page.lineTo(17, 10.5)
+    page.moveTo(10, 20.5)
+    page.lineTo(5, 20.5)
+    page.lineTo(5, 3)
+    p.drawPath(page)
+    p.drawPolyline([QPointF(12.5, 3), QPointF(12.5, 7.5), QPointF(17, 7.5)])  # (the fold)
+    p.setPen(_pen(c, 2))
+    p.drawEllipse(QPointF(15, 15), 3.8, 3.8)  # the glass
+    p.drawLine(QPointF(17.8, 17.8), QPointF(21, 21))  # its handle
+
+
 def _memcheck(p: QPainter, c: QColor):
     """A memory chip under a magnifying glass: Valgrind's memory check."""
     p.setPen(_pen(c, 1.6))
@@ -400,6 +430,8 @@ DRAWERS = {
     "pause": _pause,
     "pencil": _pencil,
     "memcheck": _memcheck,
+    "palette": _palette,
+    "find-file": _find_file,
     "save": _save,
     "menu": _menu,
     "refresh": _refresh,

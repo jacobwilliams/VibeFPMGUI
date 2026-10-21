@@ -134,3 +134,24 @@ def test_the_app_s_palette(qtbot, window):
     qtbot.waitUntil(lambda: themes.current == "nord", timeout=2_000)
     assert window.settings.value("palette_recent", type=list)[0] == "View › Theme › Nord"
     themes.apply(themes.SYSTEM)
+
+
+def test_its_icon_in_the_menu_and_the_palette(qtbot, window):
+    """View → Command Palette…: its icon on the menu item, and in front of the palette's field (the theme's
+    colors: redrawn when they change)."""
+    from qtpy.QtWidgets import QApplication
+
+    from vibefpmgui.icons import make_icon
+    from vibefpmgui.window.running import QPalette
+
+    action = window.palette_action
+    color = QApplication.palette().color(QPalette.WindowText)
+    assert action.icon().pixmap(18, 18).toImage() == make_icon("palette", color).pixmap(18, 18).toImage()
+    window.show_command_palette()
+    palette = window._command_palette
+    qtbot.waitUntil(palette.isVisible, timeout=3000)
+    assert palette.icon_action.icon().cacheKey() == action.icon().cacheKey()  # (at the field's start)
+    palette.close()
+    key = action.icon().cacheKey()
+    window._update_command_icons()  # (a theme change)
+    assert action.icon().cacheKey() != key

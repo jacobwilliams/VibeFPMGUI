@@ -281,6 +281,9 @@ class ViewMixin:
             self._command_palette.recent_changed = lambda titles: self.settings.setValue("palette_recent", titles)
             # (Hidden: in no menu; shown only when its name is typed. See vibefpmgui.punch_card.)
             self._command_palette.hidden = [Command(("Punch Card",), self.punch_card_action)]
+        if getattr(self, "_quick_open", None) is not None and self._quick_open.isVisible():
+            self._quick_open.close()  # (one palette at a time)
+        self._command_palette.set_icon(self.palette_action.icon())  # (in the theme's colors now)
         self._command_palette.open()
 
     def _fill_window_style_menu(self):

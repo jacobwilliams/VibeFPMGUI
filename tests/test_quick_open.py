@@ -67,3 +67,34 @@ def test_command_p_opens_a_file(window, project, qtbot):
     editor = window.current_editor()
     assert editor is not None and editor.path == (project / "src/foo.f90").resolve()
     assert not palette.isVisible()
+
+
+def test_one_palette_at_a_time(window, qtbot):
+    """Go to File and the Command Palette: opening one closes the other."""
+    window.show_command_palette()
+    commands = window._command_palette
+    qtbot.waitUntil(commands.isVisible, timeout=3000)
+    window.go_to_file_action.trigger()
+    files = window._quick_open
+    qtbot.waitUntil(files.isVisible, timeout=3000)
+    assert not commands.isVisible()
+    window.show_command_palette()
+    qtbot.waitUntil(commands.isVisible, timeout=3000)
+    assert not files.isVisible()
+    commands.close()
+
+
+def test_its_icon_in_the_menu_and_the_palette(window, qtbot):
+    from qtpy.QtGui import QPalette
+    from qtpy.QtWidgets import QApplication
+
+    from vibefpmgui.icons import make_icon
+
+    action = window.go_to_file_action
+    color = QApplication.palette().color(QPalette.WindowText)
+    assert action.icon().pixmap(18, 18).toImage() == make_icon("find-file", color).pixmap(18, 18).toImage()
+    action.trigger()
+    palette = window._quick_open
+    qtbot.waitUntil(palette.isVisible, timeout=3000)
+    assert palette.icon_action.icon().cacheKey() == action.icon().cacheKey()  # (at the field's start)
+    palette.close()

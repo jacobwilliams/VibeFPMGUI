@@ -153,6 +153,10 @@ class RunningMixin:
     def _build_commands(self):
         """The fpm commands as actions, shown in a toolbar and a Commands menu."""
         self.command_icons: dict[QAction, str] = {}
+        if hasattr(self, "palette_action"):  # (View → Command Palette…: its icon, redrawn with the theme's colors too)
+            self.command_icons[self.palette_action] = "palette"
+        if hasattr(self, "go_to_file_action"):  # (Edit → Go To → Go to File…: the same)
+            self.command_icons[self.go_to_file_action] = "find-file"
 
         def make(label, icon, shortcut, description, slot):
             action = QAction(label, self)
