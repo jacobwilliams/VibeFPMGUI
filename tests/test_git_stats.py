@@ -220,3 +220,31 @@ def test_the_window_remembers_the_plot(qtbot, window, project, make_window):
     window.git_panel.stats_view.mode_buttons[gsv.MONTHLY].click()
     assert window.settings.value("git_stats_plot") == gsv.MONTHLY
     assert make_window(project / "fpm.toml").git_panel.stats_view.mode == gsv.MONTHLY
+
+
+def test_clicking_the_chosen_person_again_unchooses_them(qtbot, tmp_path):
+    from qtpy.QtCore import Qt
+    from qtpy.QtTest import QTest
+
+    view = gsv.GitStatsView()
+    qtbot.addWidget(view)
+    view.resize(900, 500)
+    view.show_stats(gst.read_stats(history(tmp_path)))
+    view.show()
+    people = view.people
+
+    def click(row: int, modifiers=Qt.NoModifier):
+        rect = people.visualItemRect(people.topLevelItem(row))
+        QTest.mouseClick(people.viewport(), Qt.LeftButton, modifiers, rect.center())
+
+    def faded() -> set[str]:
+        return {who for who, c in view.curves.items() if c.opts["pen"].color().alphaF() < 1}
+
+    click(1)  # (Bob)
+    assert [i.text(0) for i in people.selectedItems()] == ["Bob"] and "Ada" in faded()
+    click(1)  # (again: no one)
+    assert people.selectedItems() == [] and faded() == set()
+    click(0)
+    click(1, Qt.ControlModifier)  # (two people: a click on one of them chooses only that one)
+    click(0)
+    assert [i.text(0) for i in people.selectedItems()] == ["Ada"]

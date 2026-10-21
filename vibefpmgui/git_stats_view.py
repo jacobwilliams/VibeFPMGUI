@@ -22,7 +22,7 @@ import qtpy
 os.environ.setdefault("PYQTGRAPH_QT_LIB", qtpy.API_NAME)  # (pyqtgraph: qtpy's Qt binding)
 
 import pyqtgraph as pg
-from qtpy.QtCore import Qt, Signal
+from qtpy.QtCore import QEvent, Qt, Signal
 from qtpy.QtGui import QBrush, QColor, QCursor, QFont, QPen
 from qtpy.QtWidgets import (
     QApplication,
@@ -155,6 +155,7 @@ class GitStatsView(QWidget):
         self.people.setSortingEnabled(False)
         self.people.setSelectionMode(QTreeWidget.ExtendedSelection)
         self.people.itemSelectionChanged.connect(self._highlight)
+        self.people.viewport().installEventFilter(self)  # (clicking the one chosen again: none)
 
         self.plot = pg.PlotWidget(axisItems={"bottom": pg.DateAxisItem()})
         self.plot.setMenuEnabled(False)
@@ -351,6 +352,17 @@ class GitStatsView(QWidget):
                 pen.setWidthF(3.5 if chosen and mine else 2)
                 pen.setCosmetic(True)
                 curve.setPen(pen)
+
+    def eventFilter(self, obj, event):
+        """A plain click on the only person chosen: unchoose them (all the
+        lines as they were)."""
+        if (obj is self.people.viewport() and event.type() == QEvent.MouseButtonPress
+                and event.button() == Qt.LeftButton and event.modifiers() == Qt.NoModifier):
+            item = self.people.itemAt(event.position().toPoint())
+            if item is not None and self.people.selectedItems() == [item]:
+                self.people.clearSelection()
+                return True
+        return super().eventFilter(obj, event)
 
     def month_text(self, x: float) -> str:
         """What a Per month bar holds (the one at ``x``, seconds since 1970): ""
