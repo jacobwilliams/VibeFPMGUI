@@ -285,7 +285,14 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   whole file in miniature, in its syntax colors, with the change bars,
   warnings, errors, lint and AI-review markers and find matches; click it
   to jump, or drag the box (the part in view) to scroll. *View → Show
-  Minimap* turns it off. Selecting text highlights its other occurrences in
+  Minimap* turns it off. *View → Show Git Blame* adds a column beside it:
+  each line's last commit (short hash, author, date), once per run of
+  lines from one commit, colored by the commit's age (orange: this week,
+  gold: this month, blue: this year, grey: older); lines
+  changed since the last commit say "Not committed yet" (it's the text in
+  the editor that's blamed, so it stays matched as you type). Hover a line
+  for the commit's message; click it to open the commit on GitHub or GitLab
+  (or, with no web page for it, to copy its hash). Selecting text highlights its other occurrences in
   the file, matched as the find bar's *Match case* and *Whole words* are set
   (*View → Highlight Other Occurrences of the Selection* turns it off).
   *View → Word Wrap* (⌥/Alt+Z) wraps long lines at

@@ -38,11 +38,15 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from . import git_blame
+from . import git_status as gs
 from . import lsp as lsp_mod
+from .background import call_in_background
 from .code_editor import CodeEditor
 from .editor_checks import EditorChecksMixin
 from .editor_language import EditorLanguageMixin
 from .editor_shared import (
+    BLAME_DELAY_MS,
     COMPLETE_MS,
     DEPTH_ROLE,
     LINT_DELAY_MS,
@@ -51,6 +55,7 @@ from .editor_shared import (
     line_changes,
 )
 from .find_bar import FindBar
+from .git_blame import BlameColumn
 from .highlighter import PygmentsHighlighter, apply_style, lexer_for_path
 from .icons import SYMBOL_INDENT
 from .line_edits import comment_style
@@ -111,6 +116,7 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
     spelling_enabled = True  # spell check comments and strings (View menu)
     gremlins_enabled = True  # View → Show Gremlins (non-ASCII and invisible characters)
     minimap_enabled = True  # View → Show Minimap
+    blame_enabled = False   # View → Show Git Blame (see vibefpmgui.git_blame)
     word_wrap = False       # View → Word Wrap
     trim_on_save = True     # Edit → Trim Trailing Whitespace on Save
 
@@ -218,6 +224,16 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
         self.minimap.setVisible(self.minimap_enabled)
         self.editor.set_word_wrap(self.word_wrap)
         self.highlighter.relexed.connect(self.minimap.invalidate)
+        # Git blame, left of the minimap (View → Show Git Blame): read again once typing pauses.
+        self.blame_column = BlameColumn(self.editor, self)
+        self.blame_column.setVisible(self.blame_enabled)
+        self._blame_request = 0  # (an answer to an older request is dropped)
+        self._blame_timer = QTimer(self)
+        self._blame_timer.setSingleShot(True)
+        self._blame_timer.setInterval(BLAME_DELAY_MS)
+        self._blame_timer.timeout.connect(self.refresh_blame)
+        self.editor.document().contentsChanged.connect(
+            lambda: self.blame_enabled and self._blame_timer.start())
         self._spelling_timer = QTimer(self)  # (once the colors, so the comments and strings, are updated)
         self._spelling_timer.setSingleShot(True)
         self._spelling_timer.setInterval(SPELLING_DELAY_MS)
@@ -227,6 +243,7 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
         body.addWidget(self.editor, 1)
+        body.addWidget(self.blame_column)
         body.addWidget(self.minimap)
         layout.addLayout(body, 1)
         layout.addWidget(self.find_bar)
@@ -324,6 +341,8 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
         self.editor.document().setModified(False)
         self._watch()
         self.update_status()
+        if getattr(self, "blame_column", None) is not None:  # (not when first loaded: see __init__)
+            self.refresh_blame()
 
     def _watch(self):
         if self.watcher.files():
@@ -406,6 +425,7 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
             self._flush_lsp()
             self.lsp.save_document(self.path)
         self.update_change_marks()  # unsaved bars become saved ones
+        self.refresh_blame()
         self.saved.emit(str(self.path))
         return True
 
@@ -521,6 +541,40 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
         self.editor.setFont(font)
         self.editor.set_indentation(self.editor.indent_width, self.editor.use_tabs)  # (tab width in the new font)
         self.editor.update_gutter_width()
+        self.blame_column.refresh_font()
+
+    # ----------------------------------------------------------- git blame
+    def set_blame_enabled(self, on: bool):
+        """View → Show Git Blame, for this tab."""
+        self.blame_column.setVisible(on)
+        if on:
+            self.refresh_blame()
+
+    def refresh_blame(self):
+        """Read the blame of the text as it is now (off the window's thread)."""
+        self._blame_timer.stop()
+        if not self.blame_enabled:
+            return
+        if self.untitled:
+            self.blame_column.set_blame(None, "Not saved yet: no history.")
+            return
+        self._blame_request += 1
+        request, path, text = self._blame_request, self.path, self.editor.toPlainText()
+
+        def work():
+            if not gs.available():
+                return None, "Git blame needs git (https://git-scm.com), on the PATH."
+            try:
+                found = git_blame.blame(path, text)
+            except gs.GitError as error:
+                return None, f"git blame: {error}"
+            return found, "" if found is not None else "Not in git: no history yet."
+
+        def done(result):
+            if request == self._blame_request:
+                self.blame_column.set_blame(*result)
+
+        call_in_background(work, done, self)
 
     def refresh_style(self):
         """Apply the syntax colors (View → Syntax Colors, or automatic)."""

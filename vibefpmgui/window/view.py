@@ -134,6 +134,13 @@ class ViewMixin:
         self.minimap_action.setStatusTip("A zoomed-out view of the whole file at the right of the editor")
         self.minimap_action.toggled.connect(self.set_minimap_enabled)
         view_menu.addAction(self.minimap_action)
+        self.blame_action = QAction("Show Git Blame", self, checkable=True)
+        EditorTab.blame_enabled = self.settings.value("git_blame", False, type=bool)
+        self.blame_action.setChecked(EditorTab.blame_enabled)
+        self.blame_action.setStatusTip("Beside the editor, each line's last commit (hash, author, date); "
+                                       "click one to open it on GitHub or GitLab")
+        self.blame_action.toggled.connect(self.set_blame_enabled)
+        view_menu.addAction(self.blame_action)
         self.coverage_action = QAction("Show Coverage in the Editor", self, checkable=True)
         CodeEditor.show_coverage = self.settings.value("show_coverage", True, type=bool)
         self.coverage_action.setChecked(CodeEditor.show_coverage)
@@ -466,6 +473,12 @@ class ViewMixin:
         self.settings.setValue("highlight_matches", on)
         for editor in self.editors():
             editor.editor.update_occurrences()
+
+    def set_blame_enabled(self, on: bool):
+        EditorTab.blame_enabled = on
+        self.settings.setValue("git_blame", on)
+        for editor in self.editors():
+            editor.set_blame_enabled(on)
 
     def set_minimap_enabled(self, on: bool):
         EditorTab.minimap_enabled = on

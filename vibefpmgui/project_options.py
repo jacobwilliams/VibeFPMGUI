@@ -36,7 +36,7 @@ BYTES, JSON = "bytes", "json"  # (kinds besides bool, int, float, str and list)
 OPTIONS: dict[str, object] = {
     # View
     "use_editor": bool, "lint": bool,
-    "lsp_diagnostics": bool, "spelling": bool, "spelling_language": str, "gremlins": bool, "minimap": bool,
+    "lsp_diagnostics": bool, "spelling": bool, "spelling_language": str, "gremlins": bool, "minimap": bool, "git_blame": bool,
     "show_coverage": bool, "highlight_matches": bool, "word_wrap": bool, "indent_width": int,
     "indent_tabs": bool, "fortls": bool, "trim_on_save": bool,
     # The editor's tabs, the panels

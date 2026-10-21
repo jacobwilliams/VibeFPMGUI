@@ -75,6 +75,7 @@ EXECUTION_COLOR = "#f5b700"  # the debugger's current line: the gutter's arrow, 
 COVERAGE_COLORS = {"ran": "#2f9e44", "partial": "#f08c00", "missed": "#e03131"}  # (gutter bars, minimap)
 
 SPELLING_DELAY_MS = 250  # spell check this long after the colors are updated
+BLAME_DELAY_MS = 1500  # git blame read again this long after typing pauses (see vibefpmgui.git_blame)
 
 LSP_SYNC_MS = 300    # send edits to the language server once typing pauses this long
 

@@ -180,6 +180,7 @@ class ProjectOptionsMixin:
         return [(self.use_editor_action, "use_editor", True), (self.lint_action, "lint", True),
                 (self.lsp_diagnostics_action, "lsp_diagnostics", True), (self.spelling_action, "spelling", True),
                 (self.gremlins_action, "gremlins", True), (self.minimap_action, "minimap", True),
+                (self.blame_action, "git_blame", False),
                 (self.coverage_action, "show_coverage", True), (self.matches_action, "highlight_matches", True),
                 (self.word_wrap_action, "word_wrap", False), (self.fortls_action, "fortls", True),
                 (self.trim_on_save_action, "trim_on_save", True)]
