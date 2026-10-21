@@ -335,7 +335,11 @@ written in Python with PySide6 (through the [qtpy](https://github.com/spyder-ide
   Dark, Ocean, Mint), which also brings its syntax colors when those are on
   *Automatic*. *View → Command Palette…* (⌘⇧P or Ctrl+Shift+P) finds any
   command in the menus by typing part of its name (letters in order:
-  "mvup" finds *Move Line Up*), most recently used first. *View → Window Style* picks how buttons, tabs and the
+  "mvup" finds *Move Line Up*), most recently used first. *Edit → Go To →
+  Go to File…* (⌘P or Ctrl+P) does the same for files: any file the
+  *Project files* tree lists, the project's or a dependency's, by part of
+  its name ("dstat" finds `demo_stats.f90`), opened in the editor; files
+  ignored by git only with the tree's *Ignored* ticked. *View → Window Style* picks how buttons, tabs and the
   panels' dividers are drawn: *Automatic* (the platform's own style for
   System, Light and Dark; Fusion for the colorful themes, which need it for
   their colors), or any of Qt's styles on your platform (Fusion everywhere,

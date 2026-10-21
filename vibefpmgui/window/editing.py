@@ -11,6 +11,7 @@ from .. import formatter, line_edits, lint
 from ..background import call_in_background
 from ..editor import EditorTab
 from ..punch_card import PunchCardDialog
+from ..quick_open import QuickOpen
 from ..widgets import run_dialog
 
 
@@ -75,6 +76,13 @@ class EditingMixin:
                                                "dependencies (Search tab)")
         self.replace_files_action.triggered.connect(lambda: self.find_in_files(replace=True))
         go_menu = self.go_menu = menu.addMenu("Go To")  # (kept: PySide would let it go)
+        # ⌘P (Ctrl+P): any file of the project or its dependencies, by name (see vibefpmgui.quick_open).
+        self.go_to_file_action = go_menu.addAction("Go to File…")
+        self.go_to_file_action.setShortcut(QKeySequence("Ctrl+P"))
+        self.go_to_file_action.setStatusTip("Open any file of the project or its dependencies by typing part of "
+                                            "its name (git-ignored ones: with Project files → Ignored ticked)")
+        self.go_to_file_action.triggered.connect(self.go_to_file)
+        self._quick_open = None
         self.goto_action = editor_action("Go to Line…", "Ctrl+L", lambda e: e.go_to_line_dialog(), go_menu)
         self.symbol_action = go_menu.addAction("Go to Symbol in Project…")
         self.symbol_action.setShortcut(QKeySequence("Ctrl+T"))
@@ -190,6 +198,19 @@ class EditingMixin:
             action.triggered.connect(lambda _=False, n=newline: self.convert_line_endings(n))
             self.line_ending_actions[newline] = action
         self.line_endings_menu.aboutToShow.connect(self._check_line_endings)
+
+    def go_to_file(self):
+        """Edit → Go To → Go to File… (⌘P): the files the Project files tree
+        lists (its Ignored checkbox respected), found by typing."""
+        if self.manifest_path is None:
+            self.statusBar().showMessage("Go to File: open a project first", 4000)
+            return
+        tree = self.project_tree
+        if self._quick_open is None:
+            self._quick_open = QuickOpen(self, lambda path: self.open_file(path, force_editor=True),
+                                         tree.icon_for)
+        open_paths = [str(e.path) for e in self.editors() if not e.untitled]
+        self._quick_open.open(tree.all_files(), open_paths, tree.include_ignored.isChecked())
 
     def show_punch_card(self, editor: EditorTab):
         """The hidden Punch Card command: the line at the cursor as an IBM card."""

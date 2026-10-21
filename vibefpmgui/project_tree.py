@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from qtpy.QtCore import (
@@ -107,6 +108,16 @@ def fpm_folders(manifest_path: Path) -> dict[str, str]:
         for folder in dirs:
             add(folder, role)
     return roles
+
+
+@dataclass(frozen=True)
+class ProjectFile:
+    """A file of the project (or a dependency), as Go to File lists it."""
+    path: str          # (absolute)
+    relative: str      # in its package's folder ("src/x.f90")
+    package: str       # its package's name
+    dependency: bool   # a dependency's (not the project's own)
+    hidden: bool = False  # ignored by git, or greyed out (listed only with Ignored ticked)
 
 
 class GitIgnore:
@@ -551,6 +562,39 @@ class ProjectTree(QWidget):
             self._all_loaded = include_ignored
         finally:
             QApplication.restoreOverrideCursor()
+
+    def all_files(self) -> list[ProjectFile]:
+        """Every file the tree lists (the project's and its dependencies'),
+        for Go to File (⌘P): the greyed-out and git-ignored ones only with
+        *Ignored* ticked, as the filter has them. Loads every folder first."""
+        include = self.include_ignored.isChecked()
+        self._load_all(include)
+        out, seen = [], set()
+        stack = [(self.model.item(r), None) for r in range(self.model.rowCount())]
+        while stack:
+            item, package = stack.pop()
+            if item is None:
+                continue
+            kind = item.data(KIND_ROLE)
+            if kind == "package":
+                package = (item.text().split("  (")[0], Path(item.data(PATH_ROLE)),
+                           item.parent() is not None)  # (a dependency's: under the Dependencies group)
+            elif kind == "file" and package is not None:
+                hidden = bool(item.data(IGNORED_ROLE) or item.data(HIDDEN_ROLE))
+                path = item.data(PATH_ROLE)
+                if (include or not hidden) and path not in seen:
+                    seen.add(path)
+                    name, folder, dependency = package
+                    try:
+                        relative = Path(path).relative_to(folder).as_posix()
+                    except ValueError:
+                        relative = Path(path).name
+                    out.append(ProjectFile(path, relative, name, dependency, hidden))
+                continue
+            elif kind == "dir" and item.data(IGNORED_ROLE) and not include:
+                continue
+            stack.extend((item.child(r), package) for r in range(item.rowCount()))
+        return out
 
     def _expanded(self, proxy_index):
         item = self.model.itemFromIndex(self.proxy.mapToSource(proxy_index))
