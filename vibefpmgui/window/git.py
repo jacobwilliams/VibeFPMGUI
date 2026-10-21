@@ -48,6 +48,9 @@ class GitMixin:
         self.git_panel.discard_requested.connect(self.discard_git_change)
         self.git_panel.set_view(str(self.settings.value("git_view", "diff") or "diff"))  # (Diff or Stats, as last)
         self.git_panel.view_changed.connect(lambda view: self.settings.setValue("git_view", view))
+        stats = self.git_panel.stats_view
+        stats.set_mode(str(self.settings.value("git_stats_plot", "total") or "total"))  # (Total or Per month)
+        stats.mode_changed.connect(lambda mode: self.settings.setValue("git_stats_plot", mode))
         self._git_request = 0     # (an answer to an older request is dropped)
         self._git_stale = True    # (read again once the panel is on view)
         self._git_reading = False  # (a read is under way)

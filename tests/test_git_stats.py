@@ -174,3 +174,49 @@ def test_the_window_remembers_the_view(qtbot, window, project, make_window):
     assert other.git_panel.view() == gp.STATS
     other.git_panel.view_buttons[gp.DIFF].click()
     assert other.settings.value("git_view") == gp.DIFF
+
+
+# ------------------------------------------------------------ per month
+def test_commits_in_each_month():
+    from datetime import datetime
+
+    def at(y, m, d):
+        return int(datetime(y, m, d, 12).timestamp())
+
+    authors = [gst.Author("Ada", "", [at(2024, 1, 5), at(2024, 1, 20), at(2024, 3, 2)]),
+               gst.Author("Bob", "", [at(2024, 3, 9)])]
+    edges, counts = gsv.per_month(gst.RepoStats(Path("."), "h", authors), now=at(2024, 4, 1))
+    assert edges[0] == int(datetime(2024, 1, 1).timestamp()) and edges[-1] == int(datetime(2024, 5, 1).timestamp())
+    assert len(edges) == 5  # (January to April, and when April ends)
+    assert counts == [("Ada", [2, 0, 1, 0]), ("Bob", [0, 0, 1, 0])]
+    assert gsv.month_number(at(2024, 12, 31)) + 1 == gsv.month_number(at(2025, 1, 1))  # (over a year's end)
+
+
+def test_the_per_month_bars(qtbot, tmp_path):
+    root = history(tmp_path)
+    view = gsv.GitStatsView()
+    qtbot.addWidget(view)
+    view.show_stats(gst.read_stats(root))
+    assert view.mode == gsv.TOTAL and all(isinstance(c, gsv.pg.PlotDataItem) for c in view.curves.values())
+    with qtbot.waitSignal(view.mode_changed) as said:
+        view.mode_buttons[gsv.MONTHLY].click()
+    assert said.args == [gsv.MONTHLY] and view.mode_buttons[gsv.MONTHLY].isChecked()
+    assert set(view.curves) == {"Ada", "Bob", "Cy", "T"}
+    assert all(isinstance(c, gsv.pg.BarGraphItem) for c in view.curves.values())
+    assert "a month" in view.plot.getAxis("left").labelText
+    edges, counts = view.months
+    assert sum(sum(months) for _who, months in counts) == 7
+    text = view.month_text(START + DAY)  # (the history's month: Ada's, Bob's, Cy's commits)
+    assert "6 commits" in text and "Ada: 3" in text and "Bob: 2" in text and "Cy: 1" in text
+    assert view.month_text(edges[0] - DAY) == ""  # (before the first month)
+    view.people.topLevelItem(0).setSelected(True)  # (Ada: her bars as they are, the others' faint)
+    alpha = {who: bars.opts["brush"].color().alphaF() for who, bars in view.curves.items()}
+    assert alpha["Ada"] == 1.0 and alpha["Bob"] < 0.5
+    view.set_mode(gsv.TOTAL)
+    assert all(isinstance(c, gsv.pg.PlotDataItem) for c in view.curves.values()) and view.months is None
+
+
+def test_the_window_remembers_the_plot(qtbot, window, project, make_window):
+    window.git_panel.stats_view.mode_buttons[gsv.MONTHLY].click()
+    assert window.settings.value("git_stats_plot") == gsv.MONTHLY
+    assert make_window(project / "fpm.toml").git_panel.stats_view.mode == gsv.MONTHLY
