@@ -84,7 +84,18 @@ class HoverPopup(QFrame):
     def _link_clicked(self, url):
         """The card's links: "Apply fix" (fix:N = the editor's Nth lint
         issue), a spelling suggestion (spell:N:word) or "Add to Dictionary"
-        (addword:N)."""
+        (addword:N); a web page (opened in the browser: a git blame card's
+        commit, issue, file), or copy:TEXT (to the clipboard)."""
+        if url.scheme() in ("http", "https"):
+            from .git_blame import open_web_page
+
+            self.hide()
+            open_web_page(url.toString())
+            return
+        if url.scheme() == "copy":
+            QApplication.clipboard().setText(url.path())
+            self.hide()
+            return
         if url.scheme() in ("spell", "addword"):
             number, _, word = url.path().partition(":")
             try:

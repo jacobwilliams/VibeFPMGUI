@@ -36,6 +36,7 @@ from qtpy.QtGui import (
 from qtpy.QtWidgets import QApplication, QToolTip, QWidget
 
 from . import git_status as gs
+from .background import call_in_background
 
 NOT_COMMITTED = "0" * 40  # (git's hash for lines changed since the last commit)
 HEADER_RE = re.compile(r"^([0-9a-f]{40}) (\d+) (\d+)(?: (\d+))?$")
@@ -83,6 +84,50 @@ class Blame:
     lines: list[str]               # each line's commit (its hash), the file's lines in order
     commits: dict[str, Commit]
     remote: str = ""               # the repository's origin (for the commits' web pages)
+    root: Path | None = None       # the repository's top folder (for a commit's details)
+
+
+@dataclass
+class FileChange:
+    status: str                    # A, M, D, R, C, T (git's letters)
+    path: str
+    old_path: str = ""             # a renamed or copied file's name before
+    added: int | None = None       # lines (None: a binary file)
+    deleted: int | None = None
+
+
+@dataclass
+class CommitDetails:
+    """What the tooltip shows of a commit, besides what the blame says."""
+    email: str = ""
+    message: str = ""              # the whole of it
+    committer: str = ""            # (when not the author: a rebase, a patch applied by someone else)
+    commit_time: int = 0
+    files: list[FileChange] | None = None
+
+
+MAX_FILES = 30  # files listed in the tooltip (more: "and N more")
+
+
+def commit_details(root: Path, sha: str) -> CommitDetails:
+    """A commit's message, its author's email, its committer, and the files it
+    changed (each with its lines added and deleted). Raises GitError."""
+    header = gs._check(root, "show", "-s", "--no-color", "--format=%ae%x00%cn%x00%ct%x00%an%x00%B", sha)
+    email, committer, commit_time, author, message = (header.decode("utf-8", "replace").split("\0", 4) + [""] * 5)[:5]
+    statuses = gs._check(root, "-c", "core.quotepath=false", "show", "--no-color", "--format=", "--name-status",
+                         "-M", sha).decode("utf-8", "replace").splitlines()
+    counts = gs._check(root, "-c", "core.quotepath=false", "show", "--no-color", "--format=", "--numstat", "-M",
+                       sha).decode("utf-8", "replace").splitlines()
+    files = []
+    for status_line, count_line in zip(statuses, counts, strict=False):
+        parts = status_line.split("\t")
+        letter = parts[0][:1]
+        path, old = (parts[2], parts[1]) if letter in "RC" and len(parts) > 2 else (parts[-1], "")
+        added, deleted, *_ = count_line.split("\t") + ["", ""]
+        files.append(FileChange(letter, path, old, int(added) if added.isdigit() else None,
+                                int(deleted) if deleted.isdigit() else None))
+    return CommitDetails(email.strip(), message.strip(), committer.strip() if committer.strip() != author.strip()
+                         else "", int(commit_time) if commit_time.strip().isdigit() else 0, files)
 
 
 def parse_porcelain(output: str) -> tuple[list[str], dict[str, Commit]]:
@@ -130,7 +175,7 @@ def blame(path: Path, text: str) -> Blame | None:
         raise gs.GitError(message.strip().splitlines()[-1] if message.strip() else "git blame failed")
     lines, commits = parse_porcelain((output or b"").decode("utf-8", "replace"))
     _code, remote, _message = gs._git(root, "config", "--get", "remote.origin.url")
-    return Blame(lines, commits, (remote or b"").decode().strip())
+    return Blame(lines, commits, (remote or b"").decode().strip(), root)
 
 
 def short_name(author: str, room: int = 14) -> str:
@@ -151,6 +196,9 @@ class BlameColumn(QWidget):
         self.message = ""  # (why there's no blame: shown at the top)
         self._hover: int | None = None    # the card under the mouse (its first line)
         self._pressed: int | None = None  # the card being clicked (its first line)
+        self._details: dict[str, CommitDetails | str] = {}  # a commit's details (or why git couldn't), once read
+        self._loading: set[str] = set()
+        self._card_at = QPoint()  # (where the mouse rested: the card is shown there)
         self.setMouseTracking(True)
         self.setAttribute(Qt.WA_OpaquePaintEvent)
         editor.updateRequest.connect(lambda *_: self.update())  # (scrolled, edited: drawn again with it)
@@ -301,20 +349,50 @@ class BlameColumn(QWidget):
 
     # ------------------------------------------------------------ the mouse
     def event(self, event):
-        if event.type() == QEvent.ToolTip:
+        if event.type() == QEvent.ToolTip:  # (the mouse rested on a card: its card, as fortitude's)
             commit = self.commit_at(event.pos().y())
+            popup = self.editor.hover_popup
             if commit is None:
-                QToolTip.hideText()
-            elif not commit.committed:
-                QToolTip.showText(event.globalPos(), "Not committed yet: changed since the last commit", self)
+                if (popup.anchor or ("",))[0] == "blame":
+                    popup.schedule_hide()
             else:
-                when = time.strftime("%Y-%m-%d %H:%M", time.localtime(commit.time)) if commit.time else ""
-                link = "Click to open it on the web" if self._commit_url(commit) else "Click to copy its hash"
-                QToolTip.showText(event.globalPos(), f"<b>{commit.sha[:10]}</b> · {_escape(commit.author)} · "
-                                                     f"{when} · {age_words(commit.time)}<br>"
-                                                     f"{_escape(commit.summary)}<br><i>{link}</i>", self)
+                self._card_at = event.globalPos()
+                self.show_card(commit)
+                if commit.committed and commit.sha not in self._details:
+                    self._load_details(commit)
             return True
         return super().event(event)
+
+    def show_card(self, commit: Commit):
+        """A commit's card in the editor's hover popup (it stays while the mouse
+        goes into it, so its links can be clicked)."""
+        palette = self.editor.palette()
+        html = commit_card_html(commit, self._details.get(commit.sha), self.blame.remote if self.blame else "",
+                                palette.color(QPalette.Text))
+        self.editor.hover_popup.show_at(self._card_at, html, ("blame", commit.sha))
+
+    def _load_details(self, commit: Commit):
+        """Read a commit's message and files (off the window's thread, once):
+        its card then shows them, if it's still open."""
+        if commit.sha in self._loading or self.blame is None or self.blame.root is None:
+            return
+        self._loading.add(commit.sha)
+        root, sha = self.blame.root, commit.sha
+
+        def work():
+            try:
+                return commit_details(root, sha)
+            except gs.GitError as error:
+                return str(error)
+
+        def done(details):
+            self._loading.discard(sha)
+            self._details[sha] = details
+            popup = self.editor.hover_popup
+            if popup.isVisible() and popup.anchor == ("blame", sha):
+                self.show_card(commit)
+
+        call_in_background(work, done, self)
 
     def wheelEvent(self, event):
         # Scroll the editor, as if the wheel were over the text (as the minimap does): the
@@ -332,6 +410,8 @@ class BlameColumn(QWidget):
     def leaveEvent(self, event):
         self._hover = self._pressed = None
         self.update()
+        if (self.editor.hover_popup.anchor or ("",))[0] == "blame":
+            self.editor.hover_popup.schedule_hide()  # (unless the mouse went into it)
         super().leaveEvent(event)
 
     def mousePressEvent(self, event):
@@ -366,6 +446,139 @@ class BlameColumn(QWidget):
         )
 
         return commit_web_url(self.blame.remote, commit.sha)
+
+
+STATUS_CHIPS = {"A": ("added", "#2f9e44"), "M": ("modified", "#1c7ed6"), "D": ("deleted", "#e03131"),
+                "R": ("renamed", "#7048e8"), "C": ("copied", "#7048e8"), "T": ("type changed", "#868e96")}
+
+
+def web_base(remote: str) -> str | None:
+    """The repository's web page (GitHub, GitLab, Codeberg…), None: none known."""
+    if not remote:
+        return None
+    from .window.packages import (
+        repo_web_url,  # (here: the window's module imports the editor's)
+    )
+
+    return repo_web_url(remote)
+
+
+def issue_url(base: str, number: str, merge_request: bool = False) -> str | None:
+    """An issue's ("#33") or merge request's ("!34", GitLab's) page."""
+    if "gitlab." in base:
+        return f"{base}/-/{'merge_requests' if merge_request else 'issues'}/{number}"
+    if merge_request:
+        return None  # (only GitLab writes them so)
+    return f"{base}/issues/{number}"  # (GitHub sends a pull request's number on to it; Codeberg too)
+
+
+def file_url(base: str, sha: str, path: str) -> str:
+    """A file as it was in a commit."""
+    if "gitlab." in base:
+        return f"{base}/-/blob/{sha}/{path}"
+    if "codeberg." in base:
+        return f"{base}/src/commit/{sha}/{path}"
+    if "bitbucket." in base:
+        return f"{base}/src/{sha}/{path}"
+    return f"{base}/blob/{sha}/{path}"
+
+
+def linkify(text: str, base: str | None) -> str:
+    """Text for the card: escaped, its web addresses links, and its issue
+    ("#33") and merge request ("!34") numbers links to their pages."""
+    out, last = [], 0
+    pattern = re.compile(r"(?P<url>https?://[^\s<>\"')\]]+)|(?<![\w&/])(?P<kind>[#!])(?P<number>\d+)\b")
+    for match in pattern.finditer(text):
+        out.append(_escape(text[last:match.start()]))
+        last = match.end()
+        if match.group("url"):
+            url = match.group("url").rstrip(".,;:")
+            out.append(f"<a href='{_escape(url)}'>{_escape(url)}</a>{_escape(match.group('url')[len(url):])}")
+            continue
+        url = issue_url(base, match.group("number"), match.group("kind") == "!") if base else None
+        out.append(f"<a href='{url}'>{_escape(match.group(0))}</a>" if url else _escape(match.group(0)))
+    return "".join(out) + _escape(text[last:])
+
+
+def commit_card_html(commit: Commit, details: CommitDetails | str | None, remote: str, text: QColor) -> str:
+    """A commit, as the editor's other hover cards (fortitude's): its hash
+    (a link: its page, or "copy"), age band, author (and committer), date,
+    the whole message (issue and merge request numbers, web addresses:
+    links), and the files it changed (each a link to it as it was then),
+    with their lines added and deleted. ``details``: None while they're
+    read; a string: why git couldn't."""
+    muted = QColor(text)
+    muted.setAlpha(150)
+    muted = muted.name(QColor.HexArgb)
+    dark = text.lightness() > 128
+    green, red = ("#57d163", "#ff6b6b") if dark else ("#1a7f37", "#cf222e")
+    small = "font-size:small"
+    base = web_base(remote)
+    host = "GitHub" if base and "github." in base else "GitLab" if base and "gitlab." in base else "the web"
+    page = f"{base}/{'-/commit' if base and 'gitlab.' in base else 'commit'}/{commit.sha}" if base else None
+    if not commit.committed:
+        return (f"<span style='color:{muted}; {small}'>GIT BLAME</span><br>"
+                "<i>Not committed yet</i>: changed since the last commit.")
+    band, color, _strength = age_band(commit.time)
+    when = time.strftime("%Y-%m-%d %H:%M", time.localtime(commit.time)) if commit.time else ""
+    chip = f"background-color:{color}; color:white; font-weight:700; {small}"
+    hash_link = page or f"copy:{commit.sha}"
+    out = [(f"<span style='color:{muted}; {small}'>COMMIT</span><br>"
+            f"<a href='{hash_link}' style='text-decoration:none'><b><code>{commit.sha[:12]}</code></b></a>"
+            f"&nbsp;&nbsp;<span style='{chip}'>&nbsp;{band}&nbsp;</span>")]
+    email = f" &lt;{_escape(details.email)}&gt;" if isinstance(details, CommitDetails) and details.email else ""
+    ago = age_words(commit.time).split(" (")[-1][:-1]
+    out.append(f"<br><b>{_escape(commit.author)}</b><span style='color:{muted}'>{email}</span><br>"
+               f"<span style='color:{muted}; {small}'>{when} · {ago}</span>")
+    if isinstance(details, CommitDetails) and details.committer:
+        out.append(f"<br><span style='color:{muted}; {small}'>committed by {_escape(details.committer)}</span>")
+    message = details.message if isinstance(details, CommitDetails) and details.message else commit.summary
+    subject, _, body = message.partition("\n")
+    out.append(f"<p style='margin-top:8px; margin-bottom:0'><b>{linkify(subject, base)}</b></p>")
+    if body.strip():
+        lines = (linkify(line, base) if line.strip() else "" for line in body.strip("\n").split("\n"))
+        out.append(f"<p style='margin-top:4px; margin-bottom:0'>{'<br>'.join(lines)}</p>")
+    if details is None:
+        out.append(f"<p style='margin-top:8px; color:{muted}'><i>Reading the commit…</i></p>")
+    elif isinstance(details, str):
+        out.append(f"<p style='margin-top:8px; color:{muted}'><i>git couldn't read it: {_escape(details)}</i></p>")
+    elif details.files is not None:
+        files = details.files
+        added = sum(f.added or 0 for f in files)
+        deleted = sum(f.deleted or 0 for f in files)
+        rows = [(f"<p style='margin-top:10px; margin-bottom:2px'><span style='color:{muted}; {small}'>"
+                 f"FILES CHANGED · {len(files)}</span>&nbsp; <span style='color:{green}'>+{added}</span> "
+                 f"<span style='color:{red}'>−{deleted}</span></p><table cellspacing='0' cellpadding='1'>")]
+        for change in files[:MAX_FILES]:
+            word, status_color = STATUS_CHIPS.get(change.status, (change.status, "#868e96"))
+            name = (f"{_escape(change.old_path)} → {_escape(change.path)}" if change.old_path
+                    else _escape(change.path))
+            if base and change.status != "D":
+                name = f"<a href='{_escape(file_url(base, commit.sha, change.path))}'>{name}</a>"
+            if change.added is None:
+                counts, bar = f"<span style='color:{muted}'>binary</span>", ""
+            elif change.added + change.deleted == 0:  # (renamed, or its mode changed: no lines)
+                counts, bar = f"<span style='color:{muted}'>—</span>", ""
+            else:
+                counts = (f"<span style='color:{green}'>+{change.added}</span>&nbsp;"
+                          f"<span style='color:{red}'>−{change.deleted}</span>")
+                total = change.added + change.deleted
+                plus = round(5 * change.added / total) if total else 0
+                bar = (f"<span style='color:{green}'>{'■' * plus}</span>"
+                       f"<span style='color:{red}'>{'■' * (5 - plus if total else 0)}</span>"
+                       f"<span style='color:{muted}'>{'□' * (0 if total else 5)}</span>")
+            rows.append(f"<tr><td style='padding-right:6px'><span style='background-color:{status_color}; "
+                        f"color:white; font-weight:700; {small}' title='{word}'>&nbsp;{change.status}&nbsp;</span>"
+                        f"</td><td style='padding-right:10px'>{name}</td><td align='right'>{counts}&nbsp;</td>"
+                        f"<td>{bar}</td></tr>")
+        rows.append("</table>")
+        if len(files) > MAX_FILES:
+            rows.append(f"<span style='color:{muted}; {small}'>and {len(files) - MAX_FILES} more</span>")
+        out += rows
+    actions = [f"<a href='{page}'>Open on {host}</a>"] if page else []
+    actions.append(f"<a href='copy:{commit.sha}'>Copy hash</a>")
+    out.append(f"<p style='margin-top:10px; margin-bottom:0; {small}'>{' &nbsp;·&nbsp; '.join(actions)}</p>")
+    return "".join(out)
 
 
 def open_web_page(url: str):

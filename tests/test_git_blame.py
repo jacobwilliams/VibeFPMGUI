@@ -195,3 +195,93 @@ def test_the_wheel_over_the_column_scrolls_the_text(make_window, repo, qtbot):
     QApplication.sendEvent(column, wheel)
     assert bar.value() > 0  # (the text scrolled)
     qtbot.waitUntil(lambda: next(column.runs())[2] < first[2] or next(column.runs())[0] > first[0], timeout=3000)
+
+
+# ----------------------------------------------------------------- the tooltip: the whole commit
+def test_a_commit_s_details(repo):
+    from vibefpmgui.git_blame import commit_details
+
+    write_files(repo, {"src/new.f90": "a\nb\n", "src/x.f90": "program x\n  ! more\nend program x\n"})
+    git(repo, "mv", "fpm.toml", "fpm2.toml")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "Several things\n\nA body, with\ntwo lines.\n\nAnd a second paragraph.")
+    sha = git(repo, "rev-parse", "HEAD").strip()
+    details = commit_details(repo, sha)
+    assert details.message == "Several things\n\nA body, with\ntwo lines.\n\nAnd a second paragraph."
+    assert details.email == "t@example.com" and details.committer == ""
+    files = {f.path: (f.status, f.old_path, f.added, f.deleted) for f in details.files}
+    assert files == {"fpm2.toml": ("R", "fpm.toml", 0, 0), "src/new.f90": ("A", "", 2, 0),
+                     "src/x.f90": ("M", "", 1, 0)}
+
+
+def test_the_card_formatted_with_links():
+    from qtpy.QtGui import QColor
+
+    from vibefpmgui.git_blame import (
+        MAX_FILES,
+        CommitDetails,
+        FileChange,
+        commit_card_html,
+    )
+
+    now = __import__("time").time()
+    commit = Commit(A, "Ada Lovelace", int(now - 3 * 86_400), "Several things (#33)")
+    details = CommitDetails("ada@example.com", "Several things (#33)\n\nSee https://example.org/a, and !34.\n"
+                            "Fixes #31.", "Grace Hopper", 0,
+                            [FileChange("M", "src/x.f90", "", 12, 3), FileChange("R", "b.f90", "a.f90", 0, 0),
+                             FileChange("A", "logo.png"), FileChange("D", "gone.f90", "", 0, 4)])
+    text = QColor("#e0e0e0")
+    html = commit_card_html(commit, details, "https://github.com/example/r.git", text)
+    base = "https://github.com/example/r"
+    for part in ("COMMIT", f"href='{base}/commit/{A}'", "this week", "Ada Lovelace", "ada@example.com",
+                 "committed by Grace Hopper", f"<a href='{base}/issues/33'>#33</a>",
+                 f"<a href='{base}/issues/31'>#31</a>", "<a href='https://example.org/a'>https://example.org/a</a>,",
+                 "!34", "FILES CHANGED · 4", f"<a href='{base}/blob/{A}/src/x.f90'>src/x.f90</a>",
+                 "a.f90 → b.f90", "binary", "Open on GitHub", f"href='copy:{A}'"):
+        assert part in html, part
+    assert "issues/34" not in html and "merge_requests" not in html  # (GitHub has no "!34")
+    assert "blob/" + A + "/gone.f90" not in html  # (a deleted file: no page)
+    gitlab = commit_card_html(commit, details, "git@gitlab.com:group/r.git", text)
+    assert "<a href='https://gitlab.com/group/r/-/merge_requests/34'>!34</a>" in gitlab
+    assert "https://gitlab.com/group/r/-/issues/33" in gitlab and "Open on GitLab" in gitlab
+    plain = commit_card_html(commit, details, "", text)  # (no web page known: no number links, the hash copies)
+    assert "issues/" not in plain and f"href='copy:{A}'" in plain and "Open on" not in plain
+    assert "Reading the commit" in commit_card_html(commit, None, "", text)
+    assert "git couldn't read it: bad object" in commit_card_html(commit, "bad object", "", text)
+    many = CommitDetails(files=[FileChange("M", f"f{n}.f90", "", 1, 0) for n in range(MAX_FILES + 5)])
+    assert "and 5 more" in commit_card_html(commit, many, "", text)
+    assert "Not committed yet" in commit_card_html(Commit(NOT_COMMITTED), None, "", text)
+
+
+def test_the_card_s_links(window, project, monkeypatch):
+    from qtpy.QtCore import QUrl
+
+    editor = open_editor(window, project / "src/foo.f90")
+    popup = editor.editor.hover_popup
+    opened = []
+    monkeypatch.setattr(git_blame, "open_web_page", opened.append)
+    popup._link_clicked(QUrl("https://github.com/example/r/issues/33"))
+    assert opened == ["https://github.com/example/r/issues/33"]
+    popup._link_clicked(QUrl(f"copy:{A}"))
+    assert QApplication.clipboard().text() == A
+
+
+def test_hovering_reads_the_commit_once(make_window, repo, qtbot, monkeypatch):
+    window = make_window(repo / "fpm.toml")
+    window.blame_action.setChecked(True)
+    editor = open_editor(window, repo / "src/x.f90")
+    column = editor.blame_column
+    qtbot.waitUntil(lambda: column.blame is not None, timeout=10_000)
+    read = []
+    real = git_blame.commit_details
+    monkeypatch.setattr(git_blame, "commit_details", lambda root, sha: (read.append(sha), real(root, sha))[1])
+    commit = next(c for c in column.blame.commits.values() if c.committed)
+    column._load_details(commit)
+    column._load_details(commit)  # (asked again while it's read: once)
+    qtbot.waitUntil(lambda: commit.sha in column._details, timeout=10_000)
+    assert read == [commit.sha]
+    column.show_card(commit)  # (the card, in the editor's hover popup)
+    popup = editor.editor.hover_popup
+    assert popup.anchor == ("blame", commit.sha)
+    shown = popup.browser.toPlainText()
+    assert "The first one" in shown and "FILES CHANGED · 2" in shown
