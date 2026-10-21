@@ -210,6 +210,9 @@ class BlameColumn(QWidget):
     # ------------------------------------------------------------ contents
     def set_blame(self, blame: Blame | None, message: str = ""):
         self.blame, self.message = blame, message
+        if self._hover is not None:  # (its lines may have moved: tinted again as the mouse moves)
+            self._hover = None
+            self.editor.show_commit_lines(None)
         self.update()
 
     def refresh_font(self):
@@ -397,6 +400,17 @@ class BlameColumn(QWidget):
 
         call_in_background(work, done, self)
 
+    def _show_commit_lines(self, commit: Commit | None):
+        """Every line of the file from ``commit`` tinted in its card's color
+        (None: none), while the mouse is on its card."""
+        if commit is None or self.blame is None:
+            self.editor.show_commit_lines(None)
+            return
+        tint = self._age_color(commit, self.editor.palette().color(QPalette.Base))
+        tint.setAlphaF(0.22 if self.editor.palette().color(QPalette.Base).lightness() < 128 else 0.28)
+        lines = {n for n, sha in enumerate(self.blame.lines) if sha == commit.sha}
+        self.editor.show_commit_lines(lines, tint)
+
     def wheelEvent(self, event):
         # Scroll the editor, as if the wheel were over the text (as the minimap does): the
         # column, and the minimap, follow it.
@@ -408,11 +422,13 @@ class BlameColumn(QWidget):
         if hover != self._hover:
             self._hover = hover
             self.update()
+            self._show_commit_lines(run[1] if hover is not None else None)
         self.setCursor(Qt.PointingHandCursor if hover is not None else Qt.ArrowCursor)
 
     def leaveEvent(self, event):
         self._hover = self._pressed = None
         self.update()
+        self._show_commit_lines(None)
         if (self.editor.hover_popup.anchor or ("",))[0] == "blame":
             self.editor.hover_popup.schedule_hide()  # (unless the mouse went into it)
         super().leaveEvent(event)

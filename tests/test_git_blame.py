@@ -300,3 +300,26 @@ def test_a_file_committed_with_windows_line_endings(make_window, repo, qtbot):
     qtbot.waitUntil(lambda: column.blame is not None, timeout=10_000)
     assert NOT_COMMITTED not in column.blame.lines
     assert {column.blame.commits[sha].summary for sha in column.blame.lines} == {"Windows line endings"}
+
+
+def test_hovering_a_card_tints_its_commit_s_lines(make_window, repo, qtbot):
+    """Every line of the file from the hovered card's commit, in the card's color; none once the mouse leaves."""
+    from qtpy.QtCore import QEvent, QPoint
+    from qtpy.QtTest import QTest
+
+    (repo / "src/x.f90").write_text("program x\n  implicit none\n  print *, 1\nend program x\n")
+    git(repo, "commit", "-q", "-am", "The second")  # (lines 2-3 from it; 1 and 4 from the first)
+    window = make_window(repo / "fpm.toml")
+    window.blame_action.setChecked(True)
+    editor = open_editor(window, repo / "src/x.f90")
+    column, code = editor.blame_column, editor.editor
+    qtbot.waitUntil(lambda: column.blame is not None, timeout=10_000)
+    first = next(column.runs())  # (line 1: the first commit's card)
+    QTest.mouseMove(column, QPoint(30, int((first[2] + first[3]) / 2)))
+    lines, tint = code.commit_lines
+    assert lines == {0, 3}  # (lines 1 and 4: the same commit, apart)
+    tinted = {s.cursor.blockNumber() for s in code.extraSelections() if s.format.background().color() == tint}
+    assert {0, 3} <= tinted and not {1, 2} & tinted
+    assert tint.rgb() == column._age_color(first[1], code.palette().color(code.palette().ColorRole.Base)).rgb()
+    QApplication.sendEvent(column, QEvent(QEvent.Leave))
+    assert code.commit_lines is None

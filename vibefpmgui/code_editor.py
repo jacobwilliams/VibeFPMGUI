@@ -91,6 +91,7 @@ class CodeEditor(EditorGutterMixin, EditorIssuesMixin, MultiCursorMixin, LineEdi
         self._breakpoints: list[tuple[QTextCursor, bool]] = []  # (at its line, enabled)
         self.breakpoint_problems: dict[int, str] = {}  # line -> why the debugger couldn't place it
         self.execution_line: int | None = None  # where the program is stopped (an arrow, the line tinted)
+        self.commit_lines: tuple[set[int], QColor] | None = None  # a git blame card hovered: its lines, its color
         self.minimap = None  # the vibefpmgui.minimap.Minimap beside it, if any
         self.find_selections: list[tuple[int, int]] = []  # the find bar's matches: (start, end) positions
         self.coverage: dict[int, int] = {}  # line -> times the tests ran it (see set_coverage)
@@ -354,6 +355,14 @@ class CodeEditor(EditorGutterMixin, EditorIssuesMixin, MultiCursorMixin, LineEdi
                 tint = QColor(EXECUTION_COLOR)
                 tint.setAlpha(70)
                 selections += self._line_highlight(block, tint)
+        if self.commit_lines is not None:  # (a git blame card under the mouse: its commit's lines)
+            lines, tint = self.commit_lines
+            first, last = window
+            block = self.document().findBlockByNumber(first)
+            while block.isValid() and block.blockNumber() <= last:
+                if block.blockNumber() in lines:
+                    selections += self._line_highlight(block, tint)
+                block = block.next()
         selected = QColor(self.palette().color(QPalette.Highlight))
         for c in self.extra_cursors:
             if c.hasSelection():
@@ -365,6 +374,12 @@ class CodeEditor(EditorGutterMixin, EditorIssuesMixin, MultiCursorMixin, LineEdi
         selections += self._span_selections(self.occurrence_selections, self._occurrence_color, window)
         selections += self._span_selections(self.find_selections, FIND_COLOR, window)
         self.setExtraSelections(selections)
+
+    def show_commit_lines(self, lines: set[int] | None, color: QColor | None = None):
+        """Tint these lines (0-based; None: none) in ``color``: a git blame
+        card's commit, while the mouse is on its card."""
+        self.commit_lines = (lines, color) if lines else None
+        self.update_extra_selections(rebuild=False)
 
     def _line_window(self) -> tuple[int, int]:
         """The lines (0-based, first and last) to highlight: those on view, and
