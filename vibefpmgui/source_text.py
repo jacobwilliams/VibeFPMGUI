@@ -30,9 +30,14 @@ def line_endings(text: str) -> tuple[str, bool]:
 
 
 def decode(raw: bytes) -> tuple[str, str]:
-    """(text, encoding) of a file's bytes: UTF-8, or Latin-1 (which reads
-    any bytes) for one that isn't."""
+    """(text, encoding) of a file's bytes: UTF-8 (with its byte-order mark:
+    "utf-8-sig", the mark not in the text but written back), or Latin-1
+    (which reads any bytes) for one that isn't. (Qt's editor drops a mark
+    left in the text: saved, the file lost it; blamed, its first line was
+    "not committed yet".)"""
     try:
+        if raw.startswith(b"\xef\xbb\xbf"):
+            return raw.decode("utf-8-sig"), "utf-8-sig"
         return raw.decode("utf-8"), "utf-8"
     except UnicodeDecodeError:
         return raw.decode("latin-1"), "latin-1"

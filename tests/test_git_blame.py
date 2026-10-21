@@ -285,3 +285,18 @@ def test_hovering_reads_the_commit_once(make_window, repo, qtbot, monkeypatch):
     assert popup.anchor == ("blame", commit.sha)
     shown = popup.browser.toPlainText()
     assert "The first one" in shown and "FILES CHANGED · 2" in shown
+
+
+def test_a_file_committed_with_windows_line_endings(make_window, repo, qtbot):
+    """The editor's text has "\\n" line ends: blamed as such, a file committed with "\\r\\n" ones (a
+    Visual Studio .sln, say) differed on every line, all "not committed yet". It's blamed as saved."""
+    (repo / "src/win.f90").write_bytes(b"\xef\xbb\xbfprogram win\r\n  print *, 1\r\nend program win\r\n")  # (a BOM too)
+    git(repo, "-c", "core.autocrlf=false", "add", "src/win.f90")
+    git(repo, "-c", "core.autocrlf=false", "commit", "-q", "-m", "Windows line endings")
+    window = make_window(repo / "fpm.toml")
+    window.blame_action.setChecked(True)
+    editor = open_editor(window, repo / "src/win.f90")
+    column = editor.blame_column
+    qtbot.waitUntil(lambda: column.blame is not None, timeout=10_000)
+    assert NOT_COMMITTED not in column.blame.lines
+    assert {column.blame.commits[sha].summary for sha in column.blame.lines} == {"Windows line endings"}

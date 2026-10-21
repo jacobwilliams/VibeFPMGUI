@@ -155,20 +155,23 @@ def parse_porcelain(output: str) -> tuple[list[str], dict[str, Commit]]:
     return [lines.get(n, NOT_COMMITTED) for n in range(1, max(lines, default=0) + 1)], commits
 
 
-def blame(path: Path, text: str) -> Blame | None:
-    """The blame of ``text`` as the file ``path`` (None: it isn't in a git
-    repository, or git doesn't know it). Raises GitError if git fails."""
+def blame(path: Path, contents: str | bytes) -> Blame | None:
+    """The blame of ``contents`` as the file ``path`` (None: it isn't in a git
+    repository, or git doesn't know it). ``contents``: the bytes the file would
+    have, saved (its line endings and encoding: the editor's text has "\n",
+    and a file committed with "\r\n" would otherwise differ on every line).
+    Raises GitError if git fails."""
     root = gs.find_repository(path.parent)  # (a folder: the file's)
     if root is None:
         return None
     relative = path.resolve().relative_to(root.resolve()).as_posix()
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=path.suffix, delete=False) as contents:
-        contents.write(text)
+    data = contents.encode("utf-8") if isinstance(contents, str) else contents
+    with tempfile.NamedTemporaryFile("wb", suffix=path.suffix, delete=False) as file:
+        file.write(data)
     try:
-        code, output, message = gs._git(root, "blame", "--porcelain", "--contents", contents.name, "--",
-                                        relative)
+        code, output, message = gs._git(root, "blame", "--porcelain", "--contents", file.name, "--", relative)
     finally:
-        os.unlink(contents.name)
+        os.unlink(file.name)
     if code != 0:
         if "no such path" in message or "not tracked" in message or "fatal: no such ref" in message:
             return None  # (a file git doesn't know yet)

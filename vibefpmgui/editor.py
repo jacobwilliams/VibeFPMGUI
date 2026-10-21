@@ -559,7 +559,10 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
             self.blame_column.set_blame(None, "Not saved yet: no history.")
             return
         self._blame_request += 1
-        request, path, text = self._blame_request, self.path, self.editor.toPlainText()
+        request, path = self._blame_request, self.path
+        # (As saving would write it: its line endings and encoding. Blamed with "\n" ends, a file
+        # committed with "\r\n" ones differed on every line: all "not committed yet".)
+        text = self.editor.toPlainText().replace("\n", self.newline).encode(self.encoding, "replace")
 
         def work():
             if not gs.available():
@@ -588,7 +591,7 @@ class EditorTab(EditorLanguageMixin, EditorChecksMixin, QWidget):
         cursor = self.editor.textCursor()
         indent = f"Tabs: {self.editor.indent_width}" if self.editor.use_tabs else f"Spaces: {self.editor.indent_width}"
         parts = [f"Ln {cursor.blockNumber() + 1}, Col {cursor.positionInBlock() + 1}",
-                 indent, self.highlighter.lexer.name, self.encoding.upper(),
+                 indent, self.highlighter.lexer.name, "UTF-8 with BOM" if self.encoding == "utf-8-sig" else self.encoding.upper(),
                  ("CRLF" if self.newline == "\r\n" else "LF") + (" (mixed)" if self.mixed_newlines else "")]
         parts += self._issue_counts()
         if self.editor.extra_cursors:
