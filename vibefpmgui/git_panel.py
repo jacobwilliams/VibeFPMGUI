@@ -233,7 +233,8 @@ class GitPanel(QWidget):
 
     def _key(self, view: str) -> tuple:
         """What the view's on show for: the repository, HEAD, and what the page adds (its reload_key)."""
-        return (self.status.root, self.status.head, *self.read_pages[view].reload_key())
+        root = self.status.root
+        return (root, self.status.head, *self.read_pages[view].reload_key(root))
 
     def _read_view(self):
         """The view on show (History or Stats), read again if what it's for

@@ -272,7 +272,7 @@ class GitStatsView(QWidget):
 
     # ------------------------------------------------------- read by the panel
     # (The Git panel's pages that read from the repository: see vibefpmgui.git_panel.)
-    def reload_key(self) -> tuple:
+    def reload_key(self, _root) -> tuple:
         return ()
 
     def reader(self, root):

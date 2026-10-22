@@ -109,7 +109,9 @@ def test_read_the_log(tmp_path):
     only_head = gl.read_log(root, all_branches=False)  # (what's checked out: not other's o1)
     assert "o1" not in [commit.subject for commit in only_head.commits] and not only_head.all_branches
     newest = gl.read_log(root, limit=3)
-    assert len(newest.commits) == 3 and newest.limited
+    assert len(newest.commits) == 3 and newest.limited and newest.total == 7  # (and how many there are)
+    every = gl.read_log(root, limit=None)
+    assert len(every.commits) == every.total == 7 and not every.limited
 
 
 def test_the_versions_a_commit_changed(tmp_path):
@@ -255,3 +257,44 @@ def test_each_page_read_through_the_same_few_methods():
         for method in ("reload_key", "reader", "show_result", "show_message", "refresh_palette"):
             assert callable(getattr(page, method)), (page, method)
         assert hasattr(page, "reload_requested")
+
+
+def test_load_older_commits(qtbot, tmp_path, monkeypatch):
+    """At first the newest MAX_COMMITS; Load Older Commits: the rest, back to the first (and on later reads)."""
+    monkeypatch.setattr(gl, "MAX_COMMITS", 3)
+    root = make_history(tmp_path)
+    panel = history_panel(qtbot, root)
+    view = panel.log_view
+    assert view.model.rowCount() == 3 and "The newest 3 commits of 7" in view.count.text()
+    assert view.older_button.isVisibleTo(view) and view.older_button.text() == "Load the 4 Older Commits"
+    view.older_button.click()
+    qtbot.waitUntil(lambda: view.log is not None and not view.log.limited, timeout=10000)
+    assert view.model.rowCount() == 7 and view.log.commits[-1].subject == "first"
+    assert not view.older_button.isVisibleTo(view) and view.count.text().startswith("7 commits")
+    (root / "a.txt").write_text("five\n")
+    git(root, "commit", "-qam", "fifth")
+    panel.show_status(gs.read_status(root))  # (HEAD moved: read again, every commit still)
+    qtbot.waitUntil(lambda: view.log is not None and view.model.rowCount() == 8, timeout=10000)
+
+
+def test_the_graph_has_room_for_every_lane(qtbot, tmp_path):
+    """(A column of its own, as wide as its widest row's lanes: none cut off.)"""
+    root = make_repo(tmp_path / "repo", {"a.txt": "a\n"})
+    for n in range(20):  # (20 branches off the first commit, none merged: 21 lanes)
+        git(root, "checkout", "-q", "-b", f"b{n}", "main")
+        (root / f"f{n}.txt").write_text(f"{n}\n")
+        git(root, "add", "-A")
+        git(root, "commit", "-qm", f"on b{n}")
+    git(root, "checkout", "-q", "main")
+    panel = gp.GitPanel()
+    qtbot.addWidget(panel)
+    panel.resize(2400, 900)
+    panel.show()
+    panel.show_status(gs.read_status(root))
+    panel.view_buttons[gp.HISTORY].click()
+    qtbot.waitUntil(lambda: panel.log_view.log is not None, timeout=10000)
+    view = panel.log_view
+    assert view.model.lanes == max(row.width for row in view.log.rows) > 16  # (no longer capped)
+    assert view.table.columnWidth(glv.GRAPH) >= glv.graph_width(view.model.lanes, view.table.font())
+    assert view.table.columnWidth(glv.SUBJECT) > 100  # (the subject still has room)
+    assert view.model.index(0, glv.SUBJECT).data() == view.log.commits[0].subject

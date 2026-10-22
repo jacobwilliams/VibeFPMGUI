@@ -22,7 +22,7 @@ from pathlib import Path
 from .git_blame import FileChange
 from .git_status import BINARY, MAX_DIFF_BYTES, _check, _git, _text, find_repository
 
-MAX_COMMITS = 3000  # read at most (the newest)
+MAX_COMMITS = 3000  # read at first, at most (the newest; the rest: the History's Load Older Commits)
 
 # Ref kinds, as their badges show them.
 HEAD, BRANCH, REMOTE, TAG = "head", "branch", "remote", "tag"
@@ -66,8 +66,9 @@ class Log:
     commits: list[LogCommit]
     rows: list[GraphRow]
     all_branches: bool
-    limited: bool                 # more commits than MAX_COMMITS: the newest shown
+    limited: bool                 # more commits than the limit: the newest shown
     remote: str = ""              # origin's address (the commits' web pages)
+    total: int = 0                # the commits there are (more than those listed, if limited)
 
 
 def parse_refs(decoration: str) -> list[Ref]:
@@ -155,10 +156,11 @@ def graph(commits: list[LogCommit]) -> list[GraphRow]:
     return rows
 
 
-def read_log(path: Path, all_branches: bool = True, limit: int = MAX_COMMITS) -> Log | None:
+def read_log(path: Path, all_branches: bool = True, limit: int | None = MAX_COMMITS) -> Log | None:
     """The history of the repository ``path`` is in: every branch's (local,
     remote) and tag's, or only what's checked out (None: not in a
-    repository, or no commits yet). Raises GitError if git can't read it."""
+    repository, or no commits yet); the newest ``limit`` commits (None:
+    all of them, to the first). Raises GitError if git can't read it."""
     root = find_repository(path)
     if root is None:
         return None
@@ -166,14 +168,17 @@ def read_log(path: Path, all_branches: bool = True, limit: int = MAX_COMMITS) ->
     if code != 0 or not head or not head.strip():
         return None
     which = ["--branches", "--remotes", "--tags", "HEAD"] if all_branches else ["HEAD"]
-    output = _check(root, "log", f"--format={FIELDS}", "--decorate=full", "--date-order", f"--max-count={limit + 1}",
-                    *which, "--")
+    most = [] if limit is None else [f"--max-count={limit + 1}"]
+    output = _check(root, "log", f"--format={FIELDS}", "--decorate=full", "--date-order", *most, *which, "--")
     commits = parse_log(output)
-    limited = len(commits) > limit
-    commits = commits[:limit]
+    limited = limit is not None and len(commits) > limit
+    total = len(commits)
+    if limited:
+        commits = commits[:limit]
+        total = int(_check(root, "rev-list", "--count", *which, "--").strip() or 0)  # (how many more there are)
     _code, remote, _message = _git(root, "config", "--get", "remote.origin.url")
     return Log(root, head.decode().strip(), commits, graph(commits), all_branches, limited,
-               (remote or b"").decode("utf-8", "replace").strip())
+               (remote or b"").decode("utf-8", "replace").strip(), total)
 
 
 def file_versions(root: Path, commit: LogCommit, change: FileChange) -> tuple[str | None, str | None]:
