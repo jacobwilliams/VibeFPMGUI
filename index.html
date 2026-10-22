@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VibeFPMGUI — a desktop GUI for the Fortran Package Manager</title>
+  <meta name="description" content="VibeFPMGUI is a desktop app for the Fortran Package Manager (fpm): build, run, test and debug projects with live progress, explore dependencies, and edit Fortran with a language server, linting, formatting, git, coverage, complexity metrics and a local AI assistant.">
+  <meta name="color-scheme" content="dark light">
+  <link rel="icon" href="img/logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <script>
+    // Pick the theme before the page draws (no flash of the wrong colors).
+    (function () {
+      try {
+        var saved = localStorage.getItem("vibefpmgui-theme");
+        var theme = saved || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+        document.documentElement.setAttribute("data-theme", theme);
+      } catch (e) { /* storage blocked: keep the default */ }
+    })();
+  </script>
+</head>
+<body>
+
+<header class="nav">
+  <div class="nav-inner">
+    <a class="brand" href="#top" aria-label="VibeFPMGUI home">
+      <img src="img/logo.svg" alt="" width="26" height="32">
+      <span>VibeFPMGUI</span>
+    </a>
+    <nav class="nav-links" aria-label="Sections">
+      <a href="#features">Features</a>
+      <a href="#debugging">Debugging</a>
+      <a href="#editor">Editor</a>
+      <a href="#language-server">Language server</a>
+      <a href="#get-started">Get started</a>
+    </nav>
+    <a class="icon-button docs-link" href="api/vibefpmgui.html"
+       aria-label="Python API documentation" title="Python API documentation (generated from the docstrings)">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 0 6.5 23H20v-5"/><path d="M9 8l-2 2.5L9 13M14 8l2 2.5-2 2.5"/></svg>
+      <span>API</span>
+    </a>
+    <a class="icon-button github-link" href="https://github.com/jacobwilliams/VibeFPMGUI"
+       aria-label="VibeFPMGUI on GitHub" title="VibeFPMGUI on GitHub">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+    </a>
+    <button class="icon-button theme-toggle" id="theme-toggle" type="button" aria-label="Switch between light and dark mode">
+      <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+      <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 1.5v2.5M12 20v2.5M4.6 4.6l1.8 1.8M17.6 17.6l1.8 1.8M1.5 12H4M20 12h2.5M4.6 19.4l1.8-1.8M17.6 6.4l1.8-1.8"/></svg>
+    </button>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- ============================== hero ============================== -->
+  <section class="hero">
+    <div class="ribbon" role="note" title="VibeFPMGUI is an experimental, vibe-coded project: expect rough edges and changes.">Experimental</div>
+    <div class="hero-glow" aria-hidden="true"></div>
+    <div class="container hero-text">
+      <p class="eyebrow">Open source · Python &amp; Qt · macOS, Linux, Windows</p>
+      <h1>A desktop home for your<br><span class="gradient">Fortran projects</span></h1>
+      <p class="lead">
+        VibeFPMGUI is a graphical front end for the
+        <a href="https://fpm.fortran-lang.org">Fortran Package Manager</a>.
+        Build, run, test and debug with live progress, explore your dependencies as a graph,
+        and edit Fortran with a language server, linting, formatting, git, coverage and complexity
+        metrics — and an AI assistant that runs entirely on your machine.
+      </p>
+      <div class="cta">
+        <a class="button primary" href="#get-started">Get started</a>
+        <a class="button ghost" href="https://github.com/jacobwilliams/VibeFPMGUI">View on GitHub</a>
+      </div>
+    </div>
+    <div class="container">
+      <figure class="window hero-shot">
+        <div class="window-bar" aria-hidden="true"><span></span><span></span><span></span><em>VibeFPMGUI · demo</em></div>
+        <img src="img/overview.png" alt="The VibeFPMGUI main window: build options, project files, an open source file, the dependency graph, the build progress grid and fpm's output" width="2400" height="1500">
+      </figure>
+    </div>
+  </section>
+
+  <!-- ============================ highlights ============================ -->
+  <section id="features" class="section">
+    <div class="container">
+      <h2 class="section-title">Everything fpm does, at a glance</h2>
+      <p class="section-lead">One window for the whole loop: open a project, build, test, debug, read the
+        messages, fix the code, commit, repeat. Every panel docks where you want it.</p>
+      <div class="cards">
+        <article class="card"><div class="card-icon">🔨</div><h3>Live builds</h3>
+          <p>Every file fpm compiles, in parallel, with its package, status and time — warnings included.</p></article>
+        <article class="card"><div class="card-icon">🧪</div><h3>Tests &amp; coverage</h3>
+          <p>Each test with pass/fail, time and its own output — several at a time if you like — and line coverage in the gutter.</p></article>
+        <article class="card"><div class="card-icon">🐞</div><h3>Debugger</h3>
+          <p>Breakpoints, stepping, the call stack and variables with gdb — for programs, tests and examples.</p></article>
+        <article class="card"><div class="card-icon">🕸️</div><h3>Dependency graph</h3>
+          <p>Your project and every dependency as an interactive graph, with layouts, themes and update checks.</p></article>
+        <article class="card"><div class="card-icon">✏️</div><h3>Built-in editor</h3>
+          <p>Syntax highlighting, compiler markers, multi-row tabs, a command palette, find and replace across the project.</p></article>
+        <article class="card"><div class="card-icon">🧭</div><h3>Language server</h3>
+          <p>Hover docs, go to definition, completion, argument hints, references and rename, via fortls.</p></article>
+        <article class="card"><div class="card-icon">🧹</div><h3>Lint &amp; format</h3>
+          <p>fortitude checks your code as you type, with one-click fixes; fprettify tidies it.</p></article>
+        <article class="card"><div class="card-icon">🌿</div><h3>Git</h3>
+          <p>What changed, staged and untracked, with side-by-side diffs of each file.</p></article>
+        <article class="card"><div class="card-icon">📈</div><h3>Complexity</h3>
+          <p>Size and complexity of every procedure, and its control-flow graph.</p></article>
+        <article class="card"><div class="card-icon">⌨️</div><h3>Terminal</h3>
+          <p>A shell in the project's folder, with the app's environment — fpm and the compilers on hand.</p></article>
+        <article class="card"><div class="card-icon">🗂️</div><h3>Build configurations</h3>
+          <p>Named sets of build options in <code>vibefpm.json</code>, beside <code>fpm.toml</code>, to share with your team.</p></article>
+        <article class="card"><div class="card-icon">🤖</div><h3>Local AI</h3>
+          <p>Reviews, a chat about your code, explanations and fixes — from a model on your own computer, with Ollama.</p></article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================== build ============================== -->
+  <section class="section feature">
+    <div class="container stacked">
+      <div class="two-col">
+        <div>
+          <p class="kicker">Build</p>
+          <h2>Watch every file compile</h2>
+          <p>Run <code>fpm build</code>, <code>run</code>, <code>test</code>, <code>update</code> and <code>clean</code>
+            from the toolbar — or <strong>Build Tests</strong>, to compile the tests without running them — with the usual
+            options: profile, compiler, flags, features, target and arguments. Hover an option to see the fpm flag it becomes.</p>
+        </div>
+        <ul class="checks">
+          <li>A live grid of every file and target fpm compiles — parallel and OpenMP builds included — with status,
+            package (dependencies too, even those fpm downloads as it builds) and time, plus overall progress.</li>
+          <li>Warnings come from fpm's per-file compiler logs, so you see them even when the build succeeds.
+            gfortran, gcc/clang, Intel and lfortran messages are understood.</li>
+          <li>Double-click a row to open the source at the first message; file locations in the output are links.</li>
+          <li>Colored compiler output is shown in color, and runaway output can't freeze the app.</li>
+        </ul>
+      </div>
+      <figure class="shot"><img src="img/build.png" alt="The Build panel: a grid of compiled files with package, status and time next to fpm's output" loading="lazy" width="2258" height="600"></figure>
+    </div>
+  </section>
+
+  <!-- ============================== configurations ============================== -->
+  <section class="section feature alt">
+    <div class="container split">
+      <div class="split-text">
+        <p class="kicker">Build configurations</p>
+        <h2>Name your build settings, and share them</h2>
+        <p>Save the Build options as named configurations — “gfortran debug”, “release”, “ci” — in a
+          <code>vibefpm.json</code> beside the project's <code>fpm.toml</code>, so they can be committed with it.</p>
+        <ul class="checks">
+          <li>Choose one from the list at the top of Build options; it's shown read-only until you <strong>Edit</strong> it.</li>
+          <li>Save under its own name or another, edit a copy, delete, or open another configuration file.</li>
+          <li>The same file keeps the project's GUI options and open tabs; <em>File → Projects</em> opens a project
+            by its folder.</li>
+          <li>The window title says which project and configuration you're on.</li>
+        </ul>
+      </div>
+      <figure class="shot narrow"><img src="img/configs.png" alt="Build options with the configuration gfortran debug chosen: profile debug, compiler gfortran, flags -fcheck=all, read-only" loading="lazy" width="620" height="850"></figure>
+    </div>
+  </section>
+
+  <!-- ============================== tests ============================== -->
+  <section class="section feature">
+    <div class="container stacked">
+      <div class="two-col">
+        <div>
+          <p class="kicker">Test, run &amp; coverage</p>
+          <h2>Tests you can follow</h2>
+          <p><strong>Test</strong> builds, lists the tests, then runs each one through a small wrapper so its start,
+            end and exit code are known — even with your own <code>--runner</code> such as <code>mpirun</code>.</p>
+          <div class="tabs" data-tabs>
+            <button class="tab active" data-tab="tests">Tests</button>
+            <button class="tab" data-tab="run">Run</button>
+          </div>
+        </div>
+        <ul class="checks">
+          <li>Every test as queued, running, passed or failed, with its time and a progress bar — one at a time, or
+            several at once.</li>
+          <li>Run times are remembered, so later runs estimate the time left. Click a test to see only its output.</li>
+          <li>Tick <em>Coverage</em> and the editor's gutter shows which lines the tests ran; the Coverage panel has the
+            totals and each file's missed lines.</li>
+          <li><strong>Run</strong> works the same way for programs; right-click one to debug it.</li>
+        </ul>
+      </div>
+      <div class="tab-panels">
+        <figure class="shot tab-panel active" data-panel="tests"><img src="img/tests.png" alt="The Tests panel with every test passed and their output" loading="lazy" width="2258" height="600"></figure>
+        <figure class="shot tab-panel" data-panel="run"><img src="img/run.png" alt="The Run panel with the finished programs" loading="lazy" width="2258" height="600"></figure>
+      </div>
+      <figure class="shot full top-gap"><img src="img/coverage.png" alt="Coverage: bars in the editor's gutter and the Coverage panel's totals per file" loading="lazy" width="2400" height="1500"><figcaption>Build options → <strong>Coverage</strong>, then Test: bars in the gutter, totals in the Coverage panel</figcaption></figure>
+    </div>
+  </section>
+
+  <!-- ============================== debugging ============================== -->
+  <section id="debugging" class="section feature alt">
+    <div class="container">
+      <p class="kicker center">Debugging</p>
+      <h2 class="section-title">Stop at a line, and look around</h2>
+      <p class="section-lead">Click left of a line number for a breakpoint, press F5, and the program — or a test,
+        or an example — is built with debug information and runs under
+        <a href="https://www.sourceware.org/gdb/">gdb</a>, through its Debug Adapter Protocol.</p>
+      <figure class="window wide">
+        <div class="window-bar" aria-hidden="true"><span></span><span></span><span></span><em>check_debugger.f90 · Linux, gdb</em></div>
+        <img src="img/debug.png" alt="Stopped at a breakpoint in check_debugger.f90: the yellow arrow at the line, the Debug panel with the call stack, the breakpoints list, the variables with a derived type expanded, and the console" loading="lazy" width="2400" height="1500">
+      </figure>
+      <div class="grid-2 top-gap">
+        <div>
+          <ul class="checks">
+            <li>Step over, into and out of procedures; continue; pause; stop — from the Debug panel's buttons or the keys.</li>
+            <li>The call stack (click a frame to go there) and the variables: arrays and derived types expand, module
+              variables included.</li>
+            <li>Evaluate any expression in the frame shown — <code>a(2:3)</code>, <code>p%x</code> — with a history.</li>
+            <li>The breakpoints list shows every breakpoint in the project: enabled, disabled (hollow) or not placed,
+              with its code; the one you're stopped at is marked.</li>
+          </ul>
+        </div>
+        <div>
+          <figure class="shot tall"><img src="img/valgrind.png" alt="Valgrind's memory check of a test in the Output panel, from the Build outputs panel's Valgrind button" loading="lazy" width="946" height="1040"><figcaption>Build outputs → <strong>Valgrind</strong></figcaption></figure>
+          <h3>Memory checks with Valgrind</h3>
+          <p>On Linux, the <strong>Valgrind</strong> button beside each program, test and example runs it under
+            Valgrind's memory check through fpm's <code>--runner</code>: leaks and invalid reads and writes, each with
+            its file and line.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ dependencies ============================ -->
+  <section class="section feature">
+    <div class="container split">
+      <div class="split-text">
+        <p class="kicker">Dependencies</p>
+        <h2>See how it all fits together</h2>
+        <p>The dependency diagram is built from your <code>fpm.toml</code> and those of every downloaded dependency —
+          git, local path, registry and metapackages, each with the tag, branch or version it's pinned to.</p>
+        <ul class="checks">
+          <li>Layered, radial, circular or force-directed layouts; light, dark, blueprint and neon themes.</li>
+          <li>Click a package to highlight what it uses and what uses it; double-click to open its manifest.</li>
+          <li>Git dependencies show the exact commit fpm checked out, linked to GitHub or GitLab. Version conflicts
+            are flagged.</li>
+          <li>Dev-dependencies are badged — and you can show your dependencies' own too.</li>
+          <li><em>Check for Dependency Updates</em> finds newer tags without downloading anything, and updates a
+            pin in place.</li>
+        </ul>
+      </div>
+      <div class="graph-stack">
+        <figure class="shot"><img src="img/graph-neon.png" alt="The dependency graph in the neon theme" loading="lazy" width="796" height="734"><figcaption>Neon theme</figcaption></figure>
+        <figure class="shot offset"><img src="img/graph-blueprint.png" alt="The dependency graph in the blueprint theme" loading="lazy" width="796" height="734"><figcaption>Blueprint theme</figcaption></figure>
+      </div>
+    </div>
+    <div class="container">
+      <figure class="shot full top-gap"><img src="img/updates.png" alt="The dependency update check: newer tags for the git dependencies" loading="lazy" width="2240" height="522"><figcaption>Commands → Check for Dependency Updates…</figcaption></figure>
+    </div>
+  </section>
+
+  <!-- ============================== project files ============================== -->
+  <section class="section feature alt">
+    <div class="container stacked">
+      <div class="two-col">
+        <div>
+          <p class="kicker">Project files</p>
+          <h2>Your project, and everything it pulls in</h2>
+          <p>The file tree lists the project and each dependency, with fpm's folders badged — library sources,
+            programs, tests, examples, include files. One click previews a file; double-click keeps it open.</p>
+        </div>
+        <ul class="checks">
+          <li>Hidden, generated and git-ignored files are greyed out, with the responsible <code>.gitignore</code> line.</li>
+          <li>A fast filter, even on projects with tens of thousands of files.</li>
+          <li>Files with errors or warnings from the last build show in red or orange.</li>
+          <li>The <em>Build outputs</em> panel shows every build configuration fpm has kept, with its programs, tests
+            and examples ready to run, debug or check with Valgrind — and a way to free the space.</li>
+          <li><em>File → New fpm Project…</em> makes a new project with <code>fpm new</code>.</li>
+        </ul>
+      </div>
+      <div class="pair tree-pair">
+        <figure class="shot narrow"><img src="img/tree.png" alt="The project files tree with badged fpm folders" loading="lazy" width="604" height="656"></figure>
+        <figure class="shot"><img src="img/outputs.png" alt="The Build outputs panel: a configuration with its library, programs, tests and examples, each with Run, Debug and Valgrind buttons" loading="lazy" width="1200" height="866"></figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================== editor ============================== -->
+  <section id="editor" class="section feature">
+    <div class="container">
+      <p class="kicker center">Editor</p>
+      <h2 class="section-title">A Fortran editor that knows your code</h2>
+      <p class="section-lead">Double-click a file — or a row in the build grid — and it opens in the built-in editor,
+        with the build's warnings and errors in the gutter. Open tabs, cursor positions and the file tree are
+        remembered per project, and big files stay quick.</p>
+      <figure class="window wide">
+        <div class="window-bar" aria-hidden="true"><span></span><span></span><span></span><em>demo_stats.f90</em></div>
+        <img src="img/editor.png" alt="The editor with a hover card for the function mean, showing its declaration" loading="lazy" width="2400" height="1500">
+      </figure>
+      <div class="grid-2">
+        <div>
+          <figure class="shot"><img src="img/hover-intrinsic.png" alt="A hover card for the intrinsic sum with its manual page" loading="lazy" width="1588" height="950"></figure>
+          <h3>Hover cards</h3>
+          <p>Rest on a name for its declaration and doc comment. Intrinsics get their full manual page, rendered,
+            with a badge and their category.</p>
+          <figure class="shot top-gap"><img src="img/palette.png" alt="The command palette finding the debugging commands" loading="lazy" width="1560" height="1014"></figure>
+          <h3>Command palette</h3>
+          <p>⌘⇧P (Ctrl+Shift+P) finds any command in the menus by typing part of its name. Tabs can wrap onto
+            several rows; lines can be commented, moved, sorted and re-cased from the Edit menu.</p>
+        </div>
+        <div>
+          <figure class="shot"><img src="img/lint.png" alt="A fortitude lint message about implicit none with its suggested fix" loading="lazy" width="896" height="424"></figure>
+          <h3>Linting as you type</h3>
+          <p><a href="https://fortitude.readthedocs.io">fortitude</a> checks the text in the editor — saved or not.
+            Findings are underlined and marked in the gutter, with the rule and the suggested fix.</p>
+          <figure class="shot top-gap"><img src="img/problems.png" alt="The Problems panel listing fortitude's findings for the project's files" loading="lazy" width="1842" height="1072"></figure>
+          <h3>Every problem in one place</h3>
+          <p>The Problems panel gathers the compiler's, fortitude's and fortls's messages; apply fortitude's fix, or
+            ask the AI to explain or fix one.</p>
+          <div class="before-after">
+            <figure class="shot"><img src="img/format-before.png" alt="Badly indented Fortran before formatting" loading="lazy" width="940" height="460"><figcaption>Before</figcaption></figure>
+            <figure class="shot"><img src="img/format-after.png" alt="The same code after Format with fprettify" loading="lazy" width="940" height="460"><figcaption>After <strong>Format</strong></figcaption></figure>
+          </div>
+          <h3>One-click formatting</h3>
+          <p><a href="https://github.com/fortran-lang/fprettify">fprettify</a> re-indents and re-spaces the file,
+            as a single Undo step.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ language server ============================ -->
+  <section id="language-server" class="section feature alt">
+    <div class="container">
+      <p class="kicker center">Language server</p>
+      <h2 class="section-title">Navigate and refactor with fortls</h2>
+      <p class="section-lead">The editor talks to <a href="https://fortls.fortran-lang.org">fortls</a>, which
+        indexes your project and its dependencies — only fpm's own folders, so a Python environment inside the
+        project doesn't get in the way.</p>
+      <div class="grid-3">
+        <article class="mini">
+          <figure class="shot"><img src="img/completion.png" alt="The completion list offering size and sizeof" loading="lazy" width="944" height="522"></figure>
+          <h3>Completion</h3>
+          <p>After two letters, or a <code>%</code> for a type's components — your names, your dependencies' and the intrinsics.</p>
+        </article>
+        <article class="mini">
+          <figure class="shot"><img src="img/signature.png" alt="Argument hints for variance with the current argument underlined" loading="lazy" width="1014" height="440"></figure>
+          <h3>Argument hints</h3>
+          <p>Typing a call shows its arguments, the current one underlined, with its declaration and documentation.</p>
+        </article>
+        <article class="mini">
+          <figure class="shot"><img src="img/outline.png" alt="The outline drop-down listing a module and its functions" loading="lazy" width="1400" height="600"></figure>
+          <h3>Outline</h3>
+          <p>The file's modules, types and procedures, with a badge for each kind; it follows the cursor.</p>
+        </article>
+      </div>
+      <div class="grid-2 top-gap">
+        <div>
+          <figure class="shot"><img src="img/references.png" alt="Find References: the uses of mean in several files" loading="lazy" width="2400" height="1500"></figure>
+          <h3>Find references &amp; go to definition</h3>
+          <p>F12 or ⌘-click jumps to a definition — even inside a dependency — and back again. ⇧F12 lists every
+            use, grouped by file. ⌘T finds any symbol in the project.</p>
+        </div>
+        <div>
+          <figure class="shot"><img src="img/rename.png" alt="The rename preview: renaming mean to average in several files" loading="lazy" width="1520" height="960"></figure>
+          <h3>Rename with a preview</h3>
+          <p>F2 renames a name everywhere it's used, after showing every line that will change. Open files change in
+            the editor (one Undo); dependency files are left alone unless you tick them.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================== git & terminal ============================== -->
+  <section class="section feature">
+    <div class="container stacked">
+      <div class="two-col">
+        <div>
+          <p class="kicker">Git &amp; terminal</p>
+          <h2>What changed, and a shell beside it</h2>
+          <p>The Git panel shows the repository's branch, what's staged, changed and untracked, and a diff of the
+            selected file — side by side or unified, double-click to open the line.</p>
+          <div class="tabs" data-tabs>
+            <button class="tab active" data-tab="git">Git</button>
+            <button class="tab" data-tab="terminal">Terminal</button>
+          </div>
+        </div>
+        <ul class="checks">
+          <li>It refreshes when a file is saved or the app is used again after a commit in another program.</li>
+          <li>Right-click a changed file to show it in Project files, or discard its changes (asked first; a
+            file git has no copy of goes to the Trash).</li>
+          <li>The Terminal panel is a shell in the project's folder with exactly the app's environment — the same
+            fpm, compilers and tools — and its prompt says which environment it is.</li>
+        </ul>
+      </div>
+      <div class="tab-panels">
+        <figure class="shot tab-panel active" data-panel="git"><img src="img/git.png" alt="The Git panel: a modified and an untracked file, and the modified file's diff side by side" loading="lazy" width="2036" height="1072"></figure>
+        <figure class="shot tab-panel" data-panel="terminal"><img src="img/terminal.png" alt="The Terminal panel: fpm's version and the project's files listed in a shell" loading="lazy" width="2066" height="1072"></figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================== complexity ============================== -->
+  <section class="section feature alt">
+    <div class="container stacked">
+      <div class="two-col">
+        <div>
+          <p class="kicker">Complexity</p>
+          <h2>Find the knots in your code</h2>
+          <p>The Complexity panel measures every procedure in the project — lines of code, cyclomatic complexity,
+            parameters, nesting, as <a href="https://github.com/terryyin/lizard">lizard</a> measures them — with the
+            most complex first, and draws the selected one's control-flow graph.</p>
+        </div>
+        <ul class="checks">
+          <li>Files above procedures: choose a file to see just its procedures.</li>
+          <li>The graph's boxes are the statements, its edges the branches — <code>if</code>, <code>select case</code>,
+            loops, <code>exit</code> and <code>cycle</code>; click one to go to its line.</li>
+          <li>Tests and dependencies can be left out of the numbers.</li>
+        </ul>
+      </div>
+      <figure class="shot"><img src="img/complexity.png" alt="The Complexity panel: files and procedures with their metrics, and a procedure's control-flow graph" loading="lazy" width="1974" height="1072"></figure>
+    </div>
+  </section>
+
+  <!-- ============================== AI ============================== -->
+  <section class="section feature">
+    <div class="container split">
+      <div class="split-text">
+        <p class="kicker">Local AI</p>
+        <h2>A second pair of eyes, on your own machine</h2>
+        <p><em>AI → Review Current File</em> sends the file in the editor — and its compiler messages — to a model
+          running locally through <a href="https://ollama.com">Ollama</a>. No code is sent anywhere, and once the model
+          is downloaded it works offline.</p>
+        <ul class="checks">
+          <li>Findings stream into the Review panel's timeline — click one to jump to the line — and are marked in the gutter.</li>
+          <li>Chat about your code: ask a question, with the open file or without; earlier questions come back with ↑.</li>
+          <li>Let it edit the open file — you accept or reject each change — or <em>Explain</em> and <em>Fix</em> a
+            problem from the Problems panel.</li>
+          <li>Pick any installed model (default <code>qwen2.5-coder:7b</code>), a focus, and how long and how
+            carefully it answers.</li>
+          <li>The app starts the Ollama server when it's needed and stops it when you quit.</li>
+        </ul>
+      </div>
+      <figure class="shot"><img src="img/review.png" alt="The Review panel's timeline: an AI review of demo_stats.f90, then a question about it and the answer" loading="lazy" width="2400" height="1500"></figure>
+    </div>
+  </section>
+
+  <!-- ============================== styles ============================== -->
+  <section class="section feature alt">
+    <div class="container">
+      <p class="kicker center">Make it yours</p>
+      <h2 class="section-title">Themes for the window, styles for the code</h2>
+      <p class="section-lead"><em>View → Theme</em> colors the whole window — light, dark, Nord, Dracula, Solarized,
+        Gruvbox and more — or follows your system. <em>View → Syntax Colors</em> offers every installed Pygments style
+        for the code. Panels dock anywhere, and collapse by dragging their edge.</p>
+      <div class="grid-2">
+        <figure class="shot"><img src="img/theme-nord.png" alt="The whole window in the Nord theme" loading="lazy" width="2400" height="1500"><figcaption>Nord</figcaption></figure>
+        <figure class="shot"><img src="img/theme-solarized-light.png" alt="The whole window in the Solarized Light theme" loading="lazy" width="2400" height="1500"><figcaption>Solarized Light</figcaption></figure>
+      </div>
+      <div class="grid-3 top-gap">
+        <figure class="shot"><img src="img/style-github-dark.png" alt="The editor in the github-dark style" loading="lazy" width="1056" height="720"><figcaption>github-dark</figcaption></figure>
+        <figure class="shot"><img src="img/style-dracula.png" alt="The editor in the dracula style" loading="lazy" width="1056" height="720"><figcaption>dracula</figcaption></figure>
+        <figure class="shot"><img src="img/style-solarized-light.png" alt="The editor in the solarized-light style" loading="lazy" width="1056" height="720"><figcaption>solarized-light</figcaption></figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================== get started ============================== -->
+  <section id="get-started" class="section">
+    <div class="container">
+      <h2 class="section-title">Get started</h2>
+      <p class="section-lead">The easiest way is <a href="https://pixi.sh">pixi</a>: one environment with fpm,
+        gfortran, fortls, fortitude, fprettify and Ollama — and, on Linux, gdb and Valgrind.</p>
+      <div class="grid-2">
+        <div class="code-card">
+          <div class="code-title">With pixi</div>
+<pre><code><span class="c"># get the code</span>
+git clone https://github.com/jacobwilliams/VibeFPMGUI
+cd VibeFPMGUI
+
+<span class="c"># start it (reopens your last project)</span>
+pixi run start
+pixi run start path/to/fpm.toml
+
+<span class="c"># try the demo project</span>
+pixi run demo</code></pre>
+        </div>
+        <div class="code-card">
+          <div class="code-title">With pip <span>(Python 3.11+)</span></div>
+<pre><code>pip install .            <span class="c"># the app</span>
+pip install .[fortran]   <span class="c"># + fortls, fortitude, fprettify</span>
+pip install .[ai]        <span class="c"># + the Ollama client</span>
+
+vibefpmgui path/to/fpm.toml</code></pre>
+          <p class="note">fpm and a Fortran compiler need to be on your <code>PATH</code>. For AI features, install
+            <a href="https://ollama.com">Ollama</a>; the app offers to download the model the first time. For
+            debugging, gdb 14 or newer (Linux).</p>
+        </div>
+      </div>
+      <div class="code-card top-gap">
+        <div class="code-title">On a Mac, the Linux side in Docker <span>(gdb, Valgrind)</span></div>
+<pre><code><span class="c"># build the image and run the app, its window shown by XQuartz</span>
+docker/build-docker.sh</code></pre>
+        <p class="note">See <a href="https://github.com/jacobwilliams/VibeFPMGUI/blob/master/docker/README.md">docker/README.md</a>:
+          the image has the project's Linux environment, and the demo project is ready in <em>Recent Projects</em>.</p>
+      </div>
+      <p class="demo-note">The demo project in <code>examples/demo</code> uses features, profiles, git, path and
+        metapackage dependencies, warnings, parallel compiles and tests — and a test written for the debugger — so
+        every part of the app has something to show.</p>
+    </div>
+  </section>
+
+  <figure class="about-strip container">
+    <img src="img/about.png" alt="The About window: VibeFPMGUI version, fpm and compiler versions" loading="lazy" width="1120" height="756">
+    <figcaption>
+      <h2>Built with</h2>
+      <p>Python and Qt (PySide6 through <a href="https://github.com/spyder-ide/qtpy">qtpy</a>),
+        <a href="https://www.pyqtgraph.org">pyqtgraph</a> for the graphs and
+        <a href="https://pygments.org">Pygments</a> for highlighting — on top of
+        <a href="https://fpm.fortran-lang.org">fpm</a>, <a href="https://fortls.fortran-lang.org">fortls</a>,
+        <a href="https://fortitude.readthedocs.io">fortitude</a>,
+        <a href="https://github.com/fortran-lang/fprettify">fprettify</a>, <a href="https://www.sourceware.org/gdb/">gdb</a>,
+        <a href="https://valgrind.org">Valgrind</a> and <a href="https://ollama.com">Ollama</a>.</p>
+      <a class="button ghost" href="https://github.com/jacobwilliams/VibeFPMGUI">Source on GitHub</a>
+    </figcaption>
+  </figure>
+
+</main>
+
+<footer class="footer">
+  <div class="container footer-inner">
+    <span>© 2026 Jacob Williams · MIT License</span>
+    <span>fpm logo © 2020 fpm contributors · MIT License</span>
+  </div>
+</footer>
+
+<div class="lightbox" id="lightbox" hidden>
+  <button class="lightbox-close" type="button" aria-label="Close">×</button>
+  <img alt="">
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
